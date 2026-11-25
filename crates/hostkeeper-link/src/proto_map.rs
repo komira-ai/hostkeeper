@@ -19,7 +19,10 @@
 //! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
 //! JSON route has no field for them either, nor for a service's installer. The generation of the
 //! facts the daemon's facts file holds goes out as `facts_generation` when there is one; the
-//! JSON route has no field for it.
+//! JSON route has no field for it. The report of the daemon's sshd setup goes out as `ssh` when
+//! there is one; the JSON route has no field for it either. The state of the Mac's Full Disk
+//! Access grant goes out as `full_disk_access`, unspecified when the daemon reports none; the JSON
+//! route has no field for it.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
@@ -38,17 +41,27 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_wire::version::Version as WireVersion;
 use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 
-use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
+use crate::beat::{
+    AGENT_NAME, Feature, Health, Heartbeat, LocalHalt, Platform, RootReason, ServiceFacts,
+};
+use crate::full_disk_access::FullDiskAccess;
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::{OrderId, PackageDigest};
-use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
+use crate::operator_keys::{KeysReport, PushedKeys};
+use crate::order::{
+    DeferredReport, Entry, MaintainOrder, Order, OrderResult, Outcome, Reply, Target, Verb,
+};
 use crate::ports::{Drift, Unsendable};
+use crate::prerequisites::{
+    PrerequisiteState, PrerequisiteStatus, PrerequisitesReport, PushedPrerequisites,
+};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 use crate::wire_map::acknowledged;
 
 /// Why an order whose verb the daemon does not run, or that has none, is not run.
-pub(crate) const NOT_RUN: &str =
-    "the daemon runs only update, force, install, uninstall, abort and clear_record orders";
+pub(crate) const NOT_RUN: &str = "the daemon runs only update, force, install, uninstall, abort, clear_record and maintain orders";
 /// Why an order whose words the daemon's grammars refuse is not run.
 pub(crate) const NOT_READ: &str =
     "its service, version, order id or digest is not one the daemon reads";
@@ -62,6 +75,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
         .map(service)
         .collect::<Result<Vec<pb::ServiceBeat>, Unsendable>>()?;
     Ok(pb::HeartbeatRequest {
+        ssh: beat.ssh.as_ref().map(ssh_report),
         installers: beat.installers.clone(),
         platform: platform(beat.platform).into(),
         agent: Some(pb::AgentInfo {
@@ -86,7 +100,79 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
             })
             .into(),
         facts_generation: beat.facts_generation,
+        remote_login_probe: beat.remote_login_probe.as_ref().map(remote_login_probe),
+        full_disk_access: beat
+            .full_disk_access
+            .map_or(pb::FullDiskAccess::Unspecified, access)
+            .into(),
+        operator_keys: beat.operator_keys.as_ref().map(keys_report),
+        prerequisites: beat.prerequisites.as_ref().map(prerequisites_report),
+        bmc: beat.bmc.as_ref().map(|report| pb::BmcReport {
+            ip: report.ip.clone(),
+            mac: report.mac.clone(),
+        }),
+        serial_console: beat
+            .serial_console
+            .as_ref()
+            .map(|report| pb::SerialConsoleReport {
+                port: report.port.clone(),
+                state: report.state.clone(),
+                detail: report.detail.clone(),
+            }),
+        maintenance: beat.maintenance.clone(),
     })
+}
+
+/// The Remote Login probe as `remote_login_probe`.
+fn remote_login_probe(probe: &RemoteLoginProbe) -> pb::RemoteLoginProbe {
+    pb::RemoteLoginProbe {
+        started_unix: probe.started_unix,
+        steps: probe
+            .steps
+            .iter()
+            .map(|step| pb::ProbeStep {
+                name: step.name.clone(),
+                argv: step.argv.clone(),
+                exit_code: step.exit_code,
+                stdout: step.stdout.clone(),
+                stderr: step.stderr.clone(),
+                error: step.error.clone(),
+                truncated: step.truncated,
+            })
+            .collect(),
+    }
+}
+
+/// The SSH report as `ssh`.
+fn ssh_report(report: &SshReport) -> pb::SshReport {
+    pb::SshReport {
+        applied_generation: report.applied_generation,
+        state: report.state.clone(),
+        host_key_fingerprints: report.host_key_fingerprints.clone(),
+        detail: report.detail.clone(),
+    }
+}
+
+/// The SSH access of an answer.
+fn pushed_ssh(access: pb::SshAccess) -> PushedSsh {
+    let pb::SshAccess {
+        generation,
+        enabled,
+        ca_public_keys,
+        login_user,
+        principal,
+        revoked_serials,
+        password_auth,
+    } = access;
+    PushedSsh {
+        generation,
+        enabled,
+        ca_public_keys,
+        login_user,
+        principal,
+        revoked_serials,
+        password_auth,
+    }
 }
 
 /// The repositories report as `repositories`.
@@ -102,6 +188,67 @@ fn repositories_report(report: &RepositoriesReport) -> pb::RepositoriesReport {
                 digest: refusal.digest.clone(),
                 reason: refusal.reason.clone(),
             }),
+    }
+}
+
+/// The report of the operator keys as `operator_keys`.
+fn keys_report(report: &KeysReport) -> pb::OperatorKeysReport {
+    pb::OperatorKeysReport {
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::OperatorKeysRefusal {
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+        failed: report.failed.clone(),
+    }
+}
+
+/// The report of the host prerequisites as `prerequisites`.
+fn prerequisites_report(report: &PrerequisitesReport) -> pb::PrerequisitesReport {
+    pb::PrerequisitesReport {
+        digest: report.digest.clone(),
+        refused: report
+            .refused
+            .as_ref()
+            .map(|refusal| pb::PrerequisitesRefusal {
+                digest: refusal.digest.clone(),
+                reason: refusal.reason.clone(),
+            }),
+        states: report.states.iter().map(prerequisite_state).collect(),
+    }
+}
+
+/// One prerequisite's state as a `PrerequisiteState`.
+fn prerequisite_state(state: &PrerequisiteState) -> pb::PrerequisiteState {
+    let status = match state.status {
+        PrerequisiteStatus::Pending => pb::PrerequisiteStatus::Pending,
+        PrerequisiteStatus::Present => pb::PrerequisiteStatus::Present,
+        PrerequisiteStatus::Installing => pb::PrerequisiteStatus::Installing,
+        PrerequisiteStatus::Failed => pb::PrerequisiteStatus::Failed,
+        PrerequisiteStatus::NotApplicable => pb::PrerequisiteStatus::NotApplicable,
+        PrerequisiteStatus::Unknown => pb::PrerequisiteStatus::Unknown,
+    };
+    pb::PrerequisiteState {
+        name: state.name.clone(),
+        status: status.into(),
+        version: state.version.clone(),
+        reason: state.reason.clone(),
+        failures: state.failures,
+        next_try_unix: state.next_try_unix,
+        seen_unix: state.seen_unix,
+    }
+}
+
+/// A Full Disk Access state.
+fn access(state: FullDiskAccess) -> pb::FullDiskAccess {
+    match state {
+        FullDiskAccess::Granted => pb::FullDiskAccess::Granted,
+        FullDiskAccess::NotGranted => pb::FullDiskAccess::NotGranted,
+        FullDiskAccess::NotApplicable => pb::FullDiskAccess::NotApplicable,
+        FullDiskAccess::Undetermined => pb::FullDiskAccess::Undetermined,
     }
 }
 
@@ -135,8 +282,21 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         record_try: facts.record_try,
         installer: facts.installer.clone(),
         drift: facts.drift.as_ref().and_then(drift),
+        local_halt: facts.local_halt.as_ref().map(local_halt),
         ..pb::ServiceBeat::default()
     })
+}
+
+/// A halt the host holds as `local_halt`.
+fn local_halt(halt: &LocalHalt) -> pb::LocalHalt {
+    pb::LocalHalt {
+        reason: halt
+            .reason
+            .as_ref()
+            .map(|reason| reason.as_str().to_owned()),
+        generation: halt.generation,
+        age_secs: halt.age_secs,
+    }
 }
 
 /// A drift as `drift`; none for one whose string is outside the grammar of a package version,
@@ -252,6 +412,9 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         acks,
         repositories,
         facts,
+        operator_keys,
+        ssh,
+        prerequisites,
     } = response;
     let features = features
         .iter()
@@ -271,9 +434,33 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         .iter()
         .filter_map(|ack| acknowledged(&ack.service, &ack.order_id, ack.order_try))
         .collect();
-    let (order, dropped) = match order {
-        Some(order) => order_of(order),
-        None => (None, None),
+    let (order, maintain, dropped) = match order {
+        Some(pb::Order {
+            order_id,
+            r#try: order_try,
+            verb: Some(pb::order::Verb::Maintain(maintain)),
+        }) => match OrderId::new(&order_id) {
+            Ok(id) => {
+                let order = MaintainOrder {
+                    id,
+                    order_try,
+                    maintain,
+                };
+                (None, Some(order), None)
+            }
+            Err(_) => {
+                let dropped = Dropped {
+                    what: format!("maintain order {order_id:?}"),
+                    why: NOT_READ,
+                };
+                (None, None, Some(dropped))
+            }
+        },
+        Some(order) => {
+            let (order, dropped) = order_of(order);
+            (order, None, dropped)
+        }
+        None => (None, None, None),
     };
     Mapped {
         reply: Reply {
@@ -292,6 +479,16 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 host_group: facts.host_group,
                 labels: facts.labels.into_iter().collect(),
             }),
+            operator_keys: operator_keys.map(|set| PushedKeys {
+                digest: set.digest,
+                keys: set.keys,
+            }),
+            ssh: ssh.map(pushed_ssh),
+            prerequisites: prerequisites.map(|set| PushedPrerequisites {
+                digest: set.digest,
+                names: set.names,
+            }),
+            maintain,
         },
         dropped,
     }
@@ -423,3 +620,27 @@ mod tests;
 #[cfg(test)]
 #[path = "proto_map_facts_tests.rs"]
 mod facts_tests;
+
+#[cfg(test)]
+#[path = "proto_map_keys_tests.rs"]
+mod keys_tests;
+
+#[cfg(test)]
+#[path = "proto_map_prerequisites_tests.rs"]
+mod prerequisites_tests;
+
+#[cfg(test)]
+#[path = "proto_map_local_halt_tests.rs"]
+mod local_halt_tests;
+
+#[cfg(test)]
+#[path = "proto_map_bmc_tests.rs"]
+mod bmc_tests;
+
+#[cfg(test)]
+#[path = "proto_map_serial_console_tests.rs"]
+mod serial_console_tests;
+
+#[cfg(test)]
+#[path = "proto_map_maintenance_tests.rs"]
+mod maintenance_tests;

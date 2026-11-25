@@ -4,9 +4,9 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
-    UsersRefusal,
+    AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
+    HostGroupsRefusal, HostsRefusal, MaintenanceRefusal, ReleasesRefusal, RepositoriesRefusal,
+    RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
 };
 use tonic::{Code, Status};
 
@@ -211,6 +211,7 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 InvalidArgument,
                 "limits_in_host_group",
             ),
+            (ReleasesRefusal::StateChanged, Aborted, "state_changed"),
         ],
         refusal::releases,
     );
@@ -617,6 +618,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "reserved_host_group",
             ),
+            (
+                HostGroupsRefusal::HostInMaintenance,
+                FailedPrecondition,
+                "host_in_maintenance",
+            ),
         ],
         refusal::host_groups,
     );
@@ -675,8 +681,270 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 Unavailable,
                 "audit_unavailable",
             ),
+            (
+                ApiTokensRefusal::UnknownOwner,
+                FailedPrecondition,
+                "unknown_owner",
+            ),
         ],
         refusal::api_tokens,
+    );
+}
+
+/// Proves that each value of `SshRefusal` becomes the status its proto comment names: the code of
+/// the comment and exactly the value's token.
+///
+/// Catches: a value added to the enum with no code, and a token that is not the value's name.
+#[test]
+fn every_ssh_refusal_value_has_the_code_and_token_its_proto_comment_names() {
+    use Code::{
+        FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied,
+        ResourceExhausted, Unauthenticated, Unavailable,
+    };
+    assert_table(
+        &[
+            (SshRefusal::Unspecified, Internal, "unspecified"),
+            (SshRefusal::Unauthorized, Unauthenticated, "unauthorized"),
+            (SshRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (SshRefusal::NotPermitted, PermissionDenied, "not_permitted"),
+            (
+                SshRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (SshRefusal::BadReason, InvalidArgument, "bad_reason"),
+            (SshRefusal::BadKey, InvalidArgument, "bad_key"),
+            (SshRefusal::UnknownHost, NotFound, "unknown_host"),
+            (
+                SshRefusal::NotConfigured,
+                FailedPrecondition,
+                "not_configured",
+            ),
+            (SshRefusal::HostNotLive, FailedPrecondition, "host_not_live"),
+            (SshRefusal::NoAddress, FailedPrecondition, "no_address"),
+            (SshRefusal::BadSerial, FailedPrecondition, "bad_serial"),
+            (SshRefusal::UnknownCert, NotFound, "unknown_cert"),
+            (
+                SshRefusal::TooManyTunnels,
+                ResourceExhausted,
+                "too_many_tunnels",
+            ),
+            (SshRefusal::Draining, Unavailable, "draining"),
+            (SshRefusal::DialFailed, Unavailable, "dial_failed"),
+            (SshRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                SshRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+            (SshRefusal::NotReported, FailedPrecondition, "not_reported"),
+        ],
+        refusal::ssh,
+    );
+}
+
+/// Proves that each value of `ConsoleRefusal` becomes the status its proto comment names: the
+/// code of the comment and the value's name, without its prefix and in lower case, as the whole
+/// message; and that `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the
+/// enum gains that the table lacks fails the test.
+///
+/// Catches: a console refusal with another code than its comment names (a busy console told as
+/// a failure of the request, an unreachable device as the caller's mistake), or a message that
+/// is more than the token.
+#[test]
+fn every_console_refusal_has_the_code_and_token_its_proto_comment_names() {
+    use Code::{
+        AlreadyExists, FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied,
+        ResourceExhausted, Unauthenticated, Unavailable,
+    };
+
+    assert_table(
+        &[
+            (ConsoleRefusal::Unspecified, Internal, "unspecified"),
+            (
+                ConsoleRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (ConsoleRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                ConsoleRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (
+                ConsoleRefusal::ReasonRequired,
+                InvalidArgument,
+                "reason_required",
+            ),
+            (
+                ConsoleRefusal::ReasonTooLong,
+                InvalidArgument,
+                "reason_too_long",
+            ),
+            (
+                ConsoleRefusal::NoConsoleAccess,
+                PermissionDenied,
+                "no_console_access",
+            ),
+            (
+                ConsoleRefusal::PowerNotPermitted,
+                PermissionDenied,
+                "power_not_permitted",
+            ),
+            (ConsoleRefusal::HostNotFound, NotFound, "host_not_found"),
+            (ConsoleRefusal::NoAddress, FailedPrecondition, "no_address"),
+            (ConsoleRefusal::NoBmcMac, FailedPrecondition, "no_bmc_mac"),
+            (
+                ConsoleRefusal::AmbiguousRecord,
+                FailedPrecondition,
+                "ambiguous_record",
+            ),
+            (
+                ConsoleRefusal::AddressMismatch,
+                FailedPrecondition,
+                "address_mismatch",
+            ),
+            (ConsoleRefusal::ConsoleBusy, AlreadyExists, "console_busy"),
+            (
+                ConsoleRefusal::TooManySessions,
+                ResourceExhausted,
+                "too_many_sessions",
+            ),
+            (
+                ConsoleRefusal::DeviceUnreachable,
+                Unavailable,
+                "device_unreachable",
+            ),
+            (ConsoleRefusal::BmcBusy, Unavailable, "bmc_busy"),
+            (
+                ConsoleRefusal::BmcAuthFailed,
+                FailedPrecondition,
+                "bmc_auth_failed",
+            ),
+            (ConsoleRefusal::NoSession, NotFound, "no_session"),
+            (
+                ConsoleRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+            (ConsoleRefusal::BmcFailed, Unavailable, "bmc_failed"),
+            (ConsoleRefusal::StoreFailed, Internal, "store_failed"),
+            (ConsoleRefusal::BmcSolBusy, Unavailable, "bmc_sol_busy"),
+        ],
+        refusal::console,
+    );
+}
+
+/// Proves that each value of `XcodeRefusal` becomes the status its proto comment names: the code
+/// of the comment and the value's name, without its prefix and in lower case, as the whole
+/// message; and that `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the
+/// enum gains that the table lacks fails the test.
+///
+/// Catches: an Xcode refusal with another code than its comment names (a missing store told as a
+/// failure of the store, an unknown archive as the caller's mistake), or a message that is more
+/// than the token.
+#[test]
+fn every_xcode_refusal_has_the_code_and_token_its_proto_comment_names() {
+    use Code::{
+        FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied, Unauthenticated,
+        Unavailable,
+    };
+
+    assert_table(
+        &[
+            (XcodeRefusal::Unspecified, Internal, "unspecified"),
+            (XcodeRefusal::Unauthorized, Unauthenticated, "unauthorized"),
+            (XcodeRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                XcodeRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (XcodeRefusal::NoStore, FailedPrecondition, "no_store"),
+            (XcodeRefusal::UnknownArchive, NotFound, "unknown_archive"),
+            (XcodeRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                XcodeRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::xcode,
+    );
+}
+
+/// Proves that each value of `MaintenanceRefusal` becomes the status its proto comment names: the
+/// code of the comment and the value's name, without its prefix and in lower case, as the whole
+/// message; and that `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the
+/// enum gains that the table lacks fails the test.
+///
+/// Catches: a maintenance refusal with another code than its comment names (a precondition told
+/// as the caller's mistake, an unknown run as a failure of the store), or a message that is more
+/// than the token.
+#[test]
+fn every_maintenance_refusal_has_the_code_and_token_its_proto_comment_names() {
+    use Code::{
+        FailedPrecondition, Internal, InvalidArgument, NotFound, PermissionDenied, Unauthenticated,
+        Unavailable,
+    };
+
+    assert_table(
+        &[
+            (MaintenanceRefusal::Unspecified, Internal, "unspecified"),
+            (
+                MaintenanceRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (MaintenanceRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                MaintenanceRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (MaintenanceRefusal::UnknownGroup, NotFound, "unknown_group"),
+            (MaintenanceRefusal::UnknownHost, NotFound, "unknown_host"),
+            (MaintenanceRefusal::UnknownRun, NotFound, "unknown_run"),
+            (
+                MaintenanceRefusal::NothingDue,
+                FailedPrecondition,
+                "nothing_due",
+            ),
+            (
+                MaintenanceRefusal::WindowEnded,
+                FailedPrecondition,
+                "window_ended",
+            ),
+            (
+                MaintenanceRefusal::LastHost,
+                FailedPrecondition,
+                "last_host",
+            ),
+            (
+                MaintenanceRefusal::HostInMaintenance,
+                FailedPrecondition,
+                "host_in_maintenance",
+            ),
+            (
+                MaintenanceRefusal::RunEnded,
+                FailedPrecondition,
+                "run_ended",
+            ),
+            (MaintenanceRefusal::NotInRun, NotFound, "not_in_run"),
+            (
+                MaintenanceRefusal::NotHalted,
+                FailedPrecondition,
+                "not_halted",
+            ),
+            (MaintenanceRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                MaintenanceRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::maintenance,
     );
 }
 

@@ -14,15 +14,28 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
+use crate::bmc::BmcReport;
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::host_facts::PushedFacts;
-use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::host_ssh::{PushedSsh, SshReport};
+use crate::operator_keys::{KeysReport, PushedKeys};
+use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::ports::SerialConsoleSource;
 use crate::ports::{
-    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
-    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink,
-    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    BmcSource, CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink,
+    HeldHalt, HeldHalts, Job, LinkError, Log, MaintainSink, MaintenanceSource, Observation,
+    OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService, RemoteLoginProbeSource,
+    RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick,
+    TrustedRootSource, UnixClock,
 };
+use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+pub use serial_console::FakeSerialConsole;
+
+#[path = "testing_serial_console.rs"]
+mod serial_console;
+use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -261,46 +274,86 @@ impl Dispatch for ManualDispatch {
     }
 }
 
-/// A held-halt store in memory: monotone like the daemon's, with every raise recorded.
+/// A held-halt store in memory, judged as the daemon's is: a halt held under no generation is
+/// held under the generation the reply before named (the one heard when none came before), or
+/// lifted when the one heard is above it; one held under a generation is lifted by a greater
+/// one; and a service with no halt keeps no generation; with every generation the loop handed
+/// over recorded, with the one before it.
 #[derive(Default)]
 pub struct FakeHalts {
     held: Mutex<BTreeMap<String, u64>>,
-    raises: Mutex<Vec<(String, u64)>>,
+    heard: Mutex<Vec<(String, Option<u64>, u64)>>,
     failing: AtomicBool,
+    halts: Mutex<BTreeMap<String, HeldHalt>>,
+    asked: AtomicU64,
 }
 
 impl FakeHalts {
-    /// Sets the held generation of `service`, as another writer of the store (the executor,
-    /// `clear_halt`) would.
-    pub fn set(&self, service: &ServiceName, generation: u64) {
-        lock(&self.held).insert(service.as_str().to_owned(), generation);
-    }
-
-    /// From now on a raise fails, or no longer does.
+    /// From now on a generation is not taken, or is again.
     pub fn fail(&self, failing: bool) {
         self.failing.store(failing, Ordering::SeqCst);
     }
 
-    /// The raises the loop asked for, by service name and generation, in order.
-    pub fn raises(&self) -> Vec<(String, u64)> {
-        lock(&self.raises).clone()
+    /// The generations the loop handed over, by service name, with the one the reply before
+    /// named, in order.
+    pub fn heard(&self) -> Vec<(String, Option<u64>, u64)> {
+        lock(&self.heard).clone()
+    }
+
+    /// The generation `service` is held under; `None` when none is kept.
+    pub fn held(&self, service: &ServiceName) -> Option<u64> {
+        lock(&self.held).get(service.as_str()).copied()
+    }
+
+    /// `service` holds a halt from now on, under `halt.generation`, or under none yet when it is
+    /// 0 (a halt no reply has named a generation for).
+    pub fn halt(&self, service: &ServiceName, halt: HeldHalt) {
+        let mut held = lock(&self.held);
+        match halt.generation {
+            0 => held.remove(service.as_str()),
+            generation => held.insert(service.as_str().to_owned(), generation),
+        };
+        lock(&self.halts).insert(service.as_str().to_owned(), halt);
+    }
+
+    /// How many times the loop asked which halt a service holds.
+    pub fn asked(&self) -> u64 {
+        self.asked.load(Ordering::SeqCst)
     }
 }
 
 impl HeldHalts for FakeHalts {
-    fn held(&self, service: &ServiceName) -> u64 {
-        lock(&self.held).get(service.as_str()).copied().unwrap_or(0)
-    }
-
-    fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()> {
-        lock(&self.raises).push((service.as_str().to_owned(), generation));
+    fn heard(&self, service: &ServiceName, before: Option<u64>, generation: u64) -> io::Result<()> {
+        let name = service.as_str().to_owned();
+        lock(&self.heard).push((name.clone(), before, generation));
         if self.failing.load(Ordering::SeqCst) {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
         }
         let mut held = lock(&self.held);
-        let entry = held.entry(service.as_str().to_owned()).or_insert(0);
-        *entry = (*entry).max(generation);
+        let mut halts = lock(&self.halts);
+        let Some(halt) = halts.get_mut(&name) else {
+            held.remove(&name);
+            return Ok(());
+        };
+        let kept = held.get(&name).copied();
+        match kept.or(before) {
+            Some(bar) if generation > bar => {
+                halts.remove(&name);
+                held.remove(&name);
+            }
+            bar if kept.is_none() => {
+                let bar = bar.unwrap_or(generation);
+                halt.generation = bar;
+                held.insert(name, bar);
+            }
+            _ => {}
+        }
         Ok(())
+    }
+
+    fn holding(&self, service: &ServiceName) -> Option<HeldHalt> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        lock(&self.halts).get(service.as_str()).cloned()
     }
 }
 
@@ -444,6 +497,88 @@ impl TrustedRootSource for FakeTrustedRoot {
     }
 }
 
+/// A Mac's Remote Login probe, as a test sets it: none until [`FakeProbe::set`].
+#[derive(Default)]
+pub struct FakeProbe {
+    probe: Mutex<Option<RemoteLoginProbe>>,
+}
+
+impl FakeProbe {
+    pub fn set(&self, probe: Option<RemoteLoginProbe>) {
+        *lock(&self.probe) = probe;
+    }
+}
+
+impl RemoteLoginProbeSource for FakeProbe {
+    fn remote_login_probe(&self) -> Option<RemoteLoginProbe> {
+        lock(&self.probe).clone()
+    }
+}
+
+/// The host's BMC, as a test sets it: none until [`FakeBmc::set`].
+#[derive(Default)]
+pub struct FakeBmc {
+    report: Mutex<Option<BmcReport>>,
+}
+
+impl FakeBmc {
+    pub fn set(&self, report: Option<BmcReport>) {
+        *lock(&self.report) = report;
+    }
+}
+
+impl BmcSource for FakeBmc {
+    fn bmc(&self) -> Option<BmcReport> {
+        lock(&self.report).clone()
+    }
+}
+
+/// The host's maintenance facts, as a test sets them: it holds the report a test gives it and
+/// counts how often it was asked.
+#[derive(Default)]
+pub struct FakeMaintenance {
+    report: Mutex<pb::MaintenanceReport>,
+    asked: Mutex<usize>,
+}
+
+impl FakeMaintenance {
+    /// Sets the report the next asks give.
+    pub fn set(&self, report: pb::MaintenanceReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// How many times the loop asked for the report.
+    pub fn asked(&self) -> usize {
+        *lock(&self.asked)
+    }
+}
+
+impl MaintenanceSource for FakeMaintenance {
+    fn report(&self) -> pb::MaintenanceReport {
+        *lock(&self.asked) += 1;
+        lock(&self.report).clone()
+    }
+}
+
+/// The daemon's runner of `maintain` orders, as a test sees it: it records every order it is given.
+#[derive(Default)]
+pub struct FakeMaintain {
+    given: Mutex<Vec<MaintainOrder>>,
+}
+
+impl FakeMaintain {
+    /// The orders the loop gave, oldest first.
+    pub fn given(&self) -> Vec<MaintainOrder> {
+        lock(&self.given).clone()
+    }
+}
+
+impl MaintainSink for FakeMaintain {
+    fn maintain(&self, order: &MaintainOrder) {
+        lock(&self.given).push(order.clone());
+    }
+}
+
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -535,6 +670,105 @@ impl FactsSink for FakeFacts {
     }
 }
 
+/// The managed block of the login account's `authorized_keys`, as a test sets it: it records
+/// every set it is given and reports what a test sets.
+#[derive(Default)]
+pub struct FakeOperatorKeys {
+    report: Mutex<KeysReport>,
+    applied: Mutex<Vec<PushedKeys>>,
+}
+
+impl FakeOperatorKeys {
+    /// Sets what every later report says.
+    pub fn set_report(&self, report: KeysReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedKeys> {
+        lock(&self.applied).clone()
+    }
+}
+
+/// The host's sshd setup, as a test sets it: it records every access it is given, with how many
+/// jobs the [`World`]'s dispatcher held at that moment, and reports what a test says.
+#[derive(Default)]
+pub struct FakeSsh {
+    report: Mutex<Option<SshReport>>,
+    applied: Mutex<Vec<(PushedSsh, usize)>>,
+    dispatch: Arc<ManualDispatch>,
+}
+
+impl FakeSsh {
+    /// A setup that counts the jobs of `dispatch` at each apply.
+    pub fn seeing(dispatch: Arc<ManualDispatch>) -> FakeSsh {
+        FakeSsh {
+            dispatch,
+            ..FakeSsh::default()
+        }
+    }
+
+    /// Sets what the setup reports.
+    pub fn set_report(&self, report: Option<SshReport>) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every access the loop gave it, in order, each with the jobs the dispatcher held then.
+    pub fn applied(&self) -> Vec<(PushedSsh, usize)> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl OperatorKeysSink for FakeOperatorKeys {
+    fn report(&self) -> KeysReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, keys: &PushedKeys) {
+        lock(&self.applied).push(keys.clone());
+    }
+}
+
+impl SshSink for FakeSsh {
+    fn report(&self) -> Option<SshReport> {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, access: &PushedSsh) {
+        lock(&self.applied).push((access.clone(), self.dispatch.pending()));
+    }
+}
+
+/// The host prerequisites, as a test sets them: it records every set it is given and reports
+/// what a test sets.
+#[derive(Default)]
+pub struct FakePrerequisites {
+    report: Mutex<PrerequisitesReport>,
+    applied: Mutex<Vec<PushedPrerequisites>>,
+}
+
+impl FakePrerequisites {
+    /// Sets what every later report says.
+    pub fn set_report(&self, report: PrerequisitesReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedPrerequisites> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl PrerequisitesSink for FakePrerequisites {
+    fn report(&self) -> PrerequisitesReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, set: &PushedPrerequisites) {
+        lock(&self.applied).push(set.clone());
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -563,7 +797,30 @@ pub struct World {
     /// only after [`World::keeping_facts`].
     pub facts: Arc<FakeFacts>,
     keeping_facts: bool,
+    /// The host's sshd setup, which counts the jobs of [`World::dispatch`]; the ports hold it
+    /// only after [`World::setting_ssh_up`].
+    pub ssh: Arc<FakeSsh>,
+    setting_ssh_up: bool,
     private: bool,
+    /// A Mac's Remote Login probe; the ports hold it only after [`World::probing`].
+    pub probe: Arc<FakeProbe>,
+    probing: bool,
+    /// The host's BMC, which the ports always hold: it reports none until it is set.
+    pub bmc: Arc<FakeBmc>,
+    /// The host's serial console baseline, which the ports always hold: none until it is set.
+    pub serial_console: Arc<FakeSerialConsole>,
+    /// The managed block of operator keys; the ports hold it only after
+    /// [`World::keeping_operator_keys`].
+    pub operator_keys: Arc<FakeOperatorKeys>,
+    keeping_operator_keys: bool,
+    /// The host prerequisites; the ports hold them only after [`World::keeping_prerequisites`].
+    pub prerequisites: Arc<FakePrerequisites>,
+    keeping_prerequisites: bool,
+    /// The host's maintenance facts; the ports hold them only after
+    /// [`World::keeping_maintenance`], with [`World::maintain`], its runner of `maintain` orders.
+    pub maintenance: Arc<FakeMaintenance>,
+    pub maintain: Arc<FakeMaintain>,
+    keeping_maintenance: bool,
 }
 
 impl Default for World {
@@ -584,6 +841,8 @@ impl World {
             orders: Arc::new(orders),
             facts: Arc::new(FakeFacts::seeing(Arc::clone(&dispatch))),
             keeping_facts: false,
+            ssh: Arc::new(FakeSsh::seeing(Arc::clone(&dispatch))),
+            setting_ssh_up: false,
             dispatch,
             halts: Arc::default(),
             renewal: Arc::default(),
@@ -593,6 +852,17 @@ impl World {
             repositories: Arc::default(),
             managing: false,
             private: false,
+            probe: Arc::default(),
+            probing: false,
+            bmc: Arc::default(),
+            serial_console: Arc::default(),
+            operator_keys: Arc::default(),
+            keeping_operator_keys: false,
+            prerequisites: Arc::default(),
+            keeping_prerequisites: false,
+            maintenance: Arc::default(),
+            maintain: Arc::default(),
+            keeping_maintenance: false,
         }
     }
 
@@ -603,10 +873,45 @@ impl World {
         self
     }
 
+    /// The world of a Mac that runs the Remote Login probe: its ports hold [`World::probe`].
+    pub fn probing(mut self) -> World {
+        self.probing = true;
+        self
+    }
+
     /// The world of a host that keeps a facts file: its ports hold [`World::facts`], and it
     /// announces `facts-v1`.
     pub fn keeping_facts(mut self) -> World {
         self.keeping_facts = true;
+        self
+    }
+
+    /// The world of a host that keeps operator keys: its ports hold [`World::operator_keys`], and
+    /// it announces `operator-keys-v1`.
+    pub fn keeping_operator_keys(mut self) -> World {
+        self.keeping_operator_keys = true;
+        self
+    }
+
+    /// The world of a host that sets sshd up: its ports hold [`World::ssh`], and it announces
+    /// `ssh-v1`.
+    pub fn setting_ssh_up(mut self) -> World {
+        self.setting_ssh_up = true;
+        self
+    }
+
+    /// The world of a host that keeps host prerequisites: its ports hold
+    /// [`World::prerequisites`], and it announces `prerequisites-v1`.
+    pub fn keeping_prerequisites(mut self) -> World {
+        self.keeping_prerequisites = true;
+        self
+    }
+
+    /// The world of a host that reads its maintenance facts: its ports hold
+    /// [`World::maintenance`], and it announces `maintenance-v1` to a coordinator that advertises
+    /// it.
+    pub fn keeping_maintenance(mut self) -> World {
+        self.keeping_maintenance = true;
         self
     }
 
@@ -637,6 +942,27 @@ impl World {
             facts: self
                 .keeping_facts
                 .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
+            full_disk_access: None,
+            remote_login_probe: self
+                .probing
+                .then(|| Arc::clone(&self.probe) as Arc<dyn RemoteLoginProbeSource>),
+            operator_keys: self
+                .keeping_operator_keys
+                .then(|| Arc::clone(&self.operator_keys) as Arc<dyn OperatorKeysSink>),
+            ssh: self
+                .setting_ssh_up
+                .then(|| Arc::clone(&self.ssh) as Arc<dyn SshSink>),
+            prerequisites: self
+                .keeping_prerequisites
+                .then(|| Arc::clone(&self.prerequisites) as Arc<dyn PrerequisitesSink>),
+            bmc: Some(Arc::clone(&self.bmc) as Arc<dyn BmcSource>),
+            serial_console: Some(Arc::clone(&self.serial_console) as Arc<dyn SerialConsoleSource>),
+            maintenance: self
+                .keeping_maintenance
+                .then(|| Arc::clone(&self.maintenance) as Arc<dyn MaintenanceSource>),
+            maintain: self
+                .keeping_maintenance
+                .then(|| Arc::clone(&self.maintain) as Arc<dyn MaintainSink>),
         }
     }
 

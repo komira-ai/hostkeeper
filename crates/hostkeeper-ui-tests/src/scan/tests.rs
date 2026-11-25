@@ -195,3 +195,257 @@ fn fetches_finds_each_call_of_fetch() {
         [(1, "`fetch(`"), (2, "`fetch(`")]
     );
 }
+
+#[test]
+fn the_console_service_of_the_api_client_is_not_a_console_but_any_other_console_is() {
+    // Catches: the `console.` needle refusing a call of the operator API's Console service, and
+    // the exemption widening to a token logged through `console` (bare, on `window`, or behind a
+    // name that only ends in `api`).
+    assert!(
+        token_keepers(
+            "pages/host.js",
+            "await ctx.api.console.power({ hostId });\nawait api.console.setBootDevice(b);"
+        )
+        .is_empty()
+    );
+    let text = "console.log(token);\nwindow.console.log(token);\nxapi.console.log(token);\n\
+                console.log(ctx.api.console.power);";
+    let found = token_keepers("pages/x.js", text);
+    assert_eq!(
+        whats(&found),
+        [
+            (1, "`console.`"),
+            (2, "`console.`"),
+            (3, "`console.`"),
+            (4, "`console.`"),
+        ]
+    );
+}
+
+#[test]
+fn the_console_service_is_listed_in_calls_json_only_as_a_function_name() {
+    // Catches: `calls.json` refused for naming the Console service, and the exemption reaching
+    // another file or another place in `calls.json`.
+    let listed = "    { \"function\": \"console.power\", \"method\": \"x\" },";
+    assert!(token_keepers("calls.json", listed).is_empty());
+    assert_eq!(
+        whats(&token_keepers("pages/x.js", listed)),
+        [(1, "`console.`")]
+    );
+    assert_eq!(
+        whats(&token_keepers(
+            "calls.json",
+            "{ \"method\": \"console.log\" }"
+        )),
+        [(1, "`console.`")]
+    );
+}
+
+#[test]
+fn a_socket_is_refused_in_every_file_but_the_entry_module() {
+    // Catches: the allowance for the one socket opener letting a `WebSocket` into a page, the data
+    // layer or any other module, letting a `ws://` or `wss://` address into any file the opener
+    // included, or letting any other needle through in the entry module.
+    let opens = "const s = new WebSocket(u);\nconst t = \"ws://example.com/x\";\nconst v = `wss://example.com/y`;";
+    for path in [
+        "pages/host_ssh.js",
+        "pages/host.js",
+        "api.js",
+        "app.js",
+        "view.js",
+        "x",
+    ] {
+        assert_eq!(
+            whats(&network_and_code(path, opens)),
+            [(1, "`WebSocket`"), (2, "`ws://`"), (3, "`wss://`")],
+            "{path}"
+        );
+    }
+    assert_eq!(
+        whats(&network_and_code(SOCKET_OPENER, opens)),
+        [(2, "`ws://`"), (3, "`wss://`")]
+    );
+    assert_eq!(SOCKET_OPENER, "main.js");
+    assert_eq!(
+        whats(&network_and_code(
+            SOCKET_OPENER,
+            "new WebSocket(u); el.innerHTML = s; eval(t); fetch(\"https://example.com/\");"
+        )),
+        [(1, "`https://`"), (1, "`eval(`"), (1, "`innerHTML`")]
+    );
+}
+
+#[test]
+fn sockets_finds_each_call_of_websocket() {
+    assert_eq!(
+        whats(&sockets(
+            "main.js",
+            "const a = new WebSocket(u);\nnew WebSocket /* c */ (v);\nMyWebSocket(w); WebSocket;"
+        )),
+        [(1, "`WebSocket(`"), (2, "`WebSocket(`")]
+    );
+}
+
+#[test]
+fn the_opener_holds_one_websocket_call_to_the_address_socket_address_builds() {
+    let one = "import { socketAddress } from \"./socket_address.js\";\n\
+               const socket = new WebSocket(socketAddress(window.location, path));";
+    assert!(opener(SOCKET_OPENER, one).is_empty());
+    let spaced = "new WebSocket /* c */ (\n  socketAddress(window.location, path)\n);";
+    assert!(opener(SOCKET_OPENER, spaced).is_empty());
+    assert_eq!(
+        SOCKET_ADDRESS, "socketAddress(window.location, path)",
+        "the argument main.js writes"
+    );
+}
+
+#[test]
+fn the_opener_may_offer_the_pages_subprotocols_as_its_second_argument() {
+    // Catches: an opener that cannot offer a console session's subprotocols, which the stream
+    // refuses to open without.
+    for call in [
+        "new WebSocket(socketAddress(window.location, path), protocols);",
+        "new WebSocket(socketAddress(window.location, path) ,protocols);",
+        "new WebSocket(\n  socketAddress(window.location, path),\n  protocols\n);",
+    ] {
+        assert!(opener(SOCKET_OPENER, call).is_empty(), "{call}");
+    }
+    assert_eq!(
+        SOCKET_PROTOCOLS, "protocols",
+        "the second argument main.js writes"
+    );
+}
+
+#[test]
+fn a_second_websocket_in_the_opener_is_refused() {
+    // Catches: a second socket in the one file allowed to open one, whatever its address, and an
+    // opener with no socket at all.
+    let two = "new WebSocket(socketAddress(window.location, path));\n\
+               const b = new WebSocket(socketAddress(window.location, path));";
+    assert_eq!(
+        whats(&opener(SOCKET_OPENER, two)),
+        [(2, "a second `WebSocket(` call")]
+    );
+    assert_eq!(
+        whats(&opener(
+            SOCKET_OPENER,
+            "const s = { WebSocket: 1 }; MyWebSocket(x);"
+        )),
+        [(1, "no `WebSocket(` call")]
+    );
+}
+
+#[test]
+fn a_socket_address_built_any_other_way_is_refused() {
+    // Catches: the one socket opened to an address of the page's own building (another host, a
+    // path no fixed shape checks, the scheme and host spliced by hand) or to an address made by
+    // `socketAddress` from another location, and a call never closed.
+    for argument in [
+        "`${scheme}//${host}${path}`",
+        "url",
+        "socketAddress(otherLocation, path)",
+        "socketAddress(window.location, path), url",
+        "socketAddress(window.location, path), protocols, more",
+        "socketAddress(window.location, path), [protocols]",
+        "socketAddress(window.location, path) protocols",
+        "socketAddress(window.location, path),",
+        "protocols, socketAddress(window.location, path)",
+        "socketAddress(window.location, `/x/${path}`)",
+        "socketAddress(window.location, (path))",
+        "",
+    ] {
+        let text = format!("const socket = new WebSocket({argument});");
+        assert_eq!(
+            whats(&opener(SOCKET_OPENER, &text)),
+            [(
+                1,
+                "a socket address not built by `socketAddress(window.location, path)`"
+            )],
+            "{argument}"
+        );
+    }
+    assert_eq!(
+        whats(&opener(
+            SOCKET_OPENER,
+            "\nnew WebSocket(socketAddress(window.location, path)"
+        )),
+        [(
+            2,
+            "a socket address not built by `socketAddress(window.location, path)`"
+        )]
+    );
+    let both = "new WebSocket(a);\nnew WebSocket(b);";
+    assert_eq!(
+        whats(&opener(SOCKET_OPENER, both)),
+        [
+            (
+                1,
+                "a socket address not built by `socketAddress(window.location, path)`"
+            ),
+            (2, "a second `WebSocket(` call"),
+            (
+                2,
+                "a socket address not built by `socketAddress(window.location, path)`"
+            ),
+        ]
+    );
+}
+
+/// A vendored library's text holding a needle of every list, and nothing a vendored file is
+/// refused.
+const NEEDLES_ONLY: &str = "/*! license: https://example.com/LICENSE */\n\
+     console.warn(x); localStorage.x = 1; document.cookie;\n\
+     el.innerHTML = s; fetch(u); eval(t); new Function(t);\n\
+     const u = \"wss://example.com/\" + 'ws://example.org/';\n\
+     if (s instanceof WebSocket || s.readyState === 1) {}\n\
+     socket.onmessage = (e) => go(e); term.onData = f;";
+
+#[test]
+fn the_vendor_directory_is_exempt_from_the_needle_scan_only() {
+    // Catches: the exemption missing (a licence URL or a `console.` in minified code failing the
+    // scan), and the exemption reaching what a vendored file is still held to: an inline script
+    // or handler in its HTML, a handler made from text in its script, and a `WebSocket(` call.
+    assert!(scan_file("vendor/lib/lib.js", NEEDLES_ONLY).is_empty());
+    assert!(vendored_code("vendor/lib/lib.css", "a { b: url(x.png) }").is_empty());
+    let app = scan_file("pages/x.js", NEEDLES_ONLY);
+    assert!(
+        app.len() > 10,
+        "the same text in the app is refused: {app:?}"
+    );
+    assert_eq!(
+        whats(&scan_file(
+            "vendor/lib/demo.html",
+            "<script>go()</script>\n<p onclick=\"go()\">x</p>\n<p style=\"x\">y</p>"
+        )),
+        [
+            (1, "a script without `src`"),
+            (2, "an inline event handler"),
+            (3, "an inline style"),
+        ]
+    );
+    assert_eq!(
+        whats(&scan_file(
+            "vendor/lib/lib.js",
+            "el.setAttribute(\"onclick\", s);\nthis.attach(new WebSocket(uri, protocols));"
+        )),
+        [(1, "an event handler attribute"), (2, "`WebSocket(`")]
+    );
+    assert_eq!(
+        whats(&scan_file("vendor/lib/lib.css", "x { }\nnew WebSocket(u)")),
+        [(2, "`WebSocket(`")]
+    );
+}
+
+#[test]
+fn scan_file_applies_every_rule_of_one_app_file() {
+    // Catches: a rule of the app's own files left out of `scan_file`.
+    let text = "console.log(t);\nfetch(\"https://example.com/\");\nel.onclick = go;";
+    assert_eq!(
+        whats(&scan_file("pages/x.js", text)),
+        [
+            (1, "`console.`"),
+            (2, "`https://`"),
+            (3, "an event handler property"),
+        ]
+    );
+}

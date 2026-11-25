@@ -1,0 +1,7 @@
+# A hand-written sample of the `launchctl print-disabled system` format before macOS 13, which
+# prints `true` and `false`.
+disabled services = {
+	"com.example.disabled-one" => true
+	"dev.hostkeeper.hostkeeper" => false
+	"dev.hostkeeper.hostkeeper-helper" => true
+}

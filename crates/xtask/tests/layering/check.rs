@@ -20,6 +20,7 @@ const TESTKIT: &str = "hostkeeper-testkit";
 const WIRE: &str = "hostkeeper-wire";
 const OIDC: &str = "hostkeeper-oidc";
 const TLS: &str = "hostkeeper-tls";
+const CONSOLE: &str = "hostkeeper-console";
 const COORDINATOR: &str = "hostkeeper-coordinator";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
 const OBSERVE: &str = "hostkeeper-observe";
@@ -29,7 +30,7 @@ const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
-const HKCTL: &str = "hostkeeper-hkctl";
+const HK: &str = "hostkeeper-hk";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
@@ -53,10 +54,11 @@ pub type Layer = (
 
 /// Every crate of the workspace but those of [`NO_ROW`], in name order. The dev column is what
 /// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
-/// (a fake issuer), which a dev-dependency can do and a normal dependency must not; the daemon's and the link's tests run a
+/// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run the
+/// daemon's heartbeat loop against it (`hostkeeper-link`'s `testing` feature); the daemon's and the link's tests run a
 /// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
 /// example service hello's hook in process;
-/// hello's tests read its output with the hook contract; `hkctl`'s tests forward the script's calls to a coordinator built from its
+/// hello's tests read its output with the hook contract; `hk`'s tests forward its calls to a coordinator built from its
 /// flags, whose CI allow-list is `hostkeeper-oidc`'s testkit issuer's; the observer's tests run
 /// hooks through the step runner; the CLI crates' tests read the protobuf descriptors, and the
 /// web app's send each of its calls to a coordinator built from its flags, whose CI allow-list
@@ -84,8 +86,11 @@ pub type Layer = (
 /// (`hostkeeper-bootstrap`) reads the daemon's config loader (`hostkeeper-config`), the macos-pkg
 /// installer's tool port and signature reader (`hostkeeper-install`, with the paths of
 /// `hostkeeper-launchd`), the HTTPS transport (`hostkeeper-package`) and the repository descriptor
-/// (`hostkeeper-release`), and is read by no crate.
-pub const LAYERS: [Layer; 29] = [
+/// (`hostkeeper-release`), and is read by the daemon alone, whose Mac start reads the administrator
+/// of the bootstrap's settings to give the update account its Secure Token. The coordinator serves the console through
+/// `hostkeeper-console`, and its tests script that crate's BMC tool port with the double of its
+/// feature `testing`.
+pub const LAYERS: [Layer; 30] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (
         BOOTSTRAP,
@@ -93,23 +98,24 @@ pub const LAYERS: [Layer; 29] = [
         &[],
     ),
     (CONFIG, &[], &[]),
+    (CONSOLE, &[ENROLLMENT, WIRE], &[]),
     (
         COORDINATOR,
-        &[CONFIG, ENROLLMENT, OIDC, PROTO, RELEASE, TLS, WIRE],
-        &[OIDC],
+        &[CONFIG, CONSOLE, ENROLLMENT, OIDC, PROTO, RELEASE, TLS, WIRE],
+        &[CONSOLE, LINK, OIDC],
     ),
     (
         DAEMON,
         &[
-            CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
-            RELEASE, STEPS,
+            BOOTSTRAP, CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE,
+            PLACED, PROTO, RELEASE, STEPS, WIRE,
         ],
-        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
+        &[COORDINATOR, HELLO, OIDC, TLS],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
     (HELLO, &[], &[HOOK]),
-    (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
+    (HK, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
     (INSTALL, &[CONFIG, LAUNCHD, PROTO, RELEASE, STEPS], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
@@ -197,7 +203,13 @@ type Members = BTreeMap<String, Vec<Dep>>;
 /// Runs `cargo <args> --manifest-path <manifest>` and returns its stdout. A command that fails
 /// panics with its stderr.
 pub fn cargo(args: &[&str], manifest: &Path) -> String {
-    let out = Command::new(env!("CARGO"))
+    // Cargo names itself to every test it builds. buildrules' Buck2 build (docs/farm.md), which
+    // never runs this crate's tests, compiles them with no `CARGO`: `option_env!` lets that build
+    // compile and lint the file, and changes nothing under cargo.
+    let Some(cargo) = option_env!("CARGO") else {
+        panic!("cargo names itself (CARGO) to the tests it builds");
+    };
+    let out = Command::new(cargo)
         .args(args)
         .arg("--manifest-path")
         .arg(manifest)

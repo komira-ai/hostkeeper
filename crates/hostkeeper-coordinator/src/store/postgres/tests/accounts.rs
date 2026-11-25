@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use super::{SPENT_NOW, TestDatabase, off_runtime};
+use super::{ID, SPENT_NOW, TestDatabase, off_runtime};
 use crate::accounts::{AccountStore, Accounts, AccountsError};
 use crate::store::conformance_tests::rich_accounts;
 use crate::store::postgres::session::Session;
-use crate::store::postgres::{Landing, Owned, TIMEOUTS, load_all, migrate};
+use crate::store::postgres::{Landing, Owned, TIMEOUTS, migrate, parts};
 use crate::store::{Backend, Commit, Shared};
 
 fn commit(store: &impl Backend, before: &Accounts, after: &Accounts) {
@@ -188,7 +188,7 @@ fn an_account_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
     let held = rich_accounts();
     let none = Accounts::default();
     let landed = |commit: &Commit<'_>, landed: bool| Landing {
-        number: 1,
+        id: ID.to_owned(),
         landed,
         change: Some(Owned::of(commit)),
     };
@@ -248,7 +248,10 @@ fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
         let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
         let ran = migrate::apply(session, &before)
             .expect("its runner takes the database and does not refuse 0010");
-        (ran, load_all(session, SPENT_NOW).expect("the state reads"))
+        (
+            ran,
+            parts::load(session, SPENT_NOW).expect("the state reads").0,
+        )
     });
     assert_eq!(ran, Vec::<i32>::new());
     assert_eq!(loaded_before.accounts, rich_accounts());
@@ -265,7 +268,7 @@ fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=18)
+        (1..=31)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -288,7 +291,7 @@ fn an_account_store_over_postgres_commits_through_the_database() {
     db.run(
         "CREATE FUNCTION test_refuse() RETURNS trigger LANGUAGE plpgsql AS $$ \
          BEGIN RAISE EXCEPTION 'the test refuses this commit'; END $$; \
-         CREATE TRIGGER test_refuse BEFORE UPDATE ON lease FOR EACH ROW \
+         CREATE TRIGGER test_refuse BEFORE INSERT ON tx_ledger FOR EACH ROW \
          EXECUTE FUNCTION test_refuse()",
     )
     .expect("the refusal is set");

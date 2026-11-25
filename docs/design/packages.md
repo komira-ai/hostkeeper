@@ -146,8 +146,9 @@ Every item is **Built** at the path given.
   `{release_channel}/S/V/index.json` and downloads the archive, checking size and digest; `prove.rs` verifies
   `<archive>.sigstore.json` with the pinned `gh attestation verify` against `[trusted_signers]` in
   `/etc/hostkeeper/hostkeeper.toml`. Only then does `VerifiedArchive` exist, the one way to the bytes.
-- **On the host.** `/var/lib/hostkeeper/packages/<service>/<version>/` (0555), `<version>.seal` (tree digest and package
-  digest), `current` and `previous` links; two versions kept (`crates/hostkeeper-steps/src/prune.rs`). `Staged::check`
+- **On the host.** `/var/lib/hostkeeper/packages/<service>/<version>/` (0700, root's alone), `<version>.seal` (tree digest and package
+  digest), `current` and `previous` links; `current`, `previous`, the pinned version and the newest `--keep-versions` others kept
+  (`crates/hostkeeper-steps/src/prune.rs`, hostkeeper-design.md Q14). `Staged::check`
   re-hashes the tree before every hook step (`crates/hostkeeper-steps/src/artifact.rs`); the tree digest refuses
   anything but regular files and directories.
 - **Placement.** The daemon links each file of `units/` and each `[[files]]` entry to its system path, pointing into
@@ -156,7 +157,7 @@ Every item is **Built** at the path given.
   calls **closed-world removal**: hostkeeper removes what it put on the host, all of it, and nothing else.
 - **The hook.** A program of the package, named by `[hook] command`, run as root in a bounded transient unit
   (`crates/hostkeeper-steps/src/systemd.rs`): `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, and the additive
-  `uninstall` and `boot` (`crates/hostkeeper-hook`). Before `cutover` the daemon switches `current` and relinks
+  `uninstall`, `boot`, `drain` and `resume` (`crates/hostkeeper-hook`). Before `cutover` the daemon switches `current` and relinks
   (`hooked_switch`, `crates/hostkeeper-daemon/src/place.rs`).
 - **The coordinator.** `Releases.SetDesired` takes `package_digest` (one package for every host) or `release_index` with
   `release_index_digest` (`operator.proto`). It orders each host the digest of its platform's entry and skips a host
@@ -403,7 +404,7 @@ message Manifest {                    // the installer is the entry's (Target.in
 }
 message Hook {
   repeated string command = 1;        // a program in the staged tree and its leading arguments; empty: built-in steps
-  optional string boot = 2; StepBounds timeout_secs = 3; uint64 verify_deadline_secs = 4;
+  optional string boot = 2; optional string drain = 7; optional string resume = 8; StepBounds timeout_secs = 3; uint64 verify_deadline_secs = 4;
   optional uint64 promotion_ceiling_secs = 5; optional uint32 cleanup_retries = 6;
 }
 message StepBounds { uint64 prepare = 1; uint64 cutover = 2; uint64 verify = 3; uint64 rollback = 4;
@@ -449,8 +450,8 @@ checks are today's `Manifest::load` rules moved to the message, plus those for i
   `rollback`; `promotion_ceiling_secs` not 0. Each installer bound from 1 up to 3600 seconds.
 - **The hook program.** `command[0]` is, for `hostkeeper-archive` and `tarball`, a relative path of plain names in
   `tree/` (section 6.1), a regular file there reached through no link; for `apt` and `macos-pkg`, an absolute path of
-  an executable file the package installs, run from its sealed copy (packages-native.md section 10.2). `boot` needs a
-  command. For `oci-image`, `command` must be empty. No rule applies to a native package's files or scripts.
+  an executable file the package installs, run from its sealed copy (packages-native.md section 10.2). `boot`, `drain` and `resume` need a
+  command; `drain` and `resume` are both named or neither, and no two of `boot`, `drain` and `resume` name one step. For `oci-image`, `command` must be empty. No rule applies to a native package's files or scripts.
 - **Names.** Each `run` entry and each container's `unit` is a unit of the service, by today's rules (`names.rs`): for
   systemd, a base of `<service>` or `<service>-…`, an optional `@<instance>`, and a suffix `.service`, `.socket` or
   `.timer`; for launchd, a label `<service>` or `<service>.…`. A unit `place` entry's `path` is such a name too. Every
@@ -478,7 +479,7 @@ in an outcome with a class and a reason. It has four steps:
 |---|---|---|
 | `stage` | Makes the version directory from the verified artifact: keeps the artifact, and extracts from it, with the format's own extractor, the tree the hook and the observer read. Checks the artifact is the package the manifest names | Change anything outside the version's staging directory, or run any script of the package |
 | `activate` | Makes this version the installed one: installs it with the format's tool, then switches `current`. Is also how a rollback goes back (activating the kept previous version) | Fetch anything; start, stop or restart the service's `run` units (that is the hook's); touch another service's package |
-| `retire` | Drops a version that is neither `current` nor `previous` (today's prune): deletes its directory, its seal and its kept artifact | Call the format's tool on the host's installed package, which belongs to `current` |
+| `retire` | Drops a version the host does not keep, neither `current`, `previous`, the pinned one nor one of the newest (today's prune): deletes its directory, its seal and its kept artifact | Call the format's tool on the host's installed package, which belongs to `current` |
 | `remove` | Takes the whole service off the host, on uninstall or when a first install fails: what its `activate` recorded; a package the host's package manager already had is not a first install on apt, where an `install` adopts it instead (packages-lifecycle.md section 6.1), but an uninstall of the adopted service removes it | Remove anything `activate` did not record, or anything changed since; a native package's files are what the format's own database lists for it, removed whatever their content (packages-lifecycle.md section 6.5) |
 
 Installers are **built into the daemon**. Each is a module of a new crate, `hostkeeper-install`, behind one trait, and

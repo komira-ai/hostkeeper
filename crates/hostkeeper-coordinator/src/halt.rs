@@ -86,6 +86,7 @@ use crate::host_groups::GroupName;
 use crate::identity::Identity;
 use crate::membership::{self, Standing};
 use crate::operate::{clear_standing, cleared};
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, Write};
 use crate::services::{ServiceDef, Services};
 
@@ -404,7 +405,7 @@ pub(crate) fn raise_by_operator<E: From<OpsError>>(
     ops: &OpsStore,
     service: &str,
     target: &Version,
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     reason: &str,
     already: E,
 ) -> Result<AuditEntry, E> {
@@ -442,7 +443,7 @@ pub(crate) fn raise_by_operator_in<E: From<OpsError>>(
     ops: &OpsStore,
     service: &str,
     targets: &[(GroupName, Version)],
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     reason: &str,
     already: E,
 ) -> Result<Vec<AuditEntry>, E> {
@@ -508,7 +509,7 @@ pub(crate) fn lift_by_setter(
     group: Option<&GroupName>,
     service: &str,
     version: &Version,
-    actor: &str,
+    actor: &(impl AuditBy + ?Sized),
     set_by: &str,
 ) -> Result<Lifted, OpsError> {
     let lifted = ops.decide_change(Write::BeforeMemory, |state| {
@@ -528,7 +529,7 @@ pub(crate) fn lift(
     group: Option<&GroupName>,
     service: &str,
     version: &Version,
-    actor: &str,
+    actor: &(impl AuditBy + ?Sized),
     set_by: &str,
 ) -> Option<AuditEntry> {
     let mut marks = state.marks_in(group, service);
@@ -562,11 +563,15 @@ pub(crate) fn standing(state: &OpsState, group: Option<&GroupName>, service: &st
     state.halt_in(group, service).cloned()
 }
 
-/// [`Gate::Halted`] for a service that is halted, and [`decide_marked`] (which holds the
-/// versions marked bad) for one that is not.
+/// [`Gate::Halted`] for a service that is halted; for a host that holds a halt of the service of
+/// its own (its beat's `local_halt`), [`Gate::HaltedHere`], or [`Gate::StaleHaltHere`] when the
+/// generation it holds is above the service's (the one this coordinator issued last, which only
+/// grows); and [`decide_marked`] (which holds the versions marked bad) for the rest.
 ///
 /// A halt is checked first, so that a halted service is told nothing: not an order, and not
-/// the reason a version is bad. The halt and the bad versions are read under one lock.
+/// the reason a version is bad. The halt, the generation and the bad versions are read under one
+/// lock. A host's own halt comes next: it refuses every order of the service (`halted`), so it
+/// is told why it is held, never the `failed_here` its refusal would read as.
 pub(crate) fn decide(
     ops: &OpsStore,
     services: &Services,
@@ -577,9 +582,10 @@ pub(crate) fn decide(
     now: Duration,
 ) -> Decision {
     let group = services.get(service).and_then(ServiceDef::group);
-    let (halted, bad) = ops.read(|state| {
+    let (halted, issued, bad) = ops.read(|state| {
         (
             standing(state, group, service).is_some(),
+            state.halt_generation_in(group, service),
             state
                 .services
                 .get(service)
@@ -590,7 +596,14 @@ pub(crate) fn decide(
     if halted {
         return Decision::Gate(Gate::Halted);
     }
-    decide_marked(services, desired, &bad, service, fleet, id, now)
+    let held = fleet
+        .occupant(service, id)
+        .and_then(|host| host.beat.local_halt.as_ref());
+    match held {
+        Some(halt) if halt.generation > issued => Decision::Gate(Gate::StaleHaltHere),
+        Some(_) => Decision::Gate(Gate::HaltedHere),
+        None => decide_marked(services, desired, &bad, service, fleet, id, now),
+    }
 }
 
 /// The generation of every service an operator has cleared a halt of, by name, of the

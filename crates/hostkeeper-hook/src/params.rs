@@ -10,7 +10,9 @@
 //! [`TARGET_VERSION_KEY`], [`PREVIOUS_VERSION_KEY`] (absent on a first install) and
 //! [`ARTIFACT_DIGEST_KEY`], the `sha256:<64 lowercase hex>` identity of the verified artifact: a
 //! hook keys its record on it and does not use it to verify the artifact again. The staged
-//! release equals the argument of `prepare`. The manifest's own `[params]` may not set any
+//! release equals the argument of `prepare`. The params file of a `drain` or a `resume` holds,
+//! besides the manifest's own table, [`SERVICE_KEY`], [`RUN_ID_KEY`] (the maintenance run the
+//! step is part of) and, for a `drain` with a deadline, [`DRAIN_DEADLINE_KEY`]. The manifest's own `[params]` may not set any
 //! `updater.*` key: [`Params::parse_declared`] refuses it. **A hook still validates every one of
 //! these values against its own record directory and the manifest it
 //! shipped with**: they come from a file, and a value read from a file is untrusted input.
@@ -39,13 +41,24 @@ pub const TARGET_VERSION_KEY: &str = "updater.target_version";
 pub const PREVIOUS_VERSION_KEY: &str = "updater.previous_version";
 /// The digest of the artifact the updater verified, `sha256:<64 lowercase hex>`.
 pub const ARTIFACT_DIGEST_KEY: &str = "updater.artifact_digest";
+/// The service a `drain` or a `resume` is run for.
+pub const SERVICE_KEY: &str = "updater.service";
+/// The maintenance run a `drain` or a `resume` is part of: the same for the `drain` and the
+/// `resume` of one host's turn.
+pub const RUN_ID_KEY: &str = "updater.run_id";
+/// The deadline of a `drain`: a whole number of seconds since the Unix epoch, not negative. Once
+/// the host's clock reads it or later and work is left, the hook resumes the service, cuts no
+/// work, and exits `75`. Absent: no deadline, and the `drain` waits for the work to end.
+pub const DRAIN_DEADLINE_KEY: &str = "updater.drain_deadline_unix";
 /// The reserved keys whose value is text.
-const TEXT_KEYS: [&str; 5] = [
+const TEXT_KEYS: [&str; 7] = [
     ARTIFACT_DIGEST_KEY,
     STAGED_RELEASE_KEY,
     PREVIOUS_RELEASE_KEY,
     TARGET_VERSION_KEY,
     PREVIOUS_VERSION_KEY,
+    SERVICE_KEY,
+    RUN_ID_KEY,
 ];
 /// The namespace of the keys only the updater writes.
 const RESERVED_PREFIX: &str = "updater.";
@@ -71,6 +84,10 @@ pub enum ParamsError {
     NotScalar(String),
     #[error("{PROMOTION_CEILING_KEY} must be a whole number of seconds, not negative")]
     BadCeiling,
+    #[error(
+        "{DRAIN_DEADLINE_KEY} must be a whole number of seconds since the Unix epoch, not negative"
+    )]
+    BadDrainDeadline,
     #[error("reserved key {0:?} must be text")]
     BadReserved(String),
     #[error(
@@ -124,6 +141,9 @@ impl Params {
         if params.0.contains_key(PROMOTION_CEILING_KEY) && params.promotion_ceiling_secs().is_none()
         {
             return Err(ParamsError::BadCeiling);
+        }
+        if params.0.contains_key(DRAIN_DEADLINE_KEY) && params.drain_deadline_unix().is_none() {
+            return Err(ParamsError::BadDrainDeadline);
         }
         if let Some(key) = TEXT_KEYS.into_iter().find(|key| {
             params
@@ -224,6 +244,21 @@ impl Params {
     /// The version it replaces; `None` on a first install.
     pub fn previous_version(&self) -> Option<&str> {
         self.text(PREVIOUS_VERSION_KEY)
+    }
+
+    /// The service of a `drain` or a `resume`.
+    pub fn service(&self) -> Option<&str> {
+        self.text(SERVICE_KEY)
+    }
+
+    /// The maintenance run of a `drain` or a `resume`.
+    pub fn run_id(&self) -> Option<&str> {
+        self.text(RUN_ID_KEY)
+    }
+
+    /// The deadline of a `drain`, in seconds since the Unix epoch; `None` for no deadline.
+    pub fn drain_deadline_unix(&self) -> Option<u64> {
+        self.get_u64(DRAIN_DEADLINE_KEY)
     }
 
     /// The identity of the verified artifact, `sha256:<64 lowercase hex>`, which a hook keys its

@@ -8,9 +8,12 @@
 //! 10.4) must not boot the running daemon out in the middle of its update, so the script never
 //! runs `launchctl bootout`, and the plist's new text takes effect at the next boot. When the job
 //! is not loaded (a first install, or a host that booted it out) the script runs `launchctl
-//! bootstrap system <plist>`, which loads the job the pkg installed (its `RunAtLoad` starts it);
-//! that status is the script's, so a failing bootstrap fails the install with `launchctl`'s
-//! message.
+//! enable system/<label>` and then `launchctl bootstrap system <plist>`, which loads the job the
+//! pkg installed (its `RunAtLoad` starts it). The `enable` is there because a job that is marked
+//! disabled in launchd's override database is not loaded by `bootstrap`, which fails for it; the
+//! `enable` clears that mark, and is harmless for a job that is not marked. Its status is not
+//! the script's: the bootstrap's status is, so a failing bootstrap fails the install with
+//! `launchctl`'s message.
 //!
 //! The script writes nothing else. The daemon's start does what a postinstall did before
 //! (`hostkeeper_daemon::packaged`, `hostkeeper_daemon::mac_config::at_start`): the job's program,
@@ -85,8 +88,10 @@ impl Postinstall {
              # not have it loaded, and leave it alone when it does. An installer the daemon\n\
              # itself runs (its self-update) must not boot the running daemon out, so the job is\n\
              # never booted out here; its new plist takes effect at the next boot. A first\n\
-             # install, or a host where the job is not loaded, gets it loaded.\n\
+             # install, or a host where the job is not loaded, gets it enabled (a job marked\n\
+             # disabled is not loaded by bootstrap) and then loaded.\n\
              {launchctl} print {job} >/dev/null 2>&1 && exit 0\n\
+             {launchctl} enable {job}\n\
              exec {launchctl} bootstrap system {plist}\n"
         )
     }

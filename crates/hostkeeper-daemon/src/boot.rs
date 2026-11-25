@@ -57,7 +57,7 @@ use hostkeeper_hook::{Params, STAGED_RELEASE_KEY, Scalar, TARGET_VERSION_KEY, Ve
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::runner::REASON_ARTIFACT_CHANGED;
 use hostkeeper_steps::{
-    AdditiveCall, ArtifactError, Bounds, Clock, Finished, LaunchError, Layout, ResumeAction,
+    AdditiveCall, ArtifactError, Bound, Bounds, Clock, Finished, LaunchError, Layout, ResumeAction,
     RunError, Seal, Staged, StepExit, UpdateOrder, read_seal, resume,
 };
 
@@ -286,6 +286,13 @@ pub struct BootReport {
     /// The dangling unit links an earlier move left that the start removed, before the boot
     /// pass ([`crate::unit_links`]).
     pub unit_links: Vec<std::path::PathBuf>,
+    /// The package directories an earlier release left otherwise that the start gave the modes
+    /// of the store's layout, before anything else it does, and the services whose archive
+    /// version it opened to their users ([`crate::package_dirs`]).
+    pub package_dirs: crate::package_dirs::PackageDirs,
+    /// The run units of an archive version the start opened that it started again
+    /// ([`crate::run_units`]).
+    pub archive_units_started: Vec<String>,
     /// How the readiness notice went: `None` before it was sent.
     pub ready: Option<Result<(), String>>,
     /// What the start settled of the update of hostkeeper itself that waited for the restart
@@ -298,6 +305,9 @@ pub struct BootReport {
     /// ([`crate::own_package`], "The adoption"), `None` when it adopted none, or why it could
     /// not: `None` before the start looked.
     pub adopted: Option<Result<Option<String>, String>>,
+    /// What the start's check of the daemon's own launchd job found ([`crate::own_job`]): `None`
+    /// on a host with no such check (Linux).
+    pub own_job: Option<crate::own_job::OwnJobCheck>,
 }
 
 /// Why the start pass could not run: the state directory cannot be listed.
@@ -852,7 +862,7 @@ impl Daemon {
             params: &store.params_path(),
             executable: &executable,
             unit: &unit,
-            timeout_secs: manifest.hook.timeout_secs.cutover.get(),
+            bound: Bound::Secs(manifest.hook.timeout_secs.cutover),
         });
         let ended = match ran {
             Ok(exit) => Ok(Some(exit)),

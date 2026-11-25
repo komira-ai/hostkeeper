@@ -1,17 +1,31 @@
-//! The health listener of `serve --health-listen` (`docs/design/two-programs.md`, section 2.7):
-//! plain HTTP/1.1 on a loopback address, with no TLS and no token, for a probe on the
-//! coordinator's own machine (an orchestrator's HTTP probe, the machine's monitoring). The image
-//! has no shell and no client, so the probe runs outside the container, and there is no verb.
+//! The health listener of `serve --health-listen` (`docs/design/two-programs.md`, section 2.7,
+//! and `docs/design/coordinator-multi-instance.md`, section 11): plain HTTP/1.1 with no TLS and no
+//! token, for a probe on the coordinator's own machine (an orchestrator's HTTP probe, the
+//! machine's monitoring) on a loopback address, or for the edge's check on the address of one
+//! interface (a wildcard with `--health-listen-wildcard`). The image has no shell and no client,
+//! so the probe runs outside the container, and there is no verb.
 //!
-//! It answers `GET /healthz` and `HEAD /healthz` only, and `404 not_found` to any other path or
-//! method. The answer is `200` with the body `ok` when every listener the flags name is bound
-//! and serving and the store takes writes, and `503` with one reason token otherwise:
-//! `draining` from the stop signal until the process exits, whatever else holds,
-//! `starting` until every listener is bound, `not_writer` once another coordinator led the
-//! database this one's link to it was lost from (this one holds the single-writer lock no more,
-//! and stops), `store_unreachable` while the link to the database is lost. A `HEAD` is answered
-//! the status and the body's length, with no body. The body is the token and nothing else: no version, no host, no
-//! count. An answer reads memory only and writes no audit line.
+//! It answers `GET` and `HEAD` of `/healthz` and of `/readyz`, and `404 not_found` to any other
+//! path or method; a `HEAD` is answered the status and the body's length, with no body. The body
+//! is the token and nothing else: no version, no host, no count. An answer reads memory only and
+//! writes no audit line.
+//!
+//! `/readyz` is whether this coordinator takes traffic, which the edge checks: `200 ok` when every
+//! listener the flags name is bound and serving and the store takes writes, and `503` with one
+//! reason token otherwise: `draining` from the stop signal until the process exits, whatever else
+//! holds, `starting` until every listener is bound, `store_unreachable` while the link to the
+//! database is lost.
+//!
+//! `/healthz` is whether the process is alive, which the orchestrator checks: `200 ok` from the
+//! moment every listener is bound, whatever the database does and while the coordinator drains, and
+//! `503 starting` before. A database that does not answer, or a stop in progress, must not have
+//! the orchestrator kill a coordinator that is doing what it should.
+//!
+//! The health listener is the one listener the stop does not close: after `--drain-delay-secs` the
+//! heartbeat, private and LAN listeners stop accepting and the coordinator waits for the
+//! connections they hold ([`crate::graceful`]), and this listener answers `/healthz` `200` and
+//! `/readyz` `503 draining` meanwhile, until the process exits. Its own connections are not
+//! waited for.
 //!
 //! The listener has the limits of the others ([`crate::listen`]): at most
 //! [`crate::listen::MAX_CONNECTIONS`] connections at once, the patience for a request head and
@@ -34,12 +48,18 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Semaphore;
 
+use crate::graceful::Graceful;
 use crate::listen::{WriteDeadline, accept_each};
 use crate::service::Coordinator;
 use crate::store::Health;
 
-/// The one path the health listener answers.
+/// The path of the liveness check: `200` once every listener is bound, whatever else holds.
 pub(crate) const HEALTH_PATH: &str = "/healthz";
+
+/// The path of the readiness check: `200` only while this coordinator takes traffic, `503` while
+/// it starts, cannot reach its store or drains, so the edge that checks it sends a connection only
+/// to a coordinator that answers `200`.
+pub(crate) const READY_PATH: &str = "/readyz";
 
 /// What the health listener says of the coordinator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,9 +68,6 @@ pub(crate) enum Verdict {
     Ok,
     /// Not every listener the flags name is bound yet: `503 starting`.
     Starting,
-    /// Another coordinator led the database while this one's link was lost: this one holds the
-    /// single-writer lock no more, and stops. `503 not_writer`.
-    NotWriter,
     /// The link to the database is lost. `503 store_unreachable`.
     StoreUnreachable,
     /// The coordinator was told to stop and is on its way out: a load balancer sends it no new
@@ -65,7 +82,6 @@ impl Verdict {
         match self {
             Self::Ok => "ok",
             Self::Starting => "starting",
-            Self::NotWriter => "not_writer",
             Self::StoreUnreachable => "store_unreachable",
             Self::Draining => "draining",
         }
@@ -76,7 +92,7 @@ impl Verdict {
     pub(crate) fn status(self) -> StatusCode {
         match self {
             Self::Ok => StatusCode::OK,
-            Self::Starting | Self::NotWriter | Self::StoreUnreachable | Self::Draining => {
+            Self::Starting | Self::StoreUnreachable | Self::Draining => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
         }
@@ -123,14 +139,26 @@ impl Serving {
 
 /// Waits for `stop` (the stop signal), then says on `serving` that the coordinator is
 /// draining, whatever `stop` answered, and answers what it answered. The health listener says
-/// `draining` from then on, until the process exits.
+/// `draining` from then on, until the process exits; the drain delay that follows a good signal
+/// is the stop's (`config_stop.rs`).
 pub(crate) async fn drain_on<T>(stop: impl Future<Output = T>, serving: Serving) -> T {
     let stopped = stop.await;
     serving.drain();
     stopped
 }
 
-/// What the health listener says of `coordinator`, `serving` or not: [`Verdict::Draining`]
+/// What the liveness check says of the process: [`Verdict::Starting`] until every listener is
+/// bound, and [`Verdict::Ok`] after, whatever the store and a drain say.
+#[must_use]
+pub(crate) fn liveness(serving: &Serving) -> Verdict {
+    if serving.is_set() {
+        Verdict::Ok
+    } else {
+        Verdict::Starting
+    }
+}
+
+/// What the readiness check says of `coordinator`, `serving` or not: [`Verdict::Draining`]
 /// first, then [`Verdict::Starting`], then the store's health, from memory.
 #[must_use]
 pub(crate) fn verdict(coordinator: &Coordinator, serving: &Serving) -> Verdict {
@@ -143,12 +171,12 @@ pub(crate) fn verdict(coordinator: &Coordinator, serving: &Serving) -> Verdict {
     match coordinator.ops.health() {
         Health::Up => Verdict::Ok,
         Health::Lost => Verdict::StoreUnreachable,
-        Health::Deposed { .. } => Verdict::NotWriter,
     }
 }
 
 /// The answer to a request of `method` for `path` (the path alone, with no query): the
-/// verdict for `GET` and `HEAD` of [`HEALTH_PATH`], and `404 not_found` for anything else. A
+/// liveness verdict ([`liveness`]) for `GET` and `HEAD` of [`HEALTH_PATH`], the readiness verdict
+/// ([`verdict`]) for `GET` and `HEAD` of [`READY_PATH`], and `404 not_found` for anything else. A
 /// `HEAD` is answered as a `GET`: the connection sends its head, with the `content-length` of the
 /// body, and leaves the body out.
 #[must_use]
@@ -158,9 +186,14 @@ pub(crate) fn answer(
     method: &Method,
     path: &str,
 ) -> Response<Full<Bytes>> {
-    let asks = path == HEALTH_PATH && (method == Method::GET || method == Method::HEAD);
+    let asks = (path == HEALTH_PATH || path == READY_PATH)
+        && (method == Method::GET || method == Method::HEAD);
     let (status, body) = if asks {
-        let verdict = verdict(coordinator, serving);
+        let verdict = if path == HEALTH_PATH {
+            liveness(serving)
+        } else {
+            verdict(coordinator, serving)
+        };
         (verdict.status(), verdict.token())
     } else {
         (StatusCode::NOT_FOUND, "not_found")
@@ -224,10 +257,13 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    // Its connections are counted on a `Graceful` of its own that nothing stops: the health
+    // listener answers until the process exits, and the stop does not wait for its connections.
     accept_each(
         accept,
         Arc::new(Semaphore::new(max_connections)),
-        move |stream| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
+        Graceful::default(),
+        move |stream, _| connection(stream, Arc::clone(&coordinator), serving.clone(), patience),
     )
 }
 

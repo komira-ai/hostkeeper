@@ -13,8 +13,10 @@
 //! so a later build may add one, and a value that breaks a rule of [`Accounts::new`] stops the
 //! start, naming the file. A file that is not there holds none.
 //!
-//! The names of users and of API tokens are one namespace, as the audit's `by` is the name of
-//! either ([`TokenName`]). The tokens file's names are not in it: whoever creates a user or a
+//! The names of users and of API tokens are one namespace ([`TokenName`]): the audit's `by` is a
+//! user's name or a tokens file token's, and its `api_token` a stored token's. A stored token
+//! belongs to a user, its owner, and acts as that user while the user is enabled
+//! ([`Accounts::acting_owner`]); deleting the user removes their tokens. The tokens file's names are not in it: whoever creates a user or a
 //! token checks them against the tokens file, which this module does not read.
 //!
 //! - [`Accounts::with_user`] and [`Accounts::with_token`] make the accounts a creation would
@@ -30,7 +32,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use serde::{Deserialize, Serialize};
 
 use crate::desired::StoreError;
-use crate::store::{BackendError, Commit, Fake, Files, Landing, Shared};
+use crate::store::{BackendError, Commit, Edit, Fake, Files, Landing, Part, Scope, Shared};
 use crate::tokens::{TokenName, TokenNameError};
 
 /// The most bytes of a password hash a user record holds: a PHC string is a hundred or so.
@@ -150,11 +152,18 @@ impl std::fmt::Debug for User {
 /// An API token as the store keeps it. `name` is the key of the record and is not in its JSON.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiToken {
-    /// The name, which the audit's `by` is.
+    /// The name, which the audit's `api_token` is.
     #[serde(skip)]
     pub name: String,
     /// The SHA-256 of the token as 64 lowercase hex digits.
     pub sha256: String,
+    /// The user the token belongs to and acts as ([`Accounts::acting_owner`]). A record written
+    /// before tokens had owners has none, and reads as owned by `created_by`, who made it: from
+    /// then on every write of the accounts holds it. A release before skips the key and writes the
+    /// record without it, so after a rollback and a change of the accounts the token is owned by
+    /// its maker again.
+    #[serde(default)]
+    pub owner: String,
     /// Who made the token.
     pub created_by: String,
     /// When, in Unix seconds.
@@ -257,6 +266,9 @@ impl Accounts {
         }
         for (name, token) in &mut tokens {
             name.clone_into(&mut token.name);
+            if token.owner.is_empty() {
+                token.owner.clone_from(&token.created_by);
+            }
         }
         Ok(Self { users, tokens })
     }
@@ -289,13 +301,31 @@ impl Accounts {
         self.tokens.values()
     }
 
+    /// The user the token `name` acts as: its owner, while the token is stored and the owner is a
+    /// user who is enabled. None otherwise: the token is refused.
+    #[must_use]
+    pub fn acting_owner(&self, name: &str) -> Option<&User> {
+        self.tokens
+            .get(name)
+            .and_then(|token| self.users.get(&token.owner))
+            .filter(|user| user.enabled)
+    }
+
+    /// The API tokens the user `name` owns, by name.
+    pub fn tokens_of<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a ApiToken> + 'a {
+        self.tokens
+            .values()
+            .filter(move |token| token.owner == name)
+    }
+
     /// How many users are enabled.
     #[must_use]
     pub fn enabled_users(&self) -> usize {
         self.users.values().filter(|user| user.enabled).count()
     }
 
-    /// The accounts with `user` added.
+    /// The accounts with `user` added, without any token that names the user as its owner (one
+    /// stored before tokens had owners, whose maker was deleted then).
     ///
     /// # Errors
     /// [`AccountsError`]: the name is refused or taken, or the hash is not a PHC string.
@@ -304,9 +334,13 @@ impl Accounts {
         if self.users.contains_key(&user.name) || self.tokens.contains_key(&user.name) {
             return Err(AccountsError::Taken(user.name));
         }
+        // A token stored before owners whose maker was deleted then names that user: a user made
+        // under the name does not get it.
+        let mut tokens = self.tokens.clone();
+        tokens.retain(|_, token| token.owner != user.name);
         let mut users = self.users.clone();
         users.insert(user.name.clone(), user);
-        Self::new(users, self.tokens.clone())
+        Self::new(users, tokens)
     }
 
     /// The accounts with the user `name` changed by `edit`: the name is not changed.
@@ -357,7 +391,8 @@ impl Accounts {
         self.with_user_edited(name, |user| user.enabled = enabled)
     }
 
-    /// The accounts without the user `name`.
+    /// The accounts without the user `name` and without the API tokens they own
+    /// ([`Self::tokens_of`]): a user made later under the name does not get them.
     ///
     /// # Errors
     /// [`AccountsError::NoUser`]: there is none. [`AccountsError::LastEnabled`]: it is the only
@@ -372,18 +407,28 @@ impl Accounts {
         }
         let mut users = self.users.clone();
         users.remove(name);
-        Self::new(users, self.tokens.clone())
+        let mut tokens = self.tokens.clone();
+        tokens.retain(|_, token| token.owner != name);
+        Self::new(users, tokens)
     }
 
-    /// The accounts with `token` added.
+    /// The accounts with `token` added. A token with no owner is owned by its maker,
+    /// `created_by`, as a stored record with none is.
     ///
     /// # Errors
-    /// [`AccountsError`]: the name is refused or taken, or the digest is not 64 lowercase hex
-    /// digits or is another token's.
-    pub fn with_token(&self, token: ApiToken) -> Result<Self, AccountsError> {
+    /// [`AccountsError`]: the name is refused or taken, the owner is no user
+    /// ([`AccountsError::NoUser`]), or the digest is not 64 lowercase hex digits or is another
+    /// token's.
+    pub fn with_token(&self, mut token: ApiToken) -> Result<Self, AccountsError> {
         named(&token.name)?;
         if self.users.contains_key(&token.name) || self.tokens.contains_key(&token.name) {
             return Err(AccountsError::Taken(token.name));
+        }
+        if token.owner.is_empty() {
+            token.owner.clone_from(&token.created_by);
+        }
+        if !self.users.contains_key(&token.owner) {
+            return Err(AccountsError::NoUser(token.owner));
         }
         let mut tokens = self.tokens.clone();
         tokens.insert(token.name.clone(), token);
@@ -531,16 +576,34 @@ impl AccountStore {
         &self,
         edit: impl FnOnce(&Accounts) -> Result<Accounts, AccountsError>,
     ) -> Result<(), AccountsError> {
-        let held = self.held();
+        let mut held = self.held();
+        let opened = self.begin(&mut held)?;
         let next = edit(&held);
-        self.commit_change(held, next)
+        self.commit_change(held, opened, next)
     }
 
-    /// Commits `next`, the result of an edit of `held`, and puts it in `held`. Not generic over
-    /// the edit, so each of its branches is one branch to cover.
+    /// Begins the edit of a change of the accounts ([`Scope::ACCOUNTS`]), and takes into `held`
+    /// what it read afresh.
+    ///
+    /// # Errors
+    /// [`AccountsError::Io`]: no edit can be begun now; nothing changed.
+    fn begin(&self, held: &mut Accounts) -> Result<Edit, AccountsError> {
+        let mut edit = self
+            .backend
+            .begin(Scope::ACCOUNTS)
+            .map_err(accounts_error)?;
+        if let Some(fresh) = edit.take_accounts() {
+            *held = fresh;
+        }
+        Ok(edit)
+    }
+
+    /// Commits `next`, the result of an edit of `held`, through `opened`, and puts it in `held`.
+    /// Not generic over the edit, so each of its branches is one branch to cover.
     fn commit_change(
         &self,
         mut held: MutexGuard<'_, Accounts>,
+        opened: Edit,
         next: Result<Accounts, AccountsError>,
     ) -> Result<(), AccountsError> {
         let next = next?;
@@ -551,15 +614,42 @@ impl AccountStore {
             accounts: Some((&held, &next)),
             ..Commit::default()
         };
-        self.backend.commit(&commit).map_err(|why| match why {
-            BackendError::Accounts(why) => why,
-            other => AccountsError::Io(other.into_store()),
-        })?;
+        opened
+            .commit_or(&commit, |commit| self.backend.commit(commit))
+            .map_err(accounts_error)?;
         *held = next;
         Ok(())
     }
+
+    /// Reads the accounts again when the backend's rows moved on since memory's copy was read
+    /// (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"); not while a
+    /// change holds them, which reads the part afresh itself.
+    pub(crate) fn refresh(&self) {
+        let Ok(mut held) = self.held.try_lock() else {
+            return;
+        };
+        match self.backend.reload(Part::Accounts) {
+            Ok(fresh) => {
+                if let Some(fresh) = fresh.accounts {
+                    *held = fresh;
+                }
+            }
+            Err(why) => tracing::warn!(%why, "the accounts could not be read again"),
+        }
+    }
 }
 
+/// The backend's error as the accounts' own.
+fn accounts_error(why: BackendError) -> AccountsError {
+    match why {
+        BackendError::Accounts(why) => why,
+        other => AccountsError::Io(other.into_store()),
+    }
+}
+
+#[cfg(test)]
+#[path = "accounts_owner_tests.rs"]
+mod owner_tests;
 #[cfg(test)]
 #[path = "accounts_tests.rs"]
 mod tests;

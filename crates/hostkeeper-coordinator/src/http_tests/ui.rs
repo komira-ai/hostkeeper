@@ -212,6 +212,8 @@ async fn answered(rig: &Rig, surface: Surface, peer: &Peer) -> BTreeSet<String> 
             if code != StatusCode::NOT_FOUND && code != StatusCode::METHOD_NOT_ALLOWED {
                 let route = if path.starts_with(PREFIX) {
                     "/ui/*"
+                } else if path.starts_with(crate::console::route::PREFIX) {
+                    "/console/v1/stream/*"
                 } else {
                     path.as_str()
                 };
@@ -239,6 +241,33 @@ async fn ui_dir_unset_serves_nothing() {
             assert_eq!(body, NOT_FOUND, "{method} {path}");
             assert_eq!(header(&headers, "x-content-type-options"), None);
         }
+    }
+}
+
+/// Proves: the policy every answer of the file server carries is exactly the string the console
+/// design measured in two browsers (`docs/design/console-broker.md`, section 17.5), whole.
+///
+/// Catches: a directive dropped or loosened (`'unsafe-inline'` or `'unsafe-eval'` for script, a
+/// `connect-src` that names another origin, `data:` beyond images), one added, and the header
+/// carrying something other than the constant.
+#[tokio::test]
+async fn the_csp_string_is_pinned_whole() {
+    assert_eq!(
+        CONTENT_SECURITY_POLICY,
+        "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    );
+    let site = site("ui-csp");
+    for path in ["/ui/", "/ui/missing.js"] {
+        let (_, headers, _) = on_private(&site.rig, "GET", path).await;
+        assert_eq!(
+            header(&headers, "content-security-policy"),
+            Some(
+                "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; \
+                 style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+            ),
+            "{path}"
+        );
     }
 }
 
@@ -555,7 +584,7 @@ async fn the_static_handler_needs_no_token_and_reads_none() {
 /// four): every method over the committed paths and the probe paths, asked on the private surface
 /// of a coordinator that serves a directory and has a sign-in, is answered exactly on the routes
 /// of `private_routes.txt`; without `--ui-dir` it is those routes less `/ui/*`; without a sign-in
-/// it is those less the four sign-in routes; and the heartbeat surface answers `POST
+/// it is those less the four sign-in routes and the terminal's; and the heartbeat surface answers `POST
 /// /v1/heartbeat` alone.
 #[tokio::test]
 async fn the_private_route_set_is_the_committed_one() {
@@ -583,6 +612,7 @@ async fn the_private_route_set_is_the_committed_one() {
         .iter()
         .filter(|route| !route.contains("/v1/login") && !route.contains("/v1/logout"))
         .filter(|route| !route.contains("/v1/password") && !route.contains("/v1/session"))
+        .filter(|route| !route.contains("/v1/ssh/terminal"))
         .cloned()
         .collect();
     assert_eq!(

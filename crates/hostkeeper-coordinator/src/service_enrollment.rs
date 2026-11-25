@@ -1,10 +1,12 @@
 //! The calls of [`Coordinator`] that ask enrollment: who an enrolled host's certificate names,
-//! whether a host is denied, retiring or duplicate, and a retiring host's final report.
+//! whether a host is denied, retiring or duplicate, what a heartbeat noted of the host, and a
+//! retiring host's final report.
 
 use std::sync::Arc;
 
 use std::time::Duration;
 
+use hostkeeper_enrollment::enroll::HostRunning;
 use hostkeeper_wire::wire::{Answer, Health, Heartbeat};
 
 use super::{Coordinator, HeartbeatRefused};
@@ -22,6 +24,20 @@ pub(super) enum Turn {
     Order,
     /// Record it and order it nothing: the host is duplicate, or retiring.
     Hold,
+}
+
+/// What a heartbeat noted of its host that is kept with the host's enrollment: written by
+/// [`Coordinator::keep_noted`] once the heartbeat's decision is over, never while it is open. Over
+/// Postgres the decision holds its transaction open on one session while this thread decides,
+/// and the enrollment's write takes another, so a write made meanwhile could wait for a lock the
+/// decision holds while the decision waits for this thread: a wait no database can see.
+#[derive(Debug, Default)]
+pub(super) struct Noted {
+    /// The heartbeat reported a service serving ([`Coordinator::serves`]).
+    pub(super) serving: bool,
+    /// What the host runs, to keep with its enrollment
+    /// ([`Coordinator::note_running`](crate::service::Coordinator::note_running)).
+    pub(super) running: Option<HostRunning>,
 }
 
 impl Coordinator {
@@ -66,12 +82,13 @@ impl Coordinator {
         }
     }
 
-    /// With enrollment, notes that the heartbeat `beat` of `host`, heard as `node` at `now`,
-    /// reported a service serving ([`Enrollment::note_serving`], which keeps the first since the
-    /// host's approval), when it did: a service of `services` (those the heartbeat is decided
-    /// over: the rollout file's, or the host's group's) that counts the host as present, other than
-    /// the agent itself, healthy, with no update of it under way.
-    pub(super) fn note_serving(
+    /// Whether, with enrollment, the heartbeat `beat` of `host`, heard as `node` at `now`,
+    /// reported a service serving, which [`Self::keep_noted`] keeps with the host
+    /// ([`Enrollment::note_serving`], which keeps the first since the host's approval): a service
+    /// of `services` (those the heartbeat is decided over: the rollout file's, or the host's
+    /// group's) that counts the host as present, other than the agent itself, healthy, with no
+    /// update of it under way.
+    pub(super) fn serves(
         &self,
         services: &crate::services::Services,
         host: &hostkeeper_wire::HostId,
@@ -79,20 +96,31 @@ impl Coordinator {
         beat: &Heartbeat,
         ops: &OpsState,
         now: Duration,
-    ) {
+    ) -> bool {
+        self.enrollment.is_some()
+            && beat.services.iter().flatten().any(|one| {
+                one.health == Health::Healthy
+                    && one.updating.is_none()
+                    && !runs_itself(node, &one.name)
+                    && services.get(&one.name).is_some_and(|def| {
+                        membership(def, host, node, ops, now) == Membership::Present
+                    })
+            })
+    }
+
+    /// Keeps with the enrollment of `host` what its heartbeat `noted`: that it served
+    /// ([`Enrollment::note_serving`]) and what it runs ([`Enrollment::note_running`]). The caller
+    /// holds the fleet's lock, so two heartbeats of one host write in the order they were heard,
+    /// and no decision is open on this thread ([`Noted`]).
+    pub(super) fn keep_noted(&self, host: &hostkeeper_wire::HostId, noted: Noted) {
         let Some(enrollment) = &self.enrollment else {
             return;
         };
-        let serving = beat.services.iter().flatten().any(|one| {
-            one.health == Health::Healthy
-                && one.updating.is_none()
-                && !runs_itself(node, &one.name)
-                && services
-                    .get(&one.name)
-                    .is_some_and(|def| membership(def, host, node, ops, now) == Membership::Present)
-        });
-        if serving {
+        if noted.serving {
             enrollment.note_serving(host);
+        }
+        if let Some(running) = &noted.running {
+            enrollment.note_running(host, running);
         }
     }
 
@@ -162,12 +190,30 @@ impl Coordinator {
     pub fn final_report(&self, who: Identity, beat: Heartbeat) -> bool {
         let host = who.host_id.clone();
         let unknown = crate::trusted_root::TrustedRootSaid::default();
-        let fleet = self.lock_fleet();
+        let mut fleet = self.lock_fleet();
+        let now = (self.clock)();
+        self.tend_store(now);
         let basis = self.basis_of(&host);
-        self.reply_to(fleet, who, beat, false, (Turn::Hold, unknown), &basis);
+        let mut noted = Noted::default();
+        self.reply_to(
+            &mut fleet,
+            who,
+            beat,
+            false,
+            (Turn::Hold, unknown),
+            &basis,
+            now,
+            &mut noted,
+        );
+        self.keep_noted(&host, noted);
+        drop(fleet);
         let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
             self.running.forget(&host);
+            self.operator_keys.forget(&host);
+            self.ssh_reports.forget(&host);
+            self.serial_console_reports.forget(&host);
+            self.prerequisites.forget(&host);
             tracing::info!(host_id = %host, "a retiring host reported its update final: slot freed");
             if let Some(enrollment) = &self.enrollment {
                 enrollment.retire(&host);

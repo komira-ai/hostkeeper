@@ -28,8 +28,9 @@ pub(crate) const MAX_DSN_BYTES: u64 = 4096;
 /// coordinator's sessions.
 pub(crate) const APPLICATION: &str = "hostkeeper-coordinator";
 
-/// The bounded waits of every session (section 4.4). A wait that runs out loses the session:
-/// a heartbeat waits at most one of them, once.
+/// The bounded waits of every session (section 4.4). A connect or a connection that runs out
+/// loses the session: a heartbeat waits at most one of them, once. A statement whose wait for a
+/// lock or whose run runs out is refused, and the session stays ([`super::writer`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Timeouts {
     /// How long a connect may take.

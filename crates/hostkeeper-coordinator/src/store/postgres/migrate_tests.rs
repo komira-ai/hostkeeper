@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 18] = [
+const PINNED: [(i32, &str, &str); 31] = [
     (
         1,
         "state",
@@ -95,6 +95,71 @@ const PINNED: [(i32, &str, &str); 18] = [
         "remove_host_group_all",
         "1500ba573e6baf8ce359c6dafa72e6f03314153d4a4619fd49e8444ea32ca271",
     ),
+    (
+        19,
+        "tx_ledger",
+        "eba7812553739ea55e1f800be9b86d44d4598081d2d992d9e3fd35d4309a5e13",
+    ),
+    (
+        20,
+        "ssh_certs",
+        "c35c5def1fc077bc830efda7e4758eca0ff652cd85105787971ba2627003b835",
+    ),
+    (
+        21,
+        "ssh_tunnels",
+        "6f71a4b2b1dfea1460b2a17ff22e7f3430d3742ee56ae8d18cf5f45244eea969",
+    ),
+    (
+        22,
+        "instances",
+        "31503dab493d068923fd5e56c68358d533632f26b4cc248f75f0f11bf23efcee",
+    ),
+    (
+        23,
+        "state_versions",
+        "b248d6568a19dd7384516ce3e37eb4a713b3aaa4e7d7e87369d17672ba3f4e16",
+    ),
+    (
+        24,
+        "fleet",
+        "bd9d822bd667f88e359273243a6e8a6fbc03da70ec7b9b43061549957ff479c2",
+    ),
+    (
+        25,
+        "sessions_and_jobs",
+        "75e794e319188aaa9a3f1f90d56e91a11d7bc4de3f90238387f706073ef49a5c",
+    ),
+    (
+        26,
+        "decisions",
+        "a9794c329512127dc0cf521b647e252e03763b9f4dafa86afb184c0db577a350",
+    ),
+    (
+        27,
+        "audit_api_token",
+        "d1d98edc4974a5557d01f9a07fb8b1317c8efa178e615c3162ae1bc53e0754e7",
+    ),
+    (
+        28,
+        "xcode_releases",
+        "7a6785b03382708c0a4fca52b57bbd43cd06ad758623458b02844004bf7498ef",
+    ),
+    (
+        29,
+        "maintenance_runs",
+        "f5582ae1f6734836fdd0f6ca9671620ce3d20693d78f139d5dc18976940f364b",
+    ),
+    (
+        30,
+        "maintenance_turns",
+        "ae21139aefdab5526ac4066bd6a7762fff6ebd149eb93929359eeb80ae4d328f",
+    ),
+    (
+        31,
+        "maintenance_operator",
+        "6902f3912bcbb277157eecc3318b32923e32b02d226d7f72ca34df40ee5b9c35",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -118,10 +183,10 @@ fn what(statement: &str) -> String {
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
 /// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups"),
 /// (9, "service_repository"), (10, "accounts"), (11, "mdm"),
-/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all")], each file's
+/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all"), (19, "tx_ledger"), (20, "ssh_certs"), (21, "ssh_tunnels"), (22, "instances"), (23, "state_versions"), (24, "fleet"), (25, "sessions_and_jobs"), (26, "decisions"), (27, "audit_api_token"), (28, "xcode_releases"), (29, "maintenance_runs"), (30, "maintenance_turns"), (31, "maintenance_operator")], each file's
 /// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
 /// the first three and `host_groups` say older releases must not run on them, and `releases`,
-/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds` and `remove_host_group_all` that
+/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds`, `remove_host_group_all`, `tx_ledger`, `ssh_certs`, `ssh_tunnels`, `instances`, `state_versions`, `fleet`, `sessions_and_jobs`, `decisions`, `audit_api_token`, `xcode_releases`, `maintenance_runs`, `maintenance_turns` and `maintenance_operator` that
 /// they may (an older release never reads any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -149,7 +214,20 @@ fn the_shipped_migrations_are_unchanged() {
             (15, "lab_layout"),
             (16, "lab_devices"),
             (17, "lab_sleds"),
-            (18, "remove_host_group_all")
+            (18, "remove_host_group_all"),
+            (19, "tx_ledger"),
+            (20, "ssh_certs"),
+            (21, "ssh_tunnels"),
+            (22, "instances"),
+            (23, "state_versions"),
+            (24, "fleet"),
+            (25, "sessions_and_jobs"),
+            (26, "decisions"),
+            (27, "audit_api_token"),
+            (28, "xcode_releases"),
+            (29, "maintenance_runs"),
+            (30, "maintenance_turns"),
+            (31, "maintenance_operator")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -185,13 +263,27 @@ fn the_shipped_migrations_are_unchanged() {
             (16, "lab_devices", OlderReleases::MayRun),
             (17, "lab_sleds", OlderReleases::MayRun),
             (18, "remove_host_group_all", OlderReleases::MayRun),
+            (19, "tx_ledger", OlderReleases::MayRun),
+            (20, "ssh_certs", OlderReleases::MayRun),
+            (21, "ssh_tunnels", OlderReleases::MayRun),
+            (22, "instances", OlderReleases::MayRun),
+            (23, "state_versions", OlderReleases::MayRun),
+            (24, "fleet", OlderReleases::MayRun),
+            (25, "sessions_and_jobs", OlderReleases::MayRun),
+            (26, "decisions", OlderReleases::MayRun),
+            (27, "audit_api_token", OlderReleases::MayRun),
+            (28, "xcode_releases", OlderReleases::MayRun),
+            (29, "maintenance_runs", OlderReleases::MayRun),
+            (30, "maintenance_turns", OlderReleases::MayRun),
+            (31, "maintenance_operator", OlderReleases::MayRun),
         ]
     );
 }
 
 /// Proves: the lint refuses each statement that takes something away or ends the transaction,
 /// by the exact text that says which, and accepts the statements that only add; words in
-/// comments and quoted text are not read, and a statement inside a dollar-quoted body is.
+/// comments and quoted text (a quoted name that is not the statement's first word among it) are
+/// not taken for its keywords, and a statement inside a dollar-quoted body is read.
 ///
 /// Catches: a migration that drops, renames, retypes, truncates or deletes, adds a NOT NULL
 /// column an older release cannot fill, or commits the runner's transaction early.
@@ -372,4 +464,204 @@ fn migrations_numbered_out_of_order_are_refused() {
         .map(|m| (m.version, m.name, m.older.as_str()))
         .collect();
     assert_eq!(order, vec![(1, "a", "refuse"), (2, "b", "may-run")]);
+}
+
+/// A migration that ends with `sql`, under a `may-run` header.
+fn hot_refused(sql: &str) -> Option<(&'static str, String)> {
+    hot(&format!("-- older-releases: may-run\n{sql}"))
+}
+
+/// The negative fixtures of the hot-table rule: each statement, on a table of [`HOT_TABLES`] that
+/// the migration did not create, with what it is and the table, as the lint names them.
+const HOT_FIXTURES: [(&str, &str, &str); 23] = [
+    (
+        "ALTER TABLE fleet_orders ADD COLUMN c uuid DEFAULT gen_random_uuid();",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE hostkeeper.fleet_hosts ADD COLUMN c bigint DEFAULT now();",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_hosts",
+    ),
+    (
+        "ALTER TABLE \"hostkeeper\".\"state_versions\" ADD COLUMN c bigserial;",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "state_versions",
+    ),
+    (
+        "alter table only Rollout_Gate add column c int generated always as identity;",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "rollout_gate",
+    ),
+    (
+        "ALTER TABLE fleet_orders ADD COLUMN c timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP;",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE fleet_orders ADD COLUMN c int UNIQUE;",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE fleet_orders ADD COLUMN c int CHECK (c > 0);",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE fleet_orders ADD COLUMN c text REFERENCES fleet_hosts (host_id);",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE fleet_orders ADD COLUMN c int GENERATED ALWAYS AS (1) STORED;",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE fleet_orders ALTER COLUMN c SET NOT NULL;",
+        "a change other than ADD COLUMN of",
+        "fleet_orders",
+    ),
+    (
+        "ALTER TABLE fleet_hosts SET LOGGED;",
+        "a change other than ADD COLUMN of",
+        "fleet_hosts",
+    ),
+    (
+        "ALTER TABLE IF EXISTS fleet_hosts SET (fillfactor = 50);",
+        "a change other than ADD COLUMN of",
+        "fleet_hosts",
+    ),
+    (
+        "ALTER TABLE fleet_hosts ADD CONSTRAINT k UNIQUE (host_id);",
+        "a change other than ADD COLUMN of",
+        "fleet_hosts",
+    ),
+    (
+        "ALTER TABLE fleet_hosts ADD PRIMARY KEY (host_id);",
+        "a change other than ADD COLUMN of",
+        "fleet_hosts",
+    ),
+    (
+        "ALTER TABLE fleet_hosts ADD COLUMN a int, ALTER COLUMN b SET DEFAULT 1;",
+        "a change other than ADD COLUMN of",
+        "fleet_hosts",
+    ),
+    (
+        "CREATE INDEX ON fleet_hosts (seen_unix);",
+        "an index build on",
+        "fleet_hosts",
+    ),
+    (
+        "create unique index if not exists i on only Fleet_Orders using btree (host_id);",
+        "an index build on",
+        "fleet_orders",
+    ),
+    (
+        "CLUSTER fleet_orders USING fleet_orders_host;",
+        "a rewrite of",
+        "fleet_orders",
+    ),
+    (
+        "REINDEX TABLE state_versions;",
+        "a rewrite of",
+        "state_versions",
+    ),
+    ("VACUUM FULL rollout_gate;", "a rewrite of", "rollout_gate"),
+    (
+        "ALTER /* a note */ TABLE fleet_orders ADD COLUMN c uuid DEFAULT gen_random_uuid();",
+        "a column with more than a type, NOT NULL and a constant default added to",
+        "fleet_orders",
+    ),
+    (
+        "CREATE /* outer /* nested; */ still a comment */ INDEX ON fleet_hosts (seen_unix);",
+        "an index build on",
+        "fleet_hosts",
+    ),
+    (
+        "DO $$ BEGIN ALTER TABLE fleet_orders ALTER COLUMN c TYPE bigint; END $$;",
+        "a change other than ADD COLUMN of",
+        "fleet_orders",
+    ),
+];
+
+/// Proves (the negative fixtures of the migration lint's hot-table rule): on a table of
+/// [`HOT_TABLES`] that the migration did not create, the lint refuses a column added with a default
+/// that is not a constant (a function, a value function such as `CURRENT_TIMESTAMP`), a serial or
+/// generated column, a column with a constraint, any other `ALTER TABLE` action (one among several
+/// is enough), an index build and a rewrite (`CLUSTER`, `REINDEX`, `VACUUM FULL`), whatever the
+/// spelling of the table's name (its schema before it, quoted, `ONLY`, `IF EXISTS`, any case), with
+/// a block comment (nested) between its words, or inside a dollar-quoted `DO` body; each
+/// by what it is and the table, and a shipped set with one of them after it is refused at start
+/// with the text that names the migration and the table.
+///
+/// Catches: a migration that rewrites or indexes a table every heartbeat uses while a running
+/// coordinator holds it, so its `ACCESS EXCLUSIVE` wait stalls that coordinator's heartbeats; and a
+/// lint a quoted or schema-qualified name slips past.
+#[test]
+fn migration_lint_refuses_a_rewrite_of_a_hot_table() {
+    for (sql, what, table) in HOT_FIXTURES {
+        assert_eq!(hot_refused(sql), Some((what, table.to_owned())), "{sql}");
+    }
+    let (sql, _, _) = HOT_FIXTURES[0];
+    let fixture: &'static str =
+        Box::leak(format!("-- older-releases: may-run\n{sql}").into_boxed_str());
+    let mut set: Vec<(i32, &'static str, &'static str)> = SHIPPED.to_vec();
+    let next = i32::try_from(set.len()).expect("a few migrations") + 1;
+    set.push((next, "hot_fixture", fixture));
+    let refused = checked(&set).expect_err("the fixture is refused at start");
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "migration {next} (hot_fixture): a column with more than a type, NOT NULL and a \
+             constant default added to the table fleet_orders is refused; a migration on a table \
+             a running coordinator uses only adds a column with no default or a constant one"
+        )
+    );
+}
+
+/// Proves: the hot-table rule takes a column added to a hot table with no default or a constant
+/// one (a number, a string, a boolean, an empty array, `NOT NULL`, a collation, `IF NOT EXISTS`,
+/// several such columns in one statement), anything on a hot table the same migration creates (its
+/// index, its constraint), a new table that references a hot one, every statement on a table that
+/// is not hot (a name that only starts like one among them, a `VACUUM` or `REINDEX` of another
+/// table), the words of comments and quoted text, a lone `/`, and text the lexer runs off the end
+/// of (a block comment or a quoted name left open, an `ALTER TABLE IF EXISTS` naming nothing);
+/// and every migration this build ships passes it.
+///
+/// Catches: a rule so wide that the additive migrations it is meant to let through (the next
+/// columns of the fleet's tables, and the migration that creates them) are refused.
+#[test]
+fn the_hot_table_rule_takes_a_constant_column_and_what_the_migration_creates() {
+    for sql in [
+        "ALTER TABLE fleet_orders ADD COLUMN c int;",
+        "ALTER TABLE fleet_orders ADD COLUMN IF NOT EXISTS c bigint NOT NULL DEFAULT 0;",
+        "ALTER TABLE fleet_hosts ADD c text DEFAULT 'x' COLLATE \"C\", ADD COLUMN d boolean DEFAULT false;",
+        "ALTER TABLE fleet_hosts ADD COLUMN e numeric(10, 2) DEFAULT -1.5;",
+        "ALTER TABLE hostkeeper.state_versions ADD COLUMN f text[] NOT NULL DEFAULT '{}';",
+        "CREATE TABLE fleet_orders (host_id text); \
+         CREATE UNIQUE INDEX fleet_orders_host ON fleet_orders (host_id); \
+         ALTER TABLE fleet_orders ADD CONSTRAINT k CHECK (host_id <> '');",
+        "CREATE UNLOGGED TABLE IF NOT EXISTS hostkeeper.rollout_gate (id int); \
+         CREATE INDEX ON rollout_gate (id);",
+        "CREATE TABLE fleet_tries (host_id text REFERENCES fleet_hosts (host_id));",
+        "CREATE INDEX audit_at ON audit (at_unix); ALTER TABLE audit ALTER COLUMN by_name SET NOT NULL;",
+        "ALTER TABLE fleet_orders_old SET LOGGED; CREATE INDEX ON fleet_hosts_archive (a);",
+        "-- ALTER TABLE fleet_orders SET LOGGED\nSELECT 'CREATE INDEX ON fleet_orders';",
+        "/* ALTER TABLE fleet_orders SET LOGGED; /* CLUSTER fleet_hosts; */ */ SELECT 1;",
+        "SELECT 4 / 2;",
+        "VACUUM audit; REINDEX TABLE audit;",
+        "ALTER TABLE IF EXISTS",
+        "SELECT 1; /* a comment left open",
+        "SELECT \"a name left open",
+        "DO $$ BEGIN CREATE TABLE fleet_orders (a int); CREATE INDEX ON fleet_orders (a); END $$;",
+        "",
+    ] {
+        assert_eq!(hot_refused(sql), None, "{sql}");
+    }
+    for (_, name, sql) in SHIPPED {
+        assert_eq!(hot(sql), None, "{name}");
+    }
 }

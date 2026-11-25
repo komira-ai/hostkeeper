@@ -2,7 +2,9 @@
 # lint (crates/xtask/tests/workflows) holds every workflow of this repository to commit-SHA
 # pinned actions with a version comment, to a top-level `permissions: {}`, to no
 # `pull_request_target`, to GitHub-hosted runners, to write scopes that only the jobs named
-# there may hold, to no write scope and no secret in a workflow that runs on pull requests, to no
+# there may hold, to no write scope and no secret in a workflow that runs on pull requests (but the
+# `id-token: write` of farm.yml's job `build`, for its farm-connect tailnet join, under that job's
+# exact `if:`: the farm lane, advisory, while this workflow stays the gate), to no
 # privileged job in one but the jobs of pr-device.yml it lists, to no runner in one but Linux
 # x86_64 (no macOS and no linux-arm64: those platforms are tested in the beta stage of
 # release.yml), and to no job as root (`sudo`, a privileged container) outside privileged.yml,
@@ -23,18 +25,25 @@
 # crates/hostkeeper-privileged are behind its feature `privileged`, which this workflow never
 # turns on: they are neither built nor run here, and count toward no gate.
 #
-# The pull request and the push to main run the same jobs. A push to main also saves the Cargo
-# cache; a pull request only restores it.
+# The pull request, the merge group of main's merge queue and the push to main run the same jobs:
+# `lint` and `test` are checks main requires, and a merge group must run them as a pull request
+# does (the workflow lint, merge_queue.rs, holds the triggers, the job conditions and the
+# concurrency to that). A push to main also saves the Cargo cache; a pull request and a merge
+# group only restore it.
 name: ci
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
+    branches: [main]
   push:
     branches: [main]
 
 permissions: {}
 
-# A pull request's newer run replaces its older one; a push to main always runs to its end.
+# A pull request's newer run replaces its older one; a merge group's run and a push to main always
+# run to their end (each has a group of its own, its run id).
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

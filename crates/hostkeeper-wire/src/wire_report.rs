@@ -23,8 +23,14 @@ use crate::wire::{MAX_SERVICES, ServiceReply, is_service_name};
 pub const MAX_TOKEN: usize = 64;
 
 /// The most feature names an agent announces, and a reply names. A reader of an earlier release
-/// took at most 8, and dropped a longer list whole.
-pub const MAX_FEATURES: usize = 16;
+/// took at most [`MAX_FEATURES_BEFORE_SSH`], and one before that at most 8, each dropping a longer
+/// list whole.
+pub const MAX_FEATURES: usize = 32;
+
+/// The most feature names a coordinator of a release before `ssh-v1` reads; it drops a longer list
+/// whole. An agent therefore announces more than this many only to a coordinator that advertises
+/// `ssh-v1`, which reads up to [`MAX_FEATURES`].
+pub const MAX_FEATURES_BEFORE_SSH: usize = 16;
 
 /// The most bytes of a feature name.
 pub const MAX_FEATURE_NAME: usize = 32;
@@ -254,6 +260,32 @@ pub struct DeferredReport {
     pub reason: Token,
     /// When the coordinator may order it again.
     pub retry_after_secs: u64,
+}
+
+/// A halt the host holds of a service of its own: the service's step record ended in a halt, and
+/// the host refuses every order of it (`halted`) until a halt generation above `generation`
+/// comes ([`ServiceBeat::local_halt`](crate::wire::ServiceBeat::local_halt)). A hostkeeper
+/// daemon sends it over gRPC only (`ServiceBeat.local_halt` of `hostkeeper.agent.v1`), which the
+/// coordinator reads through this JSON form; a heartbeat on the JSON route that carries it is read
+/// the same way.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalHalt {
+    /// The halt's reason; absent when it has none, and read as absent when it is no token.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub reason: Option<Token>,
+    /// The halt generation the host holds; 0 when it holds none.
+    pub generation: u64,
+    /// Seconds since the host last wrote that generation; absent when it has none written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub age_secs: Option<u64>,
 }
 
 /// A field that is read as `None` when its value is not one of `T`: for a fact a newer agent

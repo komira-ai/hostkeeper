@@ -10,12 +10,14 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::testing::{FakeClock, manifest, spawn};
-use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
+use hostkeeper_daemon::verb::{
+    ACTION_RULE, DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE,
+};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    Abort, ClearHalt, ClearRecord, Force, Install, Order, Uninstall, order,
+    Abort, ClearHalt, ClearRecord, Force, Install, Maintain, Order, Uninstall, order,
 };
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, RECORD_FILE};
@@ -187,6 +189,13 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
             })),
             "clear_record.service",
             SERVICE_RULE,
+        ),
+        // A `maintain` with no action is refused naming it: it is none of `RUN`, `RETRY` and
+        // `PUT_BACK`.
+        (
+            with_verb(order::Verb::Maintain(Maintain::default())),
+            "maintain.action",
+            ACTION_RULE,
         ),
     ];
     for (order, field, rule) in rows {

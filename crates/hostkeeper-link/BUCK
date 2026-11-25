@@ -1,0 +1,12 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared. The heartbeat wire test reads the coordinator's recorded sequences; the
+# ports test reads this package's Cargo.toml.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "Cargo.toml",
+        "//crates/hostkeeper-coordinator:tests/fixtures/recorded/sequences",
+    ],
+)

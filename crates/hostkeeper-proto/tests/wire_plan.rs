@@ -144,14 +144,15 @@ const FIELDS: [(&str, &[(&str, u32)]); 13] = [
 
 /// Catches: a name of the update plan renamed or renumbered without this test changing with it:
 /// the `Rollouts` RPCs with their messages, the fields of the plan, the stage, the plan's host and
-/// the `plan` and `stage` fields of the views, and the tokens of the plan's refusals and enums.
+/// the `plan` and `stage` fields of the views, and the tokens of the plan's refusals and enums
+/// (a host group's `failed_hosts` among them).
 /// Callers branch on each, and the operator client and the coordinator are built against them
 /// apart.
 #[test]
 fn wire_names_of_the_update_plan_are_pinned() {
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
 
-    let cases: [(&str, &str, &[&str]); 5] = [
+    let cases: [(&str, &str, &[&str]); 6] = [
         (
             "hostkeeper.operator.v1.RolloutsRefusal",
             "ROLLOUTS_REFUSAL_",
@@ -176,6 +177,11 @@ fn wire_names_of_the_update_plan_are_pinned() {
             &["auto", "manual"],
         ),
         (
+            "hostkeeper.operator.v1.FailedHosts",
+            "FAILED_HOSTS_",
+            &["stop", "continue"],
+        ),
+        (
             "hostkeeper.operator.v1.PlanHostState",
             "PLAN_HOST_STATE_",
             &["waiting", "updating", "baking", "done", "failed"],
@@ -195,6 +201,7 @@ fn wire_names_of_the_update_plan_are_pinned() {
                 "updating",
                 "deferring",
                 "baking",
+                "nothing_to_order",
             ],
         ),
         (

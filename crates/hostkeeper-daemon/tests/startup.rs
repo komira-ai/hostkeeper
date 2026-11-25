@@ -17,6 +17,8 @@ use hostkeeper_daemon::cli::{
     DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED,
     MAX_PACKAGE_LOCK_WAIT_SECS, UNWIRED, Unwired,
 };
+use hostkeeper_daemon::maintenance_collect::LinuxScope;
+use hostkeeper_daemon::prune::DEFAULT_KEEP_VERSIONS;
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
@@ -170,7 +172,9 @@ fn the_command_line_exits_with_the_config_errors_status() {
 /// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
+        panic!("`hostkeeper daemon` is the daemon verb");
+    };
     assert_eq!(
         flags,
         DaemonFlags {
@@ -181,6 +185,9 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             notify_systemd: false,
             ready_file: None,
             package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+            keep_versions: DEFAULT_KEEP_VERSIONS,
+            maintenance_linux_scope: LinuxScope::Security,
+            maintenance_macos_major: false,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
             },
@@ -191,6 +198,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         flags.settings().package_lock_wait_secs,
         DEFAULT_PACKAGE_LOCK_WAIT_SECS
     );
+    assert_eq!(flags.settings().keep_versions, DEFAULT_KEEP_VERSIONS);
     let readme = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("the README");
     let documented = [
@@ -199,7 +207,9 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
         "`--notify-systemd` | off".to_owned(),
+        "`--maintenance-macos-major` | off".to_owned(),
         format!("`--package-lock-wait-secs` | `{DEFAULT_PACKAGE_LOCK_WAIT_SECS}`"),
+        format!("`--keep-versions` | `{DEFAULT_KEEP_VERSIONS}`"),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
@@ -225,6 +235,26 @@ fn the_facts_file_flag_reaches_the_settings() {
         flags.settings().facts_file,
         std::path::PathBuf::from("/srv/facts.json")
     );
+}
+
+/// Proves `--maintenance-linux-scope` takes `security` and `all`, and refuses any other word as a
+/// usage error (exit 2, as clap reports it).
+#[test]
+fn the_maintenance_linux_scope_flag_takes_security_or_all() {
+    for (given, scope) in [("security", LinuxScope::Security), ("all", LinuxScope::All)] {
+        let parsed =
+            Cli::try_parse_from(["hostkeeper", "daemon", "--maintenance-linux-scope", given]);
+        let Ok(Cli {
+            command: Command::Daemon(flags),
+        }) = parsed
+        else {
+            panic!("{given} parses: {parsed:?}");
+        };
+        assert_eq!(flags.maintenance_linux_scope, scope);
+    }
+    let error = Cli::try_parse_from(["hostkeeper", "daemon", "--maintenance-linux-scope", "some"])
+        .expect_err("a word that is no scope");
+    assert_eq!(error.exit_code(), 2);
 }
 
 /// Proves `--package-lock-wait-secs` reaches the settings as given, from 1 to 3600 seconds, and

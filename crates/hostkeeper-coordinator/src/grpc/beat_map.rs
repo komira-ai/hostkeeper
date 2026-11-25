@@ -13,14 +13,18 @@
 //! that entry is the JSON top level and the others are `services`. In every other case the top
 //! level is the agent itself, as `hostkeeper-link` sends it on the JSON route (the agent's
 //! version, health `healthy`, no update) and every entry is in `services`, which is sent even
-//! when it is empty. A fact that has no field in the JSON (the log tail, the detail and start of
-//! an update, a pin) is left out. The host's clock and certificate (`sent_unix`,
+//! when it is empty. A fact that has no field in the JSON (the log tail and start of an update,
+//! a pin) is left out. An update's detail is kept, as its `detail` key, which the JSON reader
+//! cuts to `MAX_DETAIL_BYTES`. The host's clock and certificate (`sent_unix`,
 //! `cert_not_after_unix`, `last_renew_error`) are top-level keys, each only when the request
-//! sets it.
+//! sets it. So is the maintenance report, as `maintenance`: standard base64 of its encoding
+//! ([`crate::maintenance`]).
 
 use hostkeeper_proto::hostkeeper::agent::v1 as proto;
 use hostkeeper_wire::wire::ORDER_FEATURE;
 use serde_json::{Map, Value, json};
+
+use crate::maintenance::text_of;
 
 /// The JSON heartbeat of `request` for a coordinator whose legacy service is `legacy`.
 pub(crate) fn json(request: &proto::HeartbeatRequest, legacy: Option<&str>) -> Vec<u8> {
@@ -74,6 +78,9 @@ pub(crate) fn json(request: &proto::HeartbeatRequest, legacy: Option<&str>) -> V
     if let Some(error) = &request.last_renew_error {
         object.insert("last_renew_error".to_owned(), error.clone().into());
     }
+    if let Some(report) = &request.maintenance {
+        object.insert("maintenance".to_owned(), text_of(report).into());
+    }
     serde_json::to_vec(&Value::Object(object)).unwrap_or_default()
 }
 
@@ -119,6 +126,16 @@ fn facts(entry: &proto::ServiceBeat) -> Map<String, Value> {
             }),
         );
     }
+    if let Some(halt) = &entry.local_halt {
+        object.insert(
+            "local_halt".to_owned(),
+            json!({
+                "reason": halt.reason,
+                "generation": halt.generation,
+                "age_secs": halt.age_secs,
+            }),
+        );
+    }
     object
 }
 
@@ -144,6 +161,9 @@ fn update_result(update: &proto::UpdateResult) -> Value {
     if let Some(order_try) = update.order_try {
         object.insert("order_try".to_owned(), order_try.into());
     }
+    if let Some(detail) = &update.detail {
+        object.insert("detail".to_owned(), detail.clone().into());
+    }
     Value::Object(object)
 }
 
@@ -157,10 +177,12 @@ fn platform(platform: proto::Platform) -> Option<&'static str> {
     }
 }
 
-/// The health's name on the JSON route.
+/// The health's name on the JSON route. `Silent` is the coordinator's word for a host it has not
+/// heard from, never one a daemon reports, so a heartbeat that carries it names no health, as
+/// `Unspecified` does.
 fn health(health: proto::Health) -> Option<&'static str> {
     match health {
-        proto::Health::Unspecified => None,
+        proto::Health::Unspecified | proto::Health::Silent => None,
         proto::Health::Healthy => Some("healthy"),
         proto::Health::Unhealthy => Some("unhealthy"),
         proto::Health::Absent => Some("absent"),

@@ -38,6 +38,7 @@ use crate::group_scope::group_services;
 use crate::holds::marks_of;
 use crate::operator::{entry_proto, valid_reason};
 use crate::service::Coordinator;
+use crate::tokens::Operator;
 use crate::write_record::{WriteAsk, WriteError};
 
 type Refusal = proto::ReleasesRefusal;
@@ -104,7 +105,7 @@ impl Coordinator {
     /// no group name, `unknown_target` as the module says.
     pub(super) fn force_in_groups(
         &self,
-        by: &str,
+        by: &Operator,
         request: proto::ForceRequest,
     ) -> Result<proto::ForceResponse, Refusal> {
         if request.service == SELF_SERVICE {
@@ -210,7 +211,7 @@ impl Coordinator {
         tracing::warn!(
             service = %base.name,
             %version,
-            by,
+            by = by.name(),
             groups = made.len(),
             ordered,
             "a force was ordered: it passes the update plan and the bake"

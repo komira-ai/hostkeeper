@@ -36,6 +36,7 @@ fn report(target: &str, phase: Phase, class: Option<Class>) -> UpdateResult {
         reason: None,
         order_id: None,
         order_try: None,
+        detail: None,
     }
 }
 
@@ -108,6 +109,7 @@ async fn unmark_bad_undoes_mark_bad_and_is_audited() {
             at_unix: None,
             by_name: Some("operator".to_owned()),
             host_group: None,
+            api_token: None,
         })
     );
     assert_eq!(

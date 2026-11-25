@@ -8,6 +8,8 @@ mod activate;
 mod drift;
 #[path = "macos_pkg/host_errors.rs"]
 mod host_errors;
+#[path = "macos_pkg/jobs.rs"]
+mod jobs;
 #[path = "macos_pkg/own.rs"]
 mod own;
 #[path = "macos_pkg/remove.rs"]
@@ -28,8 +30,8 @@ use hostkeeper_install::host::Ids;
 use hostkeeper_install::macos_pkg::drift::{Drift, Seen, observe};
 use hostkeeper_install::macos_pkg::record::PkgRecord;
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
-use hostkeeper_install::macos_pkg::{Activated, Bounds, Order, announces};
-use hostkeeper_install::tools::{Tool, ToolOutput};
+use hostkeeper_install::macos_pkg::{Activated, Bounds, Order, Replaced, announces};
+use hostkeeper_install::tools::{Tool, ToolOutput, Tools};
 use hostkeeper_install::{Class, Failure, Outcome, Reason};
 use hostkeeper_launchd::Label;
 use hostkeeper_launchd::launchctl::OUTPUT_MAX;
@@ -84,7 +86,9 @@ impl Installed {
     pub fn updated(name: &str) -> (Installed, PathBuf, Order) {
         let i = installed(name);
         let (dir2, order2) = i.stage_v2();
-        i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap();
+        i.rig
+            .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+            .unwrap();
         (i, dir2, order2)
     }
 }

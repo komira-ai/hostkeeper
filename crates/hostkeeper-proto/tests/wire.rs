@@ -5,7 +5,7 @@
 //! `optional` field tells absent from zero. The release before is this crate's descriptor set
 //! with the newest fields taken out, read with `prost-reflect`.
 //!
-//! Also the names on the wire, pinned: the feature strings, the order's verbs and their numbers,
+//! Also the names on the wire, pinned (the feature strings in `features.rs`): the order's verbs and their numbers,
 //! every refusal token, the RPCs of the coordinator's services, the fields of the enrollment,
 //! abort, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 
@@ -40,7 +40,7 @@ fn older_pool() -> DescriptorPool {
     let agent = set
         .file
         .iter_mut()
-        .find(|f| f.package() == "hostkeeper.agent.v1")
+        .find(|f| f.name() == "hostkeeper/agent/v1/agent.proto")
         .expect("the agent file");
     let result = agent
         .message_type
@@ -316,27 +316,6 @@ fn tokens(pool: &DescriptorPool, name: &str, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-/// The feature names `agent.proto` gives (`deferred-v1`), in the order it first names them.
-fn feature_names() -> Vec<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("proto/hostkeeper/agent/v1/agent.proto");
-    let text = std::fs::read_to_string(path).expect("read the file");
-    let mut out: Vec<String> = Vec::new();
-    for quoted in text.split('`').skip(1).step_by(2) {
-        let feature = quoted.rsplit_once("-v").is_some_and(|(name, n)| {
-            !name.is_empty()
-                && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
-                && !n.is_empty()
-                && n.bytes().all(|b| b.is_ascii_digit())
-        });
-        if feature && !out.iter().any(|f| f == quoted) {
-            out.push(quoted.to_owned());
-        }
-    }
-    out.sort();
-    out
-}
-
 /// Each RPC of a service, as `Name(Request) Response`, in the file's order.
 fn rpcs(pool: &DescriptorPool, service: &str) -> Vec<String> {
     pool.get_service_by_name(service)
@@ -434,7 +413,7 @@ const RPCS: [(&str, &[&str]); 7] = [
 
 /// The fields of the heartbeat, enrollment, abort, retire, clear-record, audit and force-report
 /// messages, pinned by name and number.
-const FIELDS: [(&str, &[(&str, u32)]); 39] = [
+const FIELDS: [(&str, &[(&str, u32)]); 40] = [
     (
         "hostkeeper.agent.v1.HeartbeatRequest",
         &[
@@ -450,8 +429,17 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("installers", 10),
             ("repositories", 11),
             ("facts_generation", 12),
+            ("ssh", 13),
+            ("remote_login_probe", 14),
+            ("operator_keys", 15),
+            ("prerequisites", 16),
+            ("bmc", 17),
+            ("maintenance", 18),
+            ("full_disk_access", 19),
+            ("serial_console", 20),
         ],
     ),
+    ("hostkeeper.agent.v1.BmcReport", &[("ip", 1), ("mac", 2)]),
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -461,6 +449,9 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("acks", 4),
             ("repositories", 5),
             ("facts", 6),
+            ("operator_keys", 7),
+            ("prerequisites", 8),
+            ("ssh", 9),
         ],
     ),
     (
@@ -509,6 +500,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("image", 3),
             ("renewal_of", 4),
             ("mac_nonce", 5),
+            ("host_key_fingerprints", 6),
         ],
     ),
     (
@@ -589,6 +581,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("at_unix", 7),
             ("by_name", 8),
             ("host_group", 9),
+            ("api_token", 10),
         ],
     ),
     (
@@ -635,6 +628,10 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
             ("running_unix", 23),
             ("repositories", 24),
             ("host_group", 25),
+            ("maintenance", 26),
+            ("maintenance_look_age_secs", 27),
+            ("maintenance_stale", 28),
+            ("full_disk_access", 29),
         ],
     ),
     (
@@ -712,30 +709,12 @@ const FIELDS: [(&str, &[(&str, u32)]); 39] = [
 ];
 
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
-/// features daemons announce, the order's verbs, every refusal token, the enrollment and poll
+/// order's verbs, every refusal token, the enrollment and poll
 /// states, the coordinator's RPCs with their messages, the fields of the enrollment, abort,
 /// clear-record, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 /// Callers branch on each, and the daemon and the coordinator are built against them apart.
 #[test]
 fn wire_names_are_pinned() {
-    assert_eq!(
-        feature_names(),
-        [
-            "abort-v1",
-            "clear-record-v1",
-            "deferred-v1",
-            "facts-v1",
-            "forced-v1",
-            "halt-v1",
-            "heartbeat-v2",
-            "install-v1",
-            "private-repository-v1",
-            "repositories-v1",
-            "target-v1",
-            "verdict-acks-v1"
-        ]
-    );
-
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
     let order = pool
         .get_message_by_name("hostkeeper.agent.v1.Order")
@@ -755,6 +734,7 @@ fn wire_names_are_pinned() {
         ("abort", 8),
         ("clear_halt", 9),
         ("clear_record", 10),
+        ("maintain", 11),
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
@@ -798,6 +778,15 @@ fn wire_names_are_pinned() {
                 "mdm_tls_renewal_failed",
                 "mdm_dns_credential_rejected",
                 "mdm_identity_near_expiry",
+                "prerequisite_failed",
+                "xcode_release_waiting",
+                "xcode_version_taken",
+                "updates_due",
+                "failed_update",
+                "host_halt",
+                "maintenance_halted",
+                "maintenance_not_back",
+                "repeated_deferral",
             ],
         ),
         (
@@ -866,6 +855,7 @@ fn wire_names_are_pinned() {
                 "not_in_host_group",
                 "ambiguous_host_group",
                 "limits_in_host_group",
+                "state_changed",
             ],
         ),
         (

@@ -48,6 +48,16 @@ const ANNOUNCED: [&str; 4] = ["order-v1", "halt-v1", "deferred-v1", "target-v1"]
 /// What the coordinator answers an agent that announced [`ANNOUNCED`].
 const AGREED: [&str; 4] = ["deferred-v1", "halt-v1", "order-v1", "target-v1"];
 
+/// The features of a gRPC reply to the heartbeats of this file: [`AGREED`], and `maintenance-v1`,
+/// which the coordinator offers to every agent that announces features.
+const ANSWERED: [&str; 5] = [
+    "deferred-v1",
+    "halt-v1",
+    "order-v1",
+    "target-v1",
+    "maintenance-v1",
+];
+
 /// The agent of the heartbeats of this file.
 const AGENT_NAME: &str = "hostkeeper-daemon";
 const AGENT_VERSION: &str = "1.0";
@@ -143,6 +153,23 @@ pub(super) async fn farm_enrolled(name: &str, enrollment: &Arc<Enrollment>) -> F
 }
 
 impl Farm {
+    /// The same farm over the operator keys `keys`.
+    pub(super) fn with_operator_keys(mut self, keys: crate::operator_keys::OperatorKeys) -> Self {
+        let coordinator = Arc::try_unwrap(self.coordinator).expect("the farm's one holder");
+        self.coordinator = Arc::new(coordinator.with_operator_keys(keys));
+        self
+    }
+
+    /// The same farm over the host prerequisites `prerequisites`.
+    pub(super) fn with_host_prerequisites(
+        mut self,
+        prerequisites: crate::prerequisites::HostPrerequisites,
+    ) -> Self {
+        let coordinator = Arc::try_unwrap(self.coordinator).expect("the farm's one holder");
+        self.coordinator = Arc::new(coordinator.with_host_prerequisites(prerequisites));
+        self
+    }
+
     /// The operator clears the halt of `service`.
     fn clear_halt(&self, service: &str) {
         let body =
@@ -431,6 +458,7 @@ fn proto_service(service: &Svc) -> proto::ServiceBeat {
 /// The same heartbeat as [`json_text`], as `Coordinator.Heartbeat` carries it.
 pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        ssh: None,
         installers: vec!["apt".to_owned()],
         repositories: None,
         platform: proto::Platform::LinuxX8664 as i32,
@@ -446,6 +474,13 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         trusted_root_age_secs: None,
         trusted_root_reason: 0,
         facts_generation: None,
+        remote_login_probe: None,
+        full_disk_access: 0,
+        operator_keys: None,
+        prerequisites: None,
+        bmc: None,
+        serial_console: None,
+        maintenance: None,
     }
 }
 
@@ -541,14 +576,19 @@ enum Expect {
 }
 
 impl Heard {
-    /// The same decision with no update: what the JSON route, which carries no order, says of it.
+    /// The same decision with no update and without `maintenance-v1`: what the JSON route, which
+    /// carries no order and offers no feature a heartbeat did not name, says of it.
     pub(super) fn without_update(&self) -> Heard {
         match self {
             Heard::Told {
                 features, halts, ..
             } => Heard::Told {
                 update: None,
-                features: features.clone(),
+                features: features
+                    .iter()
+                    .filter(|name| name.as_str() != crate::maintenance::FEATURE)
+                    .cloned()
+                    .collect(),
                 halts: halts.clone(),
             },
             Heard::Refused => Heard::Refused,
@@ -603,7 +643,16 @@ impl Expect {
                     .map(|(name, generation)| ((*name).to_owned(), *generation))
                     .collect();
                 assert_eq!(*got_halts, want, "{label}: the clear generations");
-                assert_eq!(*features, AGREED, "{label}: the features");
+                assert_eq!(*features, ANSWERED, "{label}: the features");
+                assert_eq!(
+                    heard.without_update(),
+                    Heard::Told {
+                        update: None,
+                        features: AGREED.iter().map(|name| (*name).to_owned()).collect(),
+                        halts: got_halts.clone(),
+                    },
+                    "{label}: the features agreed, as the JSON route answers them"
+                );
             }
             _ => panic!("{label}: expected {self:?}, heard {heard:?}"),
         }
@@ -767,10 +816,10 @@ async fn heartbeat_identity_comes_from_the_certificate_not_the_message() {
         ..proto::ServiceBeat::default()
     });
     let mut bytes = message.encode_to_vec();
-    // Strings in fields 20 and 21, which the message does not define.
-    bytes.extend_from_slice(&[0xA2, 0x01, 10]);
+    // Strings in fields 40 and 41, which the message does not define.
+    bytes.extend_from_slice(&[0xC2, 0x02, 10]);
     bytes.extend_from_slice(b"frontend-1");
-    bytes.extend_from_slice(&[0xAA, 0x01, 8]);
+    bytes.extend_from_slice(&[0xCA, 0x02, 8]);
     bytes.extend_from_slice(b"frontend");
     for (name, role) in [("real-host", "storage"), ("other-host", "daemon")] {
         let reply = grpc_call(

@@ -41,7 +41,7 @@
 //!
 //! The pkg has one script, `postinstall` ([`scripts`]), which asks launchd at install
 //! whether the daemon's job is loaded (`launchctl print`) and, only when it is not, runs
-//! `launchctl bootstrap`, which loads the job the pkg installed; a loaded job is never booted
+//! `launchctl enable` and `launchctl bootstrap`, which loads the job the pkg installed; a loaded job is never booted
 //! out, so an installer the daemon itself runs does not stop the daemon. It runs the installed binary at no point: the daemon's
 //! start does what the script once did (`hostkeeper_daemon::packaged` seeds the binary directory
 //! of hostkeeper's own update and execs `current`, `hostkeeper_daemon::mac_config::at_start`
@@ -54,8 +54,9 @@
 //!
 //! The pkg is not signed here: the release signs it with the Developer ID Installer identity
 //! (`sign-pkg`, then `check-pkg`, in artifacts.yml). It is attested like every other asset (build
-//! provenance by the artifacts workflow), and an install names it by its digest. The binary in it keeps
-//! the ad-hoc code signature the linker gives it, which the macOS unpack check accepts.
+//! provenance by the artifacts workflow), and an install names it by its digest. The binary in it is
+//! `--binary`, signed by `sign-code` on a push to main or in a signing run (a run by hand with
+//! `sign: true`), else ad hoc by the linker (the unpack check accepts both).
 //!
 //! [`build`] lays the payload's tree and the scripts directory out in a new directory, runs
 //! `pkgbuild` over them into the component pkg in that directory, and runs `productbuild` over

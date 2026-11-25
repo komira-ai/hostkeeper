@@ -28,7 +28,9 @@ async fn sets(farm: &Farm, body: &Value, ask: &WriteAsk, named: &str) -> Answer 
     farm.world
         .coordinator()
         .set_desired_in(
-            &Setter::Operator("operator"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             body.to_string().as_bytes(),
             ask,
             None,
@@ -62,6 +64,7 @@ fn deployment(seq: u64, by: &str, group: &str, reason: &str) -> AuditEntry {
         reason: Some(reason.to_owned()),
         subject: None,
         source: None,
+        api_token: None,
     }
 }
 
@@ -408,7 +411,9 @@ async fn a_set_with_targets_keeps_one_release_for_the_package() {
             farm.world
                 .coordinator()
                 .set_desired_in(
-                    &Setter::Operator("operator"),
+                    &Setter::Operator(&crate::tokens::Operator::named(
+                        "operator".parse().expect("a token name"),
+                    )),
                     body.to_string().as_bytes(),
                     &WriteAsk::default(),
                     Some(targets),
@@ -672,7 +677,9 @@ async fn a_body_that_is_no_set_is_malformed() {
             .world
             .coordinator()
             .set_desired_in(
-                &Setter::Operator("operator"),
+                &Setter::Operator(&crate::tokens::Operator::named(
+                    "operator".parse().expect("a token name"),
+                )),
                 body,
                 &WriteAsk::default(),
                 None,
@@ -701,7 +708,9 @@ async fn the_refusals_of_a_release_hold_in_a_group() {
     let farm = Farm::new("gs-release");
     farm.group("alpha", &["web"], None);
     let before = farm.world.state();
-    let operator = Setter::Operator("operator");
+    let operator = Setter::Operator(&crate::tokens::Operator::named(
+        "operator".parse().expect("a token name"),
+    ));
     let set = |body: Value, targets| {
         let farm = &farm;
         let operator = &operator;
@@ -759,7 +768,9 @@ async fn a_set_naming_a_group_is_refused_where_no_group_is_held() {
     let refused = rig
         .coordinator
         .set_desired_in(
-            &Setter::Operator("operator"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             json!({"service": "web", "version": "2.0"})
                 .to_string()
                 .as_bytes(),
@@ -804,7 +815,9 @@ async fn a_set_past_the_cap_keeps_the_release_a_group_marked_good() {
     farm.world
         .coordinator()
         .set_desired_in(
-            &Setter::Operator("operator"),
+            &Setter::Operator(&crate::tokens::Operator::named(
+                "operator".parse().expect("a token name"),
+            )),
             json!({"service": "web", "version": "2.0"})
                 .to_string()
                 .as_bytes(),

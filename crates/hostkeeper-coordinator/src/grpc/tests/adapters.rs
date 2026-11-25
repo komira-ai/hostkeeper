@@ -506,7 +506,9 @@ async fn converge_answers_the_operator_and_refuses_a_call_admitted_as_neither_ci
     );
     let mut operator = Request::new(request());
     operator.extensions_mut().insert(Admitted::Operator {
-        caller: Caller::Operator("operator".parse().expect("a token name")),
+        caller: Caller::Operator(crate::tokens::Operator::named(
+            "operator".parse().expect("a token name"),
+        )),
     });
     let reply = releases(&world)
         .converge(operator)

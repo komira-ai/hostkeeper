@@ -1,6 +1,6 @@
 use super::*;
 use crate::release::fakes::{FakeHistory, Fakes, nth_commit, scratch};
-use crate::release::ports::{Adapters, GitHubRuns, PortError};
+use crate::release::ports::{Adapters, PortError};
 
 fn repo() -> Repo {
     "komira-ai/hostkeeper".parse().expect("a repository")
@@ -47,10 +47,9 @@ fn green(fakes: &Fakes, commit: &Commit) {
     }
 }
 
-/// Successful push runs of privileged and artifacts for `commit`, and a ci run that has not
-/// completed; the id of the ci run.
+/// A successful push run of artifacts for `commit`, and a ci run that has not completed; the id
+/// of the ci run.
 fn ci_pending(fakes: &Fakes, commit: &Commit) -> u64 {
-    fakes.runs.push("privileged.yml", commit, "success");
     fakes.runs.push("artifacts.yml", commit, "success");
     fakes.runs.add("ci.yml", commit, "push", "main", None)
 }
@@ -109,7 +108,7 @@ fn lines(judged: &[String], released: &[(&str, &Commit)]) -> Vec<String> {
 fn a_plan_for_a_commit_whose_ci_is_pending_releases_the_earlier_commits_whose_runs_are_done() {
     // Catches: a run started by one commit's completion planning that commit alone, so that
     // when a newer commit's run replaces the pending release run, the earlier commits whose
-    // ci, privileged and artifacts runs all succeeded are never released.
+    // ci and artifacts runs both succeeded are never released.
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let a = code(&mut h, &r, "fn a2() {}");
@@ -140,7 +139,7 @@ fn a_plan_for_a_commit_whose_ci_is_pending_releases_the_earlier_commits_whose_ru
 #[test]
 fn a_missing_or_failed_run_does_not_stop_the_walk() {
     // Catches: a commit whose run never came or failed (which may never change) holding back
-    // the newer commits whose runs all succeeded; only a failed privileged run holds them.
+    // the newer commits whose runs all succeeded.
     let mut h = FakeHistory::default();
     let r = root(&mut h);
     let a = code(&mut h, &r, "fn a2() {}");
@@ -150,7 +149,6 @@ fn a_missing_or_failed_run_does_not_stop_the_walk() {
     let fakes = after_root(h, &r);
     green(&fakes, &a);
     fakes.runs.push("ci.yml", &f, "success");
-    fakes.runs.push("privileged.yml", &f, "success");
     let failed = fakes.runs.push("artifacts.yml", &f, "failure");
     green(&fakes, &b);
     assert_eq!(
@@ -305,165 +303,33 @@ fn docs_only_commits_use_a_number_but_are_not_released() {
 }
 
 #[test]
-fn plan_declines_while_privileged_is_pending_and_a_later_success_releases() {
-    // Catches: a release cut while the privileged run has not completed, or a later success of
-    // that run not releasing.
+fn a_pending_red_or_missing_privileged_run_holds_no_release_and_opens_no_issue() {
+    // Catches: the privileged tests gating a release again (a commit, or the commits after it,
+    // waiting for or held by a privileged run), or the plan writing an issue for one.
     let mut h = FakeHistory::default();
     let r = root(&mut h);
-    let c = code(&mut h, &r, "fn b() {}");
+    let a = code(&mut h, &r, "fn a2() {}");
+    let b = code(&mut h, &a, "fn b() {}");
+    let c = code(&mut h, &b, "fn c() {}");
     let fakes = after_root(h, &r);
-    fakes.runs.push("ci.yml", &c, "success");
-    fakes.runs.push("artifacts.yml", &c, "success");
-    let pending = fakes.runs.add("privileged.yml", &c, "push", "main", None);
+    green(&fakes, &a);
+    fakes.runs.push("privileged.yml", &a, "failure");
+    green(&fakes, &b);
+    fakes.runs.add("privileged.yml", &b, "push", "main", None);
+    green(&fakes, &c);
     assert_eq!(
         plan_of(&fakes, &request(&c)),
         Ok(lines(
-            &[decline_line(
-                &c,
-                "0.1.2",
-                &format!("waiting for privileged.yml: run {pending} has not completed")
-            )],
-            &[]
+            &[
+                release_line("0.1.2", &a),
+                release_line("0.1.3", &b),
+                release_line("0.1.4", &c),
+            ],
+            &[("0.1.2", &a), ("0.1.3", &b), ("0.1.4", &c)],
         ))
-    );
-    fakes.runs.push("privileged.yml", &c, "success");
-    assert_eq!(
-        plan_of(&fakes, &request(&c)),
-        Ok(lines(&[release_line("0.1.2", &c)], &[("0.1.2", &c)]))
     );
     assert_eq!(*fakes.runs.writes.borrow(), Vec::<String>::new());
-}
-
-#[test]
-fn a_red_privileged_run_blocks_the_next_release_and_opens_one_issue() {
-    // Catches: a commit after a red privileged run being released on a green ci run alone, a
-    // second issue opened by a second plan, or the red commit itself being released.
-    let mut h = FakeHistory::default();
-    let r = root(&mut h);
-    let a = code(&mut h, &r, "fn a2() {}");
-    let b = code(&mut h, &a, "fn b() {}");
-    let fakes = after_root(h, &r);
-    green(&fakes, &r);
-    fakes.runs.push("ci.yml", &a, "success");
-    fakes.runs.push("artifacts.yml", &a, "success");
-    let red = fakes.runs.push("privileged.yml", &a, "failure");
-    fakes.runs.push("ci.yml", &b, "success");
-    fakes.runs.push("artifacts.yml", &b, "success");
-    let held = format!("held: privileged run {red} failed on {a}; tracking issue #1");
-
-    let expected = lines(
-        &[
-            decline_line(&a, "0.1.2", &held),
-            decline_line(&b, "0.1.3", &held),
-        ],
-        &[],
-    );
-    assert_eq!(plan_of(&fakes, &request(&b)), Ok(expected.clone()));
-    assert_eq!(plan_of(&fakes, &request(&b)), Ok(expected));
-    assert_eq!(*fakes.runs.writes.borrow(), ["open #1".to_owned()]);
-    let issues = fakes.runs.issues();
-    assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].title, BLOCK_TITLE);
-    assert_eq!(issues[0].body, hold_body(&a, red));
-
-    fakes.runs.push("privileged.yml", &b, "success");
-    assert_eq!(
-        plan_of(&fakes, &request(&b)),
-        Ok(lines(
-            &[
-                decline_line(
-                    &a,
-                    "0.1.2",
-                    &format!("privileged.yml run {red} ended failure")
-                ),
-                release_line("0.1.3", &b),
-            ],
-            &[("0.1.3", &b)],
-        ))
-    );
-    assert_eq!(
-        plan_of(&fakes, &request(&a)),
-        Ok(lines(&[decline_line(&a, "0.1.2", &held)], &[]))
-    );
-    assert_eq!(*fakes.runs.writes.borrow(), ["open #1".to_owned()]);
-}
-
-#[test]
-fn a_red_privileged_run_holds_later_commits_while_the_tip_waits() {
-    // Catches: the walk of a run started by one commit's completion releasing a commit after a
-    // red privileged run, or holding the commits before it.
-    let mut h = FakeHistory::default();
-    let r = root(&mut h);
-    let older = code(&mut h, &r, "fn older() {}");
-    let a = code(&mut h, &older, "fn a2() {}");
-    let b = code(&mut h, &a, "fn b() {}");
-    let tip = code(&mut h, &b, "fn tip() {}");
-    let fakes = after_root(h, &r);
-    green(&fakes, &older);
-    fakes.runs.push("ci.yml", &a, "success");
-    fakes.runs.push("artifacts.yml", &a, "success");
-    let red = fakes.runs.push("privileged.yml", &a, "failure");
-    fakes.runs.push("ci.yml", &b, "success");
-    fakes.runs.push("artifacts.yml", &b, "success");
-    fakes.runs.add("privileged.yml", &b, "push", "main", None);
-    fakes.runs.push("artifacts.yml", &tip, "success");
-    fakes.runs.add("ci.yml", &tip, "push", "main", None);
-    fakes.runs.add("privileged.yml", &tip, "push", "main", None);
-    let held = format!("held: privileged run {red} failed on {a}; tracking issue #1");
-    assert_eq!(
-        plan_of(&fakes, &request(&tip)),
-        Ok(lines(
-            &[
-                release_line("0.1.2", &older),
-                decline_line(&a, "0.1.3", &held),
-                decline_line(&b, "0.1.4", &held),
-                decline_line(&tip, "0.1.5", &held),
-            ],
-            &[("0.1.2", &older)],
-        ))
-    );
-}
-
-#[test]
-fn an_open_issue_with_another_body_is_edited_once_and_others_are_left() {
-    // Catches: a second issue opened beside the open one, the body left stale, or an unrelated
-    // issue taken for the hold's.
-    let mut h = FakeHistory::default();
-    let r = root(&mut h);
-    let a = code(&mut h, &r, "fn a2() {}");
-    let b = code(&mut h, &a, "fn b() {}");
-    let fakes = after_root(h, &r);
-    let red = fakes.runs.push("privileged.yml", &a, "failure");
-    fakes
-        .runs
-        .open_issue(&repo(), "Something else", "unrelated")
-        .expect("an unrelated issue");
-    fakes
-        .runs
-        .open_issue(&repo(), BLOCK_TITLE, "old")
-        .expect("the hold's issue");
-    let held = format!("held: privileged run {red} failed on {a}; tracking issue #2");
-    assert_eq!(
-        plan_of(&fakes, &request(&b)),
-        Ok(lines(
-            &[
-                decline_line(&a, "0.1.2", &held),
-                decline_line(&b, "0.1.3", &held),
-            ],
-            &[]
-        ))
-    );
-    assert_eq!(
-        *fakes.runs.writes.borrow(),
-        [
-            "open #1".to_owned(),
-            "open #2".to_owned(),
-            "edit #2".to_owned()
-        ]
-    );
-    let issues = fakes.runs.issues();
-    assert_eq!(issues[0].body, "unrelated");
-    assert_eq!(issues[1].body, hold_body(&a, red));
+    assert_eq!(fakes.runs.issues(), Vec::new());
 }
 
 #[test]
@@ -478,7 +344,6 @@ fn a_run_from_a_pull_request_or_another_sha_never_counts() {
         .runs
         .add("ci.yml", &c, "pull_request", "feature", Some("success"));
     fakes.runs.push("ci.yml", &r, "success");
-    fakes.runs.push("privileged.yml", &c, "success");
     fakes.runs.push("artifacts.yml", &c, "success");
     assert_eq!(
         plan_of(&fakes, &request(&c)),
@@ -519,7 +384,6 @@ fn a_failed_and_a_cancelled_run_are_declined_with_their_conclusion() {
         ))
     );
     fakes.runs.push("ci.yml", &c, "success");
-    fakes.runs.push("privileged.yml", &c, "success");
     let cancelled = fakes.runs.push("artifacts.yml", &c, "cancelled");
     assert_eq!(
         plan_of(&fakes, &request(&c)),

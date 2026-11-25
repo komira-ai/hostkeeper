@@ -8,6 +8,7 @@ use std::os::unix::fs::symlink;
 use hostkeeper_config::daemon::{
     Bounds, ConfigError, DaemonConfig, MIN_FETCH_BYTES_PER_SEC, TrustedSigners, ref_matches,
 };
+use hostkeeper_config::serial_console::SerialConsole;
 use hostkeeper_config::trust::TrustError;
 use support::{Scratch, fifo, my_uid};
 
@@ -149,6 +150,47 @@ fn keep_awake_is_read_as_written() {
 fn a_keep_awake_of_the_wrong_type_is_refused_by_name() {
     let text = format!("keep_awake = \"no\"\n{EXAMPLE}");
     assert_eq!(invalid_key(refusal(&text)), "keep_awake");
+}
+
+/// A config that leaves `serial_console` out names no port, so a daemon of a config written for
+/// an earlier release writes nothing of the serial console baseline.
+#[test]
+fn serial_console_is_absent_by_default() {
+    assert!(!EXAMPLE.contains("serial_console"));
+    assert_eq!(DaemonConfig::parse(EXAMPLE).unwrap().serial_console, None);
+}
+
+/// `serial_console = "ttyS1"` is read as that port, and nothing else of the config changes.
+#[test]
+fn serial_console_is_read_as_written() {
+    let text = format!("serial_console = \"ttyS1\"\n{EXAMPLE}");
+    let config = DaemonConfig::parse(&text).expect("serial_console = ttyS1 loads");
+    assert_eq!(
+        config.serial_console.as_ref().map(SerialConsole::as_str),
+        Some("ttyS1")
+    );
+    assert_eq!(
+        DaemonConfig {
+            serial_console: None,
+            ..config
+        },
+        DaemonConfig::parse(EXAMPLE).unwrap()
+    );
+}
+
+/// Catches a port the baseline could not name being taken: a value that is not a port, or not a
+/// string, is refused by the key's name, with the port's rule as the reason.
+#[test]
+fn a_serial_console_that_is_not_a_port_is_refused_by_name() {
+    for value in ["\"ttyS01\"", "\"ttyUSB0\"", "\"\"", "1"] {
+        let text = format!("serial_console = {value}\n{EXAMPLE}");
+        assert_eq!(invalid_key(refusal(&text)), "serial_console", "{value}");
+    }
+    let text = format!("serial_console = \"COM2\"\n{EXAMPLE}");
+    assert_eq!(
+        refusal(&text).to_string(),
+        "the daemon config's serial_console is not ttyS<n> or ttyAMA<n>, with n from 0 to 99"
+    );
 }
 
 /// Catches a renamed key or a changed default: the example parses and every field is its value.

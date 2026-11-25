@@ -3,9 +3,13 @@
 use std::fs;
 use std::os::unix::fs::symlink;
 
-use hostkeeper_bootstrap::files::{FileError, Written, write_if_absent, write_if_absent_with};
+use std::os::unix::fs::MetadataExt;
 
-use crate::support::{exists, mode, read, scratch};
+use hostkeeper_bootstrap::files::{
+    FileError, Written, write_if_absent, write_if_absent_with, write_private,
+};
+
+use crate::support::{exists, mode, read, scratch, write_mode};
 
 /// An absent file is made whole with the given mode, in a directory made for it, and no temporary
 /// file is left.
@@ -156,4 +160,61 @@ fn a_kept_file_others_can_write_is_refused() {
     let error = write_if_absent(&path, "x\n", 0o600).expect_err("loose");
     assert!(matches!(error, FileError::Writable { .. }), "{error}");
     assert_eq!(read(&path), "loose\n");
+}
+
+/// Catches a private file being written with another mode, or one that is there being replaced:
+/// an absent one is made 0600 with its bytes, and one of the owner with mode 0600 is kept.
+#[test]
+fn a_private_file_is_made_0600_and_one_that_is_right_is_kept() {
+    let dir = scratch("files-private");
+    let path = dir.path().join("Library/hostkeeper/update-account");
+    let owner = fs::metadata(dir.path()).expect("dir").uid();
+    assert_eq!(
+        write_private(&path, "name=a\npassword=b\n", owner).expect("written"),
+        Written::Made
+    );
+    assert_eq!(read(&path), "name=a\npassword=b\n");
+    assert_eq!(mode(&path), 0o600);
+    assert_eq!(fs::metadata(&path).expect("file").uid(), owner);
+    assert_eq!(
+        write_private(&path, "name=c\npassword=d\n", owner).expect("kept"),
+        Written::Kept
+    );
+    assert_eq!(read(&path), "name=a\npassword=b\n");
+}
+
+/// Catches a private file of another owner or another mode being kept, which the daemon's reader
+/// refuses, or being replaced: it is refused, naming the owner and mode found and the ones
+/// wanted, and left as it is.
+#[test]
+fn a_private_file_of_another_owner_or_mode_is_refused_and_left() {
+    let dir = scratch("files-private-wrong");
+    let path = dir.path().join("update-account");
+    let me = fs::metadata(dir.path()).expect("dir").uid();
+    write_mode(&path, "theirs\n", 0o600);
+    let other = me.wrapping_add(1);
+    let error = write_private(&path, "ours\n", other).expect_err("another owner");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{} is owned by uid {me} with mode 0600, not by uid {other} with mode 0600; it is not replaced",
+            path.display()
+        )
+    );
+    for wrong in [0o640, 0o400, 0o4600] {
+        fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(wrong))
+            .expect("chmod");
+        let error = write_private(&path, "ours\n", me).expect_err("another mode");
+        assert!(
+            matches!(error, FileError::NotPrivate { mode, .. } if mode == wrong),
+            "{error}"
+        );
+    }
+    assert_eq!(read(&path), "theirs\n");
+    let folder = dir.path().join("folder");
+    fs::create_dir(&folder).expect("dir");
+    assert!(matches!(
+        write_private(&folder, "x\n", me),
+        Err(FileError::NotAFile { .. })
+    ));
 }

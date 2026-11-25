@@ -12,7 +12,7 @@
 //! token, or any other, `unauthorized`, before the request is looked at. A refusal is one value
 //! of the service's refusal enum and changes nothing; `store_failed` means the ops file could not
 //! be written, and asking again is safe. Every change is one entry of the audit ring and file,
-//! under the name of the operator's token; a change whose line cannot be appended to the audit
+//! under the operator's name (an API token's owner, with the token as the entry's `api_token`); a change whose line cannot be appended to the audit
 //! file is refused `audit_unavailable` and not made, except `Hosts.Abort` and `Releases.Halt`,
 //! which stand ([`crate::ops::OpsStore`]).
 
@@ -27,10 +27,10 @@ use crate::halt;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, marks_of};
 use crate::host_groups::GroupName;
 use crate::operate::reason;
-use crate::ops::{AuditEntry, Exclusion, FailureAck, OpsError, Write, label};
+use crate::ops::{AuditBy, AuditEntry, Exclusion, FailureAck, OpsError, Write, label};
 use crate::reconcile::{CI, COORDINATOR, is_release_failure_beat};
 use crate::service::Coordinator;
-use crate::tokens::TokenName;
+use crate::tokens::Operator;
 
 /// The most entries one `Audit.List` answers: a `limit` of 0, or above it, is this.
 pub const MAX_AUDIT_PAGE: usize = 256;
@@ -38,8 +38,9 @@ pub const MAX_AUDIT_PAGE: usize = 256;
 /// Who calls, as the transport found the bearer.
 #[derive(Clone, Debug)]
 pub enum Caller {
-    /// The operator token of this name.
-    Operator(TokenName),
+    /// An operator: a token of the tokens file, an API token acting as its owner, or a signed-in
+    /// user.
+    Operator(Operator),
     /// A CI token the allow-list accepts: it reaches none of these calls.
     Ci,
     /// No bearer, or one that is no token.
@@ -56,10 +57,11 @@ pub(crate) enum Denied {
 }
 
 impl Caller {
-    /// The name of the operator's token, which the audit records the change under.
-    pub(crate) fn operator(&self) -> Result<&str, Denied> {
+    /// The operator, whose name every check reads and the audit records the change under, with
+    /// the API token it called with.
+    pub(crate) fn operator(&self) -> Result<&Operator, Denied> {
         match self {
-            Self::Operator(name) => Ok(name.as_str()),
+            Self::Operator(operator) => Ok(operator),
             Self::Ci => Err(Denied::Forbidden),
             Self::Anonymous => Err(Denied::Unauthorized),
         }
@@ -107,7 +109,11 @@ refusals!(
     HostGroupsRefusal,
     UsersRefusal,
     ApiTokensRefusal,
-    LayoutRefusal
+    LayoutRefusal,
+    SshRefusal,
+    ConsoleRefusal,
+    XcodeRefusal,
+    MaintenanceRefusal
 );
 
 changing!(
@@ -119,7 +125,9 @@ changing!(
     HostGroupsRefusal,
     UsersRefusal,
     ApiTokensRefusal,
-    LayoutRefusal
+    LayoutRefusal,
+    XcodeRefusal,
+    MaintenanceRefusal
 );
 
 /// `Audit` only reads: a log that cannot be read is `store_failed`.
@@ -181,6 +189,7 @@ pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
         at_unix: None,
         by_name: Some(entry.by.clone()),
         host_group: entry.host_group.clone(),
+        api_token: entry.api_token.clone(),
     }
 }
 
@@ -224,7 +233,7 @@ fn scope_of(scope: Option<proto::HoldScope>) -> Option<HoldScope> {
 }
 
 /// An entry by `by` for `action` about `service`, with `reason`.
-fn entry(by: &str, action: &str, service: &str, reason: String) -> AuditEntry {
+fn entry(by: &(impl AuditBy + ?Sized), action: &str, service: &str, reason: String) -> AuditEntry {
     let mut entry = AuditEntry::new(by, action);
     entry.service = Some(service.to_owned());
     entry.reason = Some(reason);
@@ -494,7 +503,7 @@ impl Coordinator {
             service: def.name.clone(),
             scope,
             reason: why,
-            by: by.to_owned(),
+            by: by.by_name().to_owned(),
             at_unix: self.ops.unix_now(),
         };
         let mut audit = entry(

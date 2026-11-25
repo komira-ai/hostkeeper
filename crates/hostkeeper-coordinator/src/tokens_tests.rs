@@ -20,7 +20,7 @@ use crate::service::{Coordinator, Unauthorized};
 use crate::testutil::{
     LEGACY, Log, beat, ci_token, clock_of, id, kbf_prefixes, kbf_services, ops_of, role, scratch,
 };
-use crate::tokens::{OperatorTokens, Reload, TokenName, TokenNameError, TokensError};
+use crate::tokens::{Bearer, OperatorTokens, Reload, TokenName, TokenNameError, TokensError};
 
 const ALICE: &str = "alice-token-0123456789abcdef0123456789";
 const BOB: &str = "bob-token-0123456789abcdef0123456789abc";
@@ -444,7 +444,7 @@ fn a_near_miss_of_a_token_is_not_a_token() {
     let path = write(&dir, &[("alice", ALICE)]);
     let c = coordinator(&dir, OperatorTokens::from_file(&path).expect("tokens"));
     let name = c.operator(Some(ALICE)).expect("a token");
-    assert_eq!(name.as_str(), "alice");
+    assert_eq!(name.name(), "alice");
     let spaced = format!("{ALICE} ");
     let capitals = ALICE.to_uppercase();
     let ci = ci_token();
@@ -463,8 +463,8 @@ fn a_near_miss_of_a_token_is_not_a_token() {
 }
 
 /// Proves: a bearer is resolved over the tokens file's tokens and the store's in one pass: a
-/// stored token answers its name, a digest both hold answers the file's name whatever order the
-/// store lists in, a token neither holds answers none, and a stored name that is not a name
+/// stored token answers its name as the store's, a file's token as the file's, a digest both hold
+/// answers the file's name whatever order the store lists in, a token neither holds answers none, and a stored name that is not a name
 /// answers none.
 #[test]
 fn a_bearer_is_resolved_over_the_tokens_file_and_the_store() {
@@ -476,24 +476,27 @@ fn a_bearer_is_resolved_over_the_tokens_file_and_the_store() {
                 presented,
                 list.iter().map(|(name, sha256)| (*name, sha256.as_str())),
             )
-            .map(|name| name.as_str().to_owned())
+            .map(|found| match found {
+                Bearer::File(name) => format!("file {}", name.as_str()),
+                Bearer::Stored(name) => format!("stored {}", name.as_str()),
+            })
     };
     assert_eq!(
         among(BOB, &[("bob-bot", bob.clone())]).as_deref(),
-        Some("bob-bot")
+        Some("stored bob-bot")
     );
     assert_eq!(
         among(ALICE, &[("bob-bot", bob.clone())]).as_deref(),
-        Some("operator")
+        Some("file operator")
     );
     assert_eq!(
         among(ALICE, &[("zed", alice.clone()), ("abe", alice.clone())]).as_deref(),
-        Some("operator"),
+        Some("file operator"),
         "the file's token wins, whatever the store's order"
     );
     assert_eq!(
         among(BOB, &[("zed", bob.clone()), ("abe", bob.clone())]).as_deref(),
-        Some("zed"),
+        Some("stored zed"),
         "of two stored tokens, the first listed"
     );
     assert_eq!(among("neither", &[("bob-bot", bob.clone())]), None);

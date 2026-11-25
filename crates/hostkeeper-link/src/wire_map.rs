@@ -57,6 +57,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
         .map(service)
         .collect::<Result<Vec<ServiceBeat>, Unsendable>>()?;
     Ok(wire::Heartbeat {
+        local_halt: None,
         platform: platform(beat.platform),
         version: agent_version.clone(),
         health: wire::Health::Healthy,
@@ -82,6 +83,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
         cert_not_after_unix: beat.renewal.cert_not_after_unix,
         last_renew_error: beat.renewal.last_renew_error.clone(),
         record_try: None,
+        maintenance: None,
     })
 }
 
@@ -101,6 +103,7 @@ fn service(facts: &ServiceFacts) -> Result<ServiceBeat, Unsendable> {
         None => None,
     };
     Ok(ServiceBeat {
+        local_halt: None,
         name: name.to_owned(),
         version: version(&facts.version)?,
         health: health(facts.health),
@@ -135,6 +138,8 @@ fn verdict(result: &OrderResult) -> Result<Option<UpdateResult>, Unsendable> {
         // A loop's order id is one of the wire's, whose grammar is wider.
         order_id: WireOrderId::parse(result.order.id.as_str()),
         order_try: Some(result.order.order_try),
+        // The route is frozen: the detail goes over gRPC only (`proto_map`).
+        detail: None,
     }))
 }
 
@@ -277,6 +282,10 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             acknowledged,
             repositories: None,
             facts: None,
+            operator_keys: None,
+            ssh: None,
+            prerequisites: None,
+            maintain: None,
         },
         update,
     }

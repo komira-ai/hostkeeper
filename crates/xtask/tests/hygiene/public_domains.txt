@@ -6,6 +6,9 @@
 # Where the code and its dependencies live.
 github.com
 crates.io
+# The Rust release's toolchain tarballs `cargo xtask mac-farm` sends to a farm Mac
+# (static.rust-lang.org, pinned in crates/xtask/src/mac_farm/toolchain.toml).
+rust-lang.org
 # The page of a RustSec advisory, which the advisories issue links each advisory to.
 rustsec.org
 
@@ -25,6 +28,11 @@ githubapp.com
 # The document type of an Apple property list, which every plist hostkeeper-launchd writes
 # declares (http://www.apple.com/DTDs/PropertyList-1.0.dtd).
 apple.com
+
+# The Xcode Releases site, whose list of Xcode releases (https://xcodereleases.com/data.json) the
+# coordinator's `--xcode-feed-url` names as its value (crates/hostkeeper-coordinator,
+# src/xcode_feed.rs).
+=xcodereleases.com
 
 # Canonical's release sites, which the network boot sets are pinned from
 # (packaging/netboot/pins.toml: releases.ubuntu.com, cdimage.ubuntu.com), and the Ubuntu archive
@@ -95,6 +103,10 @@ yaml.org
 =services.version.name
 =t.v1.health
 =f.v1.login.pin
+# Field paths a maintenance report's bound check names (hostkeeper-proto's `maintenance` and its
+# tests), ending in `build` and `to`, which the IANA list delegates. Names, not hosts.
+=xcodes.build
+=due.to
 # Protobuf type paths in hostkeeper-proto's operator.proto and tests, not hosts.
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims
@@ -164,8 +176,9 @@ fleetdm.com
 =developer.godaddy.com
 
 # Not sites: property names of the web app's JavaScript (ui/lab.js, ui/pages/home.js, ui/pages/host.js,
-# ui/pages/enrollment.js, ui/pages/inventory_switch.js, ui/pages/switch.js) and the call `layout.place`
-# of the generated client, whose last word is also a top-level domain. Exact names only.
+# ui/pages/enrollment.js, ui/pages/inventory_switch.js, ui/pages/switch.js) and the calls `layout.place`
+# and `console.open` of the generated client (in ui/calls.json), whose last word is also a top-level
+# domain. Exact names only.
 =body.name
 =ctx.params.id
 =d.id
@@ -185,6 +198,7 @@ fleetdm.com
 =host.live
 =layout.name
 =layout.place
+=console.open
 =p.id
 =p.subject.id
 =r.id
@@ -220,3 +234,13 @@ fleetdm.com
 n.attrs.name
 y.name
 span.mini
+
+# Not hosts: the names of Xcode's application bundles (`Xcode.app`, `Xcode-beta.app`), which the
+# Xcode stage of the maintenance hook names as the app `xip --expand` makes and the app it stages
+# (crates/hostkeeper-daemon/src/maintenance_hook/xcode/stage.rs and its tests).
+=xcode.app
+=xcode-beta.app
+
+# Not a host: the code-signing identifier of `hk` on macOS (crates/xtask/src/release/mac_programs.rs),
+# a reverse-DNS name whose last label is the program's name, which happens to be a country domain.
+=dev.hostkeeper.hk

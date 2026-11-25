@@ -85,8 +85,7 @@ fn report(target: &str, reason: &str) -> serde_json::Value {
     json!({"target": target, "outcome": "failed", "phase": "halt", "reason": reason})
 }
 
-/// An operations state with something in every list, lists out of any sorted order, and entries
-/// at their default; one inventory record states its platform.
+/// An operations state with something in every list (runs too), out of order, entries at default.
 pub(crate) fn rich_ops() -> OpsState {
     let mut state: OpsState = serde_json::from_value(json!({
         "schema": 1,
@@ -139,6 +138,7 @@ pub(crate) fn rich_ops() -> OpsState {
     }))
     .expect("plan positions");
     state.inventory[0].platform = Some(hostkeeper_wire::Platform::LinuxArm64);
+    state.maintenance_runs = crate::maintenance_runs::tests::sample();
     state
 }
 
@@ -226,6 +226,7 @@ pub(crate) fn rich_accounts() -> Accounts {
     let token = |name: &str, fill: char| ApiToken {
         name: name.to_owned(),
         sha256: fill.to_string().repeat(64),
+        owner: "zed".to_owned(),
         created_by: "zed".to_owned(),
         created_at: 1_800_000_100,
     };
@@ -346,6 +347,7 @@ fn ring(lines: &[AuditLine]) -> Vec<AuditEntry> {
 fn loaded(backend: &Shared) -> Result<Loaded, String> {
     backend
         .load()
+        .map(Loaded::alike)
         .map_err(|why| format!("the load failed: {why}"))
 }
 
@@ -373,8 +375,7 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
     };
     live.commit(&first)
         .map_err(|why| format!("the first commit failed: {why}"))?;
-    let second_desired = desired_at("2.0", 'b');
-    let second_lines = lines(3, 3);
+    let (second_desired, second_lines) = (desired_at("2.0", 'b'), lines(3, 3));
     let mut second_ops = rich_ops();
     second_ops.audit = ring(&lines(1, 3));
     subject.failing(true);

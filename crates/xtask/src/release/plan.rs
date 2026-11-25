@@ -13,17 +13,21 @@
 //! holds nothing: it may never change.
 //!
 //! A commit is released when it is not frozen, not already released, not documentation only,
-//! not held by a red privileged run, and every required workflow has a successful push run on
-//! `main` for it. Versions come from the first-parent history ([`version::version_in`]), never
+//! and every required workflow (the unit tests and the build, [`REQUIRED_WORKFLOWS`]) has a
+//! successful push run on `main` for it. The privileged tests hold no release: a red run of them
+//! is reported by `release red`. Versions come from the first-parent history ([`version::version_in`]), never
 //! from tags, so a documentation-only commit has its number and later numbers count it.
 //!
 //! A release is published before its image is pushed and before it is set as the desired
 //! version, so a run can publish a release and then fail. When the plan releases no commit, it
 //! therefore looks for the latest run of `release.yml` on `main` that released the newest
 //! published release (the one with its job `publish (<version>, <tag>, <commit>)`): when that run
-//! completed other than successfully, the plan releases that release again, and every job after
-//! it runs again for it (publishing a release that holds the same files, and pushing the same
-//! image, change nothing). A run that has not completed is waited for; when no run is found the
+//! completed and one of its deploy jobs ([`DEPLOY_JOBS`]) ended other than successfully or
+//! skipped, the plan releases that release again, and every job after it runs again for it
+//! (publishing a release that holds the same files, and pushing the same image, change nothing).
+//! A run whose deploy jobs all succeeded counts as a success though another of its jobs failed
+//! (the Mac's beta stage, an install check, the promotion to stable): that failure is reported by
+//! `release red`, and releasing the release again would deploy nothing new. A run that has not completed is waited for; when no run is found the
 //! release is left as it is; after [`RELEASE_RUNS`] such runs in a row that did not succeed it
 //! is left too, and says so (a maintainer re-runs the failed jobs once the cause is fixed). A
 //! newer commit released supersedes it: the run sets the newer one.
@@ -43,7 +47,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::contract::{
-    Commit, MAIN, PRIVILEGED_WORKFLOW, RELEASE_WORKFLOW, REQUIRED_WORKFLOWS, Repo, Version,
+    Commit, DEPLOY_JOBS, MAIN, RELEASE_WORKFLOW, REQUIRED_WORKFLOWS, Repo, Version,
 };
 use super::ports::{Job, Ports, Release, Run};
 use super::{Error, RunState, answer, state, version};
@@ -63,9 +67,6 @@ pub(crate) struct Request {
 /// The paths of documentation: a path under the first, or a path ending as the second says at
 /// any depth.
 pub(crate) const DOCS_PATHS: [&str; 2] = ["docs/", "**/*.md"];
-
-/// The title of the one issue that tracks a hold on releases.
-pub(crate) const BLOCK_TITLE: &str = "Releases are held: the privileged tests failed on main";
 
 /// The release runs of one release that may end other than successfully in a row before the plan
 /// stops releasing it again, and the release runs in a row whose verify job of a commit not yet
@@ -114,24 +115,6 @@ impl Decline {
     }
 }
 
-/// An open hold: the privileged run `run` failed on `commit`, the commit at `index` of the
-/// chain, and the issue `issue` tracks it.
-struct Hold {
-    index: usize,
-    run: u64,
-    commit: Commit,
-    issue: u64,
-}
-
-impl Hold {
-    fn reason(&self) -> String {
-        format!(
-            "held: privileged run {} failed on {}; tracking issue #{}",
-            self.run, self.commit, self.issue
-        )
-    }
-}
-
 /// What judging a candidate reads.
 struct Context<'a> {
     ports: Ports<'a>,
@@ -140,7 +123,6 @@ struct Context<'a> {
     chain: &'a [Commit],
     /// The published releases.
     releases: &'a [Release],
-    hold: Option<Hold>,
     /// The end of the window: `chain[..end]` are the commits judged, and `chain[end]`, when
     /// there is a last release, is its commit.
     end: usize,
@@ -209,13 +191,11 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         Some((index, _)) => *index,
         None => version::base_of(ports.git, &chain, &request.version_file)? + 1,
     };
-    let hold = hold(ports, request, &chain, end)?;
     let context = Context {
         ports: *ports,
         request,
         chain: &chain,
         releases: &releases,
-        hold,
         end,
         release_runs: OnceCell::new(),
         jobs: RefCell::new(BTreeMap::new()),
@@ -242,9 +222,9 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
 }
 
 /// The newest published release, `version` at `index` of the chain, released again when the
-/// latest run of `release.yml` on `main` that released it completed other than successfully (see
-/// the module): the line that says why or why not (none when no run released it), and the
-/// candidate.
+/// latest run of `release.yml` on `main` that released it completed with a deploy job that did
+/// not succeed (see the module): the line that says why or why not (none when no run released
+/// it), and the candidate.
 fn resume(
     context: &Context<'_>,
     index: usize,
@@ -257,14 +237,14 @@ fn resume(
     // latest success.
     let mut failed: Vec<(u64, String)> = Vec::new();
     for run in context.release_runs()? {
-        if !context.jobs_of(run.id)?.iter().any(|j| j.name == job) {
+        let jobs = context.jobs_of(run.id)?;
+        if !jobs.iter().any(|j| j.name == job) {
             continue;
         }
-        let ended =
-            (run.status == "completed").then(|| run.conclusion.as_deref().unwrap_or("none"));
+        let ended = (run.status == "completed").then(|| deploy_end(run, &jobs));
         match (failed.is_empty(), ended) {
             (true, Some("success")) => {
-                let line = format!("{tag} of {commit}: its release run {} succeeded", run.id);
+                let line = format!("{tag} of {commit}: its release run {} deployed it", run.id);
                 return Ok((Some(line), None));
             }
             (true, None) => {
@@ -309,6 +289,31 @@ fn resume(
     Ok((Some(line), Some(again)))
 }
 
+/// How the deploy of the completed release run `run`, whose jobs are `jobs`, ended: `success`
+/// when each of its deploy jobs ([`DEPLOY_JOBS`]) succeeded or was skipped, whatever the run's
+/// own conclusion; otherwise the run's conclusion (`none` when it has none).
+fn deploy_end<'a>(run: &'a Run, jobs: &[Job]) -> &'a str {
+    let deployed = jobs
+        .iter()
+        .filter(|j| DEPLOY_JOBS.contains(&base_name(&j.name)))
+        .all(|j| matches!(j.conclusion.as_deref(), Some("success" | "skipped")));
+    match (deployed, run.conclusion.as_deref()) {
+        (true, _) => "success",
+        (false, conclusion) => conclusion.unwrap_or("none"),
+    }
+}
+
+/// The name of the job of `release.yml` a listed job is of: the name before its matrix values
+/// (` (`) or before the job of the workflow it calls (` / `).
+pub(crate) fn base_name(listed: &str) -> &str {
+    let end = [" (", " / "]
+        .iter()
+        .filter_map(|mark| listed.find(mark))
+        .min()
+        .unwrap_or(listed.len());
+    &listed[..end]
+}
+
 /// The index in `chain` of the published release nearest the tip whose tag is a version, and
 /// that version.
 fn last_release(releases: &[Release], chain: &[Commit]) -> Option<(usize, Version)> {
@@ -319,61 +324,6 @@ fn last_release(releases: &[Release], chain: &[Commit]) -> Option<(usize, Versio
             Some((chain.iter().position(|c| c.as_str() == r.commit)?, version))
         })
         .min_by_key(|(index, _)| *index)
-}
-
-/// The hold on releases, in one place so a different rule can replace it: the newest commit of
-/// the window whose privileged run failed holds every candidate at or after it, unless a commit
-/// newer than it has a successful privileged run. A later success of another workflow never
-/// lifts it. An open hold is tracked by one issue, opened or updated here.
-fn hold(
-    ports: &Ports<'_>,
-    request: &Request,
-    chain: &[Commit],
-    end: usize,
-) -> Result<Option<Hold>, Error> {
-    for (index, commit) in chain.iter().enumerate().take(end) {
-        let runs = ports
-            .runs
-            .runs(&request.repo, PRIVILEGED_WORKFLOW, commit)?;
-        match state(&runs, commit) {
-            RunState::Succeeded(_) => return Ok(None),
-            RunState::Failed(run) => {
-                let issue = track(ports, &request.repo, &hold_body(commit, run))?;
-                return Ok(Some(Hold {
-                    index,
-                    run,
-                    commit: commit.clone(),
-                    issue,
-                }));
-            }
-            RunState::Missing | RunState::Pending(_) | RunState::Other(..) => {}
-        }
-    }
-    Ok(None)
-}
-
-/// The body of the issue that tracks a hold.
-fn hold_body(commit: &Commit, run: u64) -> String {
-    format!(
-        "Releases are held. The privileged run {run} failed on {commit}.\n\n\
-         No commit from {commit} on is released until a later commit's privileged run succeeds. \
-         A later success of another workflow does not lift the hold.\n"
-    )
-}
-
-/// Opens the one issue titled [`BLOCK_TITLE`] with `body`, or brings the open one to `body`;
-/// its number. An open issue that already holds `body` is not written.
-fn track(ports: &Ports<'_>, repo: &Repo, body: &str) -> Result<u64, Error> {
-    let issues = ports.runs.open_issues(repo)?;
-    match issues.iter().find(|i| i.title == BLOCK_TITLE) {
-        None => Ok(ports.runs.open_issue(repo, BLOCK_TITLE, body)?),
-        Some(issue) => {
-            if issue.body != body {
-                ports.runs.edit_issue(repo, issue.number, body)?;
-            }
-            Ok(issue.number)
-        }
-    }
 }
 
 /// Judges the commit at `index` of the chain.
@@ -417,9 +367,6 @@ fn decline(
         .changed_paths(commit, context.chain.get(index + 1))?;
     if paths.iter().all(|p| is_docs_path(p)) {
         return Ok(Decline::settled("documentation only".to_owned()));
-    }
-    if let Some(hold) = context.hold.as_ref().filter(|h| index <= h.index) {
-        return Ok(Decline::settled(hold.reason()));
     }
     if let Some(decline) = waiting(context, commit)? {
         return Ok(Some(decline));

@@ -97,6 +97,14 @@ fn host(rig: &Rig, live: Option<&Path>) -> (Arc<Daemon>, Heartbeater, Arc<FakeLi
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        prerequisites: None,
+        maintenance: None,
+        bmc: None,
+        serial_console: None,
     };
     let heartbeater = links.heartbeater(&daemon);
     (daemon, heartbeater, link)
@@ -130,6 +138,7 @@ fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() 
         Feature::FactsV1,
         Feature::PrivateRepositoryV1,
     ]);
+    // `ssh-v1` is named only once the coordinator advertised it: the first beat has none.
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].repositories, Some(RepositoriesReport::default()));
     assert!(beats[0].installers.is_empty());
@@ -204,6 +213,7 @@ fn a_host_with_no_repository_directory_announces_and_writes_nothing() {
     if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::PrivateRepositoryV1);
     }
+    // `ssh-v1` is named only once the coordinator advertised it: the first beat has none.
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[1].repositories, None);
     assert!(

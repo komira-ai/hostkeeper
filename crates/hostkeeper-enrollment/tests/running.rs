@@ -358,6 +358,7 @@ fn the_host_file_is_compatible_with_the_release_before_in_both_directions() {
                 installer: "deb".to_owned(),
             }],
             at_unix: NOW + 60,
+            bmc: None,
         }),
         ..pb::Host::default()
     };

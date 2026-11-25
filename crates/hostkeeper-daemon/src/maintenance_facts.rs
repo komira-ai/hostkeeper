@@ -1,0 +1,373 @@
+//! What the host last found of its maintenance (`maintenance-v1`, docs/design/maintenance-updates.md
+//! section 1): the [`MaintenanceSource`] of the daemon's heartbeat loop. It keeps the
+//! `MaintenanceReport` of the last look and gives it to every heartbeat that asks.
+//!
+//! **A look** runs on a worker of the sink's [`Dispatch`]: it reads the packages hostkeeper itself
+//! installs ([`OwnPackages`]), then asks each [`Collector`] in order what it finds. The sections
+//! join into the report ([`Section`]): the host texts, the Xcodes and the Mac's facts (field by
+//! field) as the collectors give them, what is due ordered reboots first, then security updates,
+//! then the rest, each group in the order found, at most [`MAX_DUE`] of them (the count of the rest
+//! is `due_left_out`), every text kept to its bound, and the report checked against the wire's
+//! bounds ([`check_report`]) before it is kept. Its `looked_unix` is the second the look started.
+//!
+//! **A look that fails** (a collector's reason, naming it; the packages of hostkeeper that cannot
+//! be read; a report that breaks a bound) stops at the first failure and leaves the rest of the
+//! report as the last look that succeeded left it, with the reason in `look_failed`. The next
+//! look clears it.
+//!
+//! **When.** A report ([`MaintenanceSource::report`]) starts a look when none is running and one
+//! is due: before the first, [`LOOK_SECS`] after the last one started, and at once after
+//! [`MaintenanceFacts::look_again`]. After a look that failed (a package manager's lock still
+//! held at its bound, a mirror that did not answer), the next is due sooner, so that a passing
+//! cause does not hide what is due for an hour: [`RETRY_SECS`] after the failed look ended, twice
+//! that after a second failure in a row, and so on, never later than [`LOOK_SECS`] after the
+//! failed look started ([`retry_secs`]); a look that succeeds starts the count again.
+//!
+//! A report never waits for the look: a report made while it runs is the report as it stands,
+//! which before the first look ends is the default one (`looked_unix` 0). Nothing is locked while a collector runs. A look whose worker never ran, or
+//! died, ends as well and is tried again by the next report. Every look is a line of the daemon's
+//! log.
+
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use hostkeeper_link::{Dispatch, Log, MaintenanceSource, UnixClock};
+use hostkeeper_proto::hostkeeper::agent::v1 as pb;
+use hostkeeper_proto::maintenance::{
+    MAX_DUE, MAX_DUE_LABEL, MAX_DUE_VERSION, MAX_KERNEL_TEXT, MAX_LOOK_FAILED, MAX_OS_TEXT,
+    check_report,
+};
+
+use crate::Placement;
+use crate::maintenance_collect::{Collector, LinuxScope, Look, Section, clip};
+use crate::maintenance_own::{OwnPackages, PlacedPackages};
+
+/// How long after a look started the next one is due, in seconds.
+pub const LOOK_SECS: u64 = 60 * 60;
+
+/// How long after a look that failed, the first in a row, the next one is due, in seconds.
+pub const RETRY_SECS: u64 = 5 * 60;
+
+/// How long after the `failed`th look in a row that failed (from 1) ended the next one is due:
+/// [`RETRY_SECS`], doubled for each failure before it, at most [`LOOK_SECS`].
+#[must_use]
+pub fn retry_secs(failed: u32) -> u64 {
+    let doublings = failed.saturating_sub(1).min(u64::BITS - 1);
+    RETRY_SECS.saturating_mul(1 << doublings).min(LOOK_SECS)
+}
+
+/// What the sink keeps between two calls.
+#[derive(Default)]
+struct State {
+    /// The report of the last look that succeeded, with the reason of the last look when it
+    /// failed.
+    report: pb::MaintenanceReport,
+    /// Whether a look was started and has not ended.
+    running: bool,
+    /// The second from which the next look is due: [`LOOK_SECS`] after the last one started,
+    /// sooner after one that failed ([`retry_secs`]), and 0 (due at once) before the first and
+    /// after [`MaintenanceFacts::look_again`].
+    next_look_unix: u64,
+    /// How many looks in a row failed, up to the last one that ended.
+    failed_in_a_row: u32,
+}
+
+struct Inner {
+    collectors: Vec<Box<dyn Collector>>,
+    own: Box<dyn OwnPackages>,
+    scope: LinuxScope,
+    clock: Arc<dyn UnixClock>,
+    dispatch: Arc<dyn Dispatch>,
+    log: Arc<dyn Log>,
+    state: Mutex<State>,
+}
+
+/// The daemon's maintenance facts.
+pub struct MaintenanceFacts {
+    inner: Arc<Inner>,
+}
+
+/// A look that was started; the sink's `running` ends with it, however it ends, and also when its
+/// dispatcher drops the job without running it. A look that did not [`finish`](Running::finish)
+/// (its job was dropped, or its worker panicked) is due again at the next report.
+struct Running {
+    inner: Arc<Inner>,
+    finished: bool,
+}
+
+impl Running {
+    /// The look ended with an outcome, a report or a reason.
+    fn finish(mut self) {
+        self.finished = true;
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let mut state = self.inner.state();
+        state.running = false;
+        if !self.finished {
+            state.next_look_unix = 0;
+        }
+    }
+}
+
+impl MaintenanceFacts {
+    /// The sink over `collectors`, read in their order, and the packages `own` names, under
+    /// `scope`, over `clock` and `log`, whose looks run on `dispatch`.
+    #[must_use]
+    pub fn new(
+        collectors: Vec<Box<dyn Collector>>,
+        own: Box<dyn OwnPackages>,
+        scope: LinuxScope,
+        clock: Arc<dyn UnixClock>,
+        dispatch: Arc<dyn Dispatch>,
+        log: Arc<dyn Log>,
+    ) -> MaintenanceFacts {
+        MaintenanceFacts {
+            inner: Arc::new(Inner {
+                collectors,
+                own,
+                scope,
+                clock,
+                dispatch,
+                log,
+                state: Mutex::new(State::default()),
+            }),
+        }
+    }
+
+    /// The sink of a host under `scope` over `collectors` (on a host, its platform's:
+    /// [`crate::maintenance_collectors::at_host`]) and the packages recorded in the daemon's
+    /// `placed.json` ([`PlacedPackages`] of `placement`), its looks timed by `clock` and run on
+    /// `dispatch`; none when there is no collector, so that the host announces and sends nothing.
+    #[must_use]
+    pub fn of_host(
+        collectors: Vec<Box<dyn Collector>>,
+        placement: &Placement,
+        scope: LinuxScope,
+        clock: Arc<dyn UnixClock>,
+        dispatch: Arc<dyn Dispatch>,
+        log: Arc<dyn Log>,
+    ) -> Option<MaintenanceFacts> {
+        if collectors.is_empty() {
+            return None;
+        }
+        Some(MaintenanceFacts::new(
+            collectors,
+            Box::new(PlacedPackages::new(placement)),
+            scope,
+            clock,
+            dispatch,
+            log,
+        ))
+    }
+
+    /// A maintenance step ended, so what the host has installed changed: the next [`report`]
+    /// starts a look at once, also while one is running (the look after it starts at the first
+    /// report after it ends).
+    ///
+    /// [`report`]: MaintenanceSource::report
+    pub fn look_again(&self) {
+        self.inner.state().next_look_unix = 0;
+    }
+
+    /// Starts a look when one is due and none is running.
+    fn start_if_due(&self) {
+        let inner = &self.inner;
+        let now = inner.clock.unix_secs();
+        {
+            let mut state = inner.state();
+            if state.running || now < state.next_look_unix {
+                return;
+            }
+            state.running = true;
+            state.next_look_unix = now.saturating_add(LOOK_SECS);
+        }
+        let running = Running {
+            inner: Arc::clone(inner),
+            finished: false,
+        };
+        let worker = Arc::clone(inner);
+        inner.dispatch.start(Box::new(move || {
+            worker.look(now);
+            running.finish();
+        }));
+    }
+}
+
+impl Inner {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Looks at the host and keeps what it found, or why it could not, and logs it.
+    fn look(&self, started_unix: u64) {
+        match self.collect(started_unix) {
+            Ok(report) => {
+                let line = format!(
+                    "maintenance: looked: {} due, {} unparsed lines",
+                    report.due.len() + report.due_left_out as usize,
+                    report.unparsed_lines
+                );
+                let mut state = self.state();
+                state.report = report;
+                state.failed_in_a_row = 0;
+                drop(state);
+                self.log.line(&line);
+            }
+            Err(reason) => {
+                let reason = clip(&reason, MAX_LOOK_FAILED);
+                let ended_unix = self.clock.unix_secs();
+                let mut state = self.state();
+                state.report.look_failed.clone_from(&reason);
+                state.failed_in_a_row = state.failed_in_a_row.saturating_add(1);
+                let retry = ended_unix.saturating_add(retry_secs(state.failed_in_a_row));
+                state.next_look_unix = state.next_look_unix.min(retry);
+                drop(state);
+                self.log
+                    .line(&format!("error: maintenance: the look failed: {reason}"));
+            }
+        }
+    }
+
+    /// The report of a look that started at `started_unix`, or the reason it failed. No lock is
+    /// held while a collector runs.
+    fn collect(&self, started_unix: u64) -> Result<pb::MaintenanceReport, String> {
+        let own = self
+            .own
+            .names()
+            .map_err(|why| format!("own packages: {why}"))?;
+        let look = Look {
+            scope: self.scope,
+            own_packages: &own,
+        };
+        let sections = self
+            .collectors
+            .iter()
+            .map(|collector| {
+                collector
+                    .collect(&look)
+                    .map_err(|why| format!("{}: {why}", collector.name()))
+            })
+            .collect::<Result<Vec<Section>, String>>()?;
+        let report = join(sections, started_unix);
+        check_report(&report).map_err(|error| format!("report: {error}"))?;
+        Ok(report)
+    }
+}
+
+/// The report the `sections` make, in the order given, of a look that started at `looked_unix`,
+/// as the module says.
+fn join(sections: Vec<Section>, looked_unix: u64) -> pb::MaintenanceReport {
+    let mut host = pb::MaintenanceHost::default();
+    let mut report = pb::MaintenanceReport {
+        looked_unix,
+        ..pb::MaintenanceReport::default()
+    };
+    let mut due = Vec::new();
+    for section in sections {
+        fill_host(&mut host, &section.host);
+        report.xcodes.extend(section.xcodes);
+        if let Some(mac) = section.mac {
+            fill_mac(
+                report.mac.get_or_insert_with(pb::MacUpdateFacts::default),
+                mac,
+            );
+        }
+        due.extend(section.due);
+        report.unparsed_lines = report.unparsed_lines.saturating_add(section.unparsed);
+    }
+    host.os_name = clip(&host.os_name, MAX_OS_TEXT);
+    host.os_version = clip(&host.os_version, MAX_OS_TEXT);
+    host.os_build = clip(&host.os_build, MAX_OS_TEXT);
+    host.hardware_serial = clip(&host.hardware_serial, MAX_OS_TEXT);
+    host.running_kernel = clip(&host.running_kernel, MAX_KERNEL_TEXT);
+    host.newest_kernel = clip(&host.newest_kernel, MAX_KERNEL_TEXT);
+    host.boot_id = clip(&host.boot_id, MAX_KERNEL_TEXT);
+    report.host = Some(host);
+    let (kept, left_out) = order_due(due);
+    report.due = kept;
+    report.due_left_out = left_out;
+    report
+}
+
+/// Takes from `from` each host text `into` holds none of, and its boot time when `into` has none.
+fn fill_host(into: &mut pb::MaintenanceHost, from: &pb::MaintenanceHost) {
+    let texts = [
+        (&mut into.os_name, &from.os_name),
+        (&mut into.os_version, &from.os_version),
+        (&mut into.os_build, &from.os_build),
+        (&mut into.hardware_serial, &from.hardware_serial),
+        (&mut into.running_kernel, &from.running_kernel),
+        (&mut into.newest_kernel, &from.newest_kernel),
+        (&mut into.boot_id, &from.boot_id),
+    ];
+    for (held, found) in texts {
+        if held.is_empty() {
+            held.clone_from(found);
+        }
+    }
+    if into.boot_unix == 0 {
+        into.boot_unix = from.boot_unix;
+    }
+}
+
+/// Takes from `from` each Mac fact `into` holds none of, as [`Section`] says: a FileVault state
+/// other than unspecified, `authrestart_supported` true, a free size, an update account and Command
+/// Line Tools; and adds each of its device-management conflicts `into` does not hold yet.
+fn fill_mac(into: &mut pb::MacUpdateFacts, from: pb::MacUpdateFacts) {
+    if into.filevault == i32::from(pb::FileVaultState::Unspecified) {
+        into.filevault = from.filevault;
+    }
+    into.authrestart_supported |= from.authrestart_supported;
+    into.data_free_bytes = into.data_free_bytes.or(from.data_free_bytes);
+    if into.update_account.is_none() {
+        into.update_account = from.update_account;
+    }
+    if into.command_line_tools.is_none() {
+        into.command_line_tools = from.command_line_tools;
+    }
+    for conflict in from.mdm_conflicts {
+        if !into.mdm_conflicts.contains(&conflict) {
+            into.mdm_conflicts.push(conflict);
+        }
+    }
+}
+
+/// What is due, as the report keeps it: a reboot named twice kept once, the reboots first, then
+/// the security updates, then the rest, each group in the order found; the first [`MAX_DUE`], each
+/// text kept to its bound, and how many were left out.
+fn order_due(mut due: Vec<pb::DueItem>) -> (Vec<pb::DueItem>, u32) {
+    let reboot = i32::from(pb::MaintenanceKind::Reboot);
+    let mut seen = BTreeSet::new();
+    due.retain(|item| item.kind != reboot || seen.insert(item.label.clone()));
+    due.sort_by_key(|item| {
+        if item.kind == reboot {
+            0_u8
+        } else if item.security {
+            1
+        } else {
+            2
+        }
+    });
+    let left_out = u32::try_from(due.len().saturating_sub(MAX_DUE)).unwrap_or(u32::MAX);
+    due.truncate(MAX_DUE);
+    for item in &mut due {
+        item.from = clip(&item.from, MAX_DUE_VERSION);
+        item.to = clip(&item.to, MAX_DUE_VERSION);
+        item.label = clip(&item.label, MAX_DUE_LABEL);
+    }
+    (due, left_out)
+}
+
+impl MaintenanceSource for MaintenanceFacts {
+    fn report(&self) -> pb::MaintenanceReport {
+        self.start_if_due();
+        self.inner.state().report.clone()
+    }
+}
+
+#[cfg(test)]
+#[path = "maintenance_facts_tests.rs"]
+mod tests;

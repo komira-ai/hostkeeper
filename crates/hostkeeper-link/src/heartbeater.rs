@@ -37,9 +37,9 @@
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
 //!    order id and try the reply acknowledges is not sent again, and the step records are told
 //!    ([`ServiceRecords::acknowledged`]), so a record that keeps it to report stops; with
-//!    `halt-v1`, a halt
-//!    generation newer than the held one is raised in [`HeldHalts`]; and the order goes to the
-//!    executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
+//!    `halt-v1`, every halt
+//!    generation of the reply goes to [`HeldHalts`] with the one the reply before named, which
+//!    judges them against the halts the host holds; and the order goes to the executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
 //!    the reply advertises `repositories-v1` and the host has a sink (the sink's own checks are
 //!    its to make); a set from a coordinator that did not advertise the feature is dropped.
 //!    The host's facts of the reply go to the [`FactsSink`] next, before anything else of the
@@ -108,17 +108,22 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, Observed, PRIVATE_REPOSITORY,
-    Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, LocalHalt, MAINTENANCE,
+    OPERATOR_KEYS, Observed, PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
+    SSH, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::PushedSsh;
 use crate::names::Reason;
-use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
+use crate::order::{
+    Acknowledged, MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply, Verb,
+};
 use crate::ports::{
-    CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
-    OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
-    Sleeper, Tick, TrustedRootSource, UnixClock,
+    BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
+    Log, MaintainSink, MaintenanceSource, OperatorKeysSink, OrderSink, PrerequisitesSink,
+    RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, SerialConsoleSource,
+    ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -181,6 +186,30 @@ pub struct Ports {
     /// The host's facts file; none on a host that keeps none, which then announces no
     /// `facts-v1`, reports no generation and writes no facts.
     pub facts: Option<Arc<dyn FactsSink>>,
+    /// The Remote Login probe of a Mac's daemon; none on a host that runs none, which then sends
+    /// none.
+    pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+    /// The Full Disk Access state; none on a host that reports none.
+    pub full_disk_access: Option<Arc<dyn crate::full_disk_access::FullDiskAccessSource>>,
+    /// The managed block of the login account's `authorized_keys`; none on a host that keeps
+    /// none, which then announces no `operator-keys-v1`, sends no report and writes no keys.
+    pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host's sshd setup; none on a host that has none (a Mac, for now), which then
+    /// announces no `ssh-v1`, reports nothing and sets nothing up.
+    pub ssh: Option<Arc<dyn SshSink>>,
+    /// The host prerequisites of the host's group; none on a host that keeps none, which then
+    /// announces no `prerequisites-v1`, sends no report and is sent no set.
+    pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
+    /// The host's BMC; none on a host whose daemon reads none (a Mac), which then sends none.
+    pub bmc: Option<Arc<dyn BmcSource>>,
+    /// The host's serial console baseline; none on a host whose config names no port.
+    pub serial_console: Option<Arc<dyn SerialConsoleSource>>,
+    /// The host's maintenance facts; none on a host that has no collector, which then announces
+    /// no `maintenance-v1` and sends no report; nor does a host with no [`Ports::maintain`].
+    pub maintenance: Option<Arc<dyn MaintenanceSource>>,
+    /// The daemon's runner of `maintain` orders; none on a host that runs none, which then
+    /// announces no `maintenance-v1`.
+    pub maintain: Option<Arc<dyn MaintainSink>>,
 }
 
 /// What one heartbeat came to.
@@ -212,6 +241,9 @@ pub struct Heartbeater {
     book: Book,
     /// The features of the last reply.
     advertised: Features,
+    /// The halt generations of the last `halt-v1` reply, by service (one it did not name was 0);
+    /// none before the first since the loop started.
+    halts_before: Option<BTreeMap<String, u64>>,
     /// The verdicts not yet acknowledged, by service, oldest first, one per order id and try.
     pending: BTreeMap<String, Vec<OrderResult>>,
     /// The verdicts acknowledged, by service, the last [`ACKED_KEPT`] of them: a step record
@@ -240,6 +272,7 @@ impl Heartbeater {
             ports,
             book,
             advertised: Features::default(),
+            halts_before: None,
             pending: BTreeMap::new(),
             acked: BTreeMap::new(),
             started: BTreeMap::new(),
@@ -503,6 +536,11 @@ impl Heartbeater {
                 record_try,
                 installer,
                 drift: observation.drift,
+                local_halt: self
+                    .ports
+                    .halts
+                    .holding(&name)
+                    .map(|held| LocalHalt::at(held, now)),
                 name,
             });
         }
@@ -545,13 +583,37 @@ impl Heartbeater {
                 .map_or_else(|| self.config.installers.clone(), |sink| sink.installers()),
             repositories: self.ports.repositories.as_ref().map(|sink| sink.report()),
             facts_generation: self.ports.facts.as_ref().and_then(|sink| sink.generation()),
+            remote_login_probe: self
+                .ports
+                .remote_login_probe
+                .as_ref()
+                .and_then(|source| source.remote_login_probe()),
+            full_disk_access: crate::full_disk_access::read(self.ports.full_disk_access.as_ref()),
+            operator_keys: self.ports.operator_keys.as_ref().map(|sink| sink.report()),
+            ssh: self.ports.ssh.as_ref().and_then(|sink| sink.report()),
+            prerequisites: self.ports.prerequisites.as_ref().map(|sink| sink.report()),
+            bmc: self.ports.bmc.as_ref().and_then(|source| source.bmc()),
+            serial_console: self.ports.serial_console.as_ref().and_then(|s| s.report()),
+            maintenance: self
+                .ports
+                .maintenance
+                .as_ref()
+                .filter(|_| self.maintains())
+                .map(|source| source.report()),
         })
     }
 
     /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
     /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
     /// `private-repository-v1` when it has a repository configuration or is told it reads
-    /// private repositories.
+    /// private repositories, `operator-keys-v1` when it keeps operator keys, and
+    /// `prerequisites-v1` when it keeps host prerequisites, and `ssh-v1` when it sets sshd up and
+    /// the coordinator's last reply advertised `ssh-v1`, and `maintenance-v1` when it reads the
+    /// host's maintenance and the last reply advertised `maintenance-v1`: a coordinator of a
+    /// release before `ssh-v1` reads at most 16 names and drops a longer list whole, and a daemon
+    /// with every port names 17 to it (18 to one that advertises `maintenance-v1`). A daemon that
+    /// reads the host's maintenance but has no runner of `maintain` orders announces no
+    /// `maintenance-v1`.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
@@ -563,7 +625,27 @@ impl Heartbeater {
         if self.ports.repositories.is_some() || self.config.private_repository {
             features.push(PRIVATE_REPOSITORY);
         }
+        if self.ports.operator_keys.is_some() {
+            features.push(OPERATOR_KEYS);
+        }
+        if self.ports.prerequisites.is_some() {
+            features.push(PREREQUISITES);
+        }
+        if self.ports.ssh.is_some() && self.advertised.has(Feature::SshV1) {
+            features.push(SSH);
+        }
+        if self.maintains() {
+            features.push(MAINTENANCE);
+        }
         features
+    }
+
+    /// Whether the heartbeat announces `maintenance-v1` and sends the maintenance report: the
+    /// host reads its maintenance and runs `maintain` orders, and the last reply advertised it.
+    fn maintains(&self) -> bool {
+        self.ports.maintenance.is_some()
+            && self.ports.maintain.is_some()
+            && self.advertised.has(Feature::MaintenanceV1)
     }
 
     /// The verdict of `name` the heartbeat carries: of those not yet acknowledged, the oldest to
@@ -612,6 +694,7 @@ impl Heartbeater {
             record_try: None,
             installer: None,
             drift: None,
+            local_halt: None,
             name,
         }
     }
@@ -625,12 +708,29 @@ impl Heartbeater {
             acknowledged,
             repositories,
             facts,
+            operator_keys,
+            ssh,
+            prerequisites,
+            maintain,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
+        self.set_ssh_up(ssh);
         if let Some(set) = repositories
             && self.advertised.has(Feature::RepositoriesV1)
             && let Some(sink) = &self.ports.repositories
+        {
+            sink.apply(&set);
+        }
+        if let Some(keys) = operator_keys
+            && self.advertised.has(Feature::OperatorKeysV1)
+            && let Some(sink) = &self.ports.operator_keys
+        {
+            sink.apply(&keys);
+        }
+        if let Some(set) = prerequisites
+            && self.advertised.has(Feature::PrerequisitesV1)
+            && let Some(sink) = &self.ports.prerequisites
         {
             sink.apply(&set);
         }
@@ -675,9 +775,22 @@ impl Heartbeater {
             }
         }
         if self.advertised.has(Feature::HaltV1) {
+            let before = self.halts_before.take();
             for (service, generation) in &halt_generations {
-                self.raise_halt(service, *generation);
+                let named = before
+                    .as_ref()
+                    .map(|before| before.get(service.as_str()).copied().unwrap_or(0));
+                self.heard_halt(service, named, *generation);
             }
+            self.halts_before = Some(
+                halt_generations
+                    .into_iter()
+                    .map(|(service, generation)| (service.as_str().to_owned(), generation))
+                    .collect(),
+            );
+        }
+        if let Some(order) = maintain {
+            self.give_maintain(order);
         }
         if let Some(order) = order {
             if facts_held || matches!(order.verb, Verb::Abort(_)) {
@@ -693,6 +806,33 @@ impl Heartbeater {
         }
     }
 
+    /// Hands a `maintain` order to the [`MaintainSink`] on a worker, when the reply advertises
+    /// `maintenance-v1` and the host has a sink; otherwise says it is not run. It touches no
+    /// service's order state and waits for no facts.
+    fn give_maintain(&self, order: MaintainOrder) {
+        let named = format!(
+            "maintain order {} try {}",
+            order.id.as_str(),
+            order.order_try
+        );
+        let Some(sink) = &self.ports.maintain else {
+            self.log(&format!(
+                "{named} is not run: this host has no runner of it"
+            ));
+            return;
+        };
+        if !self.advertised.has(Feature::MaintenanceV1) {
+            self.log(&format!(
+                "{named} is not run: the coordinator does not advertise maintenance-v1"
+            ));
+            return;
+        }
+        let sink = Arc::clone(sink);
+        self.ports
+            .dispatch
+            .start(Box::new(move || sink.maintain(&order)));
+    }
+
     /// Gives the host's `facts` of a reply to the [`FactsSink`], when the reply advertises
     /// `facts-v1` and the host has a sink: whether the facts file holds them, or true when there
     /// was nothing to write. Facts from a coordinator that did not advertise the feature are
@@ -706,14 +846,23 @@ impl Heartbeater {
         }
     }
 
-    /// Raises the held halt generation of `service` to `generation` when it is newer: an equal
-    /// or older one lifts nothing. The held value is read from the store each time, never kept.
-    fn raise_halt(&self, service: &ServiceName, generation: u64) {
-        if generation > self.ports.halts.held(service)
-            && let Err(e) = self.ports.halts.raise(service, generation)
+    /// Gives the host's SSH access of a reply to the [`SshSink`], when the reply advertises
+    /// `ssh-v1` and the host has a sink. It gates nothing: an order is acted on whatever came of
+    /// the setup. Access from a coordinator that did not advertise the feature is dropped.
+    fn set_ssh_up(&self, access: Option<PushedSsh>) {
+        if let (Some(access), Some(sink)) = (access, &self.ports.ssh)
+            && self.advertised.has(Feature::SshV1)
         {
+            sink.apply(&access);
+        }
+    }
+
+    /// Hands the halt generation `generation` of `service`, and the one the reply before named
+    /// (`before`), to the store, which alone judges what they do to a halt the host holds.
+    fn heard_halt(&self, service: &ServiceName, before: Option<u64>, generation: u64) {
+        if let Err(e) = self.ports.halts.heard(service, before, generation) {
             self.log(&format!(
-                "error: halt generation {generation} of {service} is not written: {e}"
+                "error: halt generation {generation} of {service} is not taken: {e}"
             ));
         }
     }

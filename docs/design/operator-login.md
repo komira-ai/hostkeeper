@@ -38,7 +38,7 @@ revoked person means editing it again. Nothing records a sign-in or a sign-out.
   hours, whichever comes first, or when the person signs out, or when an admin disables the user or resets the password.
 - Any admin creates and disables users, sets a temporary password for a user who forgot theirs, and creates and
   revokes API tokens, all in the UI (section 7). Every one of those, and every login, is in the audit log (section 8).
-- API tokens stay what they are, named bearer tokens for `hkctl`, CI and scripts. They can now be created and
+- API tokens stay what they are, named bearer tokens for `hk`, CI and scripts. They can now be created and
   revoked in the UI, and the ones in the tokens file are listed there too, read-only.
 
 **What does not change.** Every operator method, its request and its answer. A bearer call is authenticated exactly
@@ -64,7 +64,8 @@ All of this is **Built** and was read from `main`.
   `Caller::Ci` or `Caller::Anonymous`, and every operator call takes its audit `by` from the name.
 - **The UI** (`ui.rs`, `ui/`). A static file server for `/ui/`: it parses no token, holds no state, and its header
   says "no cookie and no session". Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: no-referrer` and the policy `default-src 'self'; frame-ancestors 'none'`; there are no
+  `Referrer-Policy: no-referrer` and the policy `default-src 'self'; frame-ancestors 'none'` (since the console's C5, with
+  `connect-src`, `style-src` and `img-src` added, [ui-serving.md](../ui-serving.md)); there are no
   `Access-Control-*` headers. The page keeps the token in `ui/session.js` and `ui/api.js` posts JSON to
   `/<package>.<Service>/<Method>` with `Authorization: Bearer`.
 - **Listeners.** The private listener (TLS, one interface) serves the operator API, the gateway and `/ui/`; the
@@ -99,7 +100,8 @@ All of it runs in `hostkeeper-coordinator serve`; hostkeeper adds no process, no
 Sessions live in memory, not in the store. A coordinator restart signs everyone out, which is a minute's cost on a
 service that restarts rarely and keeps a table, its migration and a write per request out of the design. If the
 standby of [coordinator-storage.md](coordinator-storage.md) section 7 is ever built, sessions are the first thing it
-revisits.
+revisits. Superseded over a database by [coordinator-multi-instance.md](coordinator-multi-instance.md), section 8 (built): there
+the session table and the limiter's counts are rows, and a restart signs nobody out; over the files they stay in memory.
 
 ## 4. The first admin
 
@@ -225,8 +227,9 @@ not. So the two credentials are handled differently, in one place, where `bearer
 of them stops the classic forged form post, and the header stops everything the other two let through (an old browser
 without `Sec-Fetch-Site`, a same-site sibling).
 
-**Headers.** The policy `default-src 'self'; frame-ancestors 'none'` stays as it is: the UI has no inline script and
-the form is plain. The login routes answer `Cache-Control: no-store`.
+**Headers.** The policy `default-src 'self'; frame-ancestors 'none'` stayed as it was for the login: the UI has no inline
+script and the form is plain. (The console's C5 later added `connect-src`, `style-src` and `img-src`; script is still
+`'self'` alone, [ui-serving.md](../ui-serving.md).) The login routes answer `Cache-Control: no-store`.
 
 ### 5.4 Failures and limits
 
@@ -326,6 +329,19 @@ token is created. An API token acts as the operator named by its name; it can ca
 the existing tokens can call every operator method, and that is the same "every operator is equal" rule. A token
 cannot log in: the login route reads passwords only.
 
+**Changed (Built, tokens with owners).** An API token belongs to a user, its owner: the user `ApiTokens.Create`'s
+`owner` names (any user; refused `unknown_owner` for a name that is no user's), or else the caller (a signed-in user,
+or the owner of the caller's token; a token of the tokens file must name an owner). The token acts as its owner:
+`Coordinator::operator` resolves it to `Operator { name: owner, api_token: Some(token) }`, so every check of who may
+do what (the console operators file, the SSH operators file, a reset of one's own password) reads the owner's name,
+and the audit records the owner as `by` and the token as the entry's `api_token` (the file's `detail.api_token`, the
+`audit` table's column of migration `0027`, `AuditEntry.api_token` of `Audit.List`, and an SSH certificate's issue
+line). A token whose owner is disabled is refused from that call on, and works again once the owner is enabled;
+deleting the owner removes their tokens, each audited `api_token_revoke` with the reason `owner deleted`. A console
+stream or SSH tunnel attached with a token closes `token_revoked` at the next sweep or poll once the token is revoked
+or its owner disabled. A stored record written before owners (no `owner` key) reads as owned by its `created_by`.
+A token of the tokens file has no owner and acts as the operator it is named for, as before.
+
 Names are one namespace for users and tokens, because the audit's `by` is the name and `alice` must not mean two
 things. A token or user named like an existing one is refused, and the files' own check (no duplicate names) covers
 the tokens file side.
@@ -347,23 +363,24 @@ build ignores both, and the existing `Audit.List` filters work unchanged.
 | `user_bootstrap` | `coordinator` | the user | a file was adopted (section 4) |
 | `initial_password_expired` | `coordinator` | the user | the hour passed |
 | `user_create`, `user_disable`, `user_enable`, `user_delete` | the admin | the user | `Users` calls |
-| `api_token_create`, `api_token_revoke` | the admin | the token | `ApiTokens` calls |
+| `api_token_create`, `api_token_revoke` | the admin | the token | `ApiTokens` calls; a create's reason is `owner <name>`, a revoke made by deleting the owner's `owner deleted` |
 
 Every other operator call is audited as today, `by` the user's name or the token's, so "who did that" has the same
-answer for a person and for a script. A password, a hash, a session id and a token are never in an entry, and a
+answer for a person and for a script. A call made with an API token is by its owner, with the token in `api_token`
+(section 7.2), so a person and their scripts are one `by`. A password, a hash, a session id and a token are never in an entry, and a
 failure's audit text does not say which part was wrong. `Actor::of(by)` already maps any other name to Operator.
 
 ## 9. Migration from the tokens file
 
 1. Deploy the new coordinator build with the new flags (section 10). Nothing in a running setup changes: the tokens
-   `ceo` and `engineering` still log in as bearers, `hkctl` and CI still work, and the UI lists them read-only.
+   `ceo` and `engineering` still log in as bearers, `hk` and CI still work, and the UI lists them read-only.
 2. The deploy script mints the first admin (section 4). The admin changes the password, creates a user for each person,
    and gives each their temporary password.
 3. For automation, the admin creates API tokens in the UI, hands them to their users, and removes the matching entries
    from the tokens file. The deploy script's tokens-file step becomes optional (a komira change, K1 below), so a farm
    whose tokens are all in the store runs without `--tokens-file`.
 4. The pasted-token form leaves the UI in the same pull request that adds the password form (L6): a person with only a
-   token uses `hkctl`, which has always been the supported way for a script.
+   token uses `hk`, which has always been the supported way for a script.
 
 No format changes: the tokens file is read as now, the new store tables are new tables, the operator messages gain
 only new services and fields. Running the previous release on a store the new one wrote works because the old
@@ -424,7 +441,7 @@ never logs a request body.
 | Two admins change a password at once | one wins by the store's write; the other sees `current` fail | the store's single-writer commit |
 | An admin disables themself | refused if it is the last enabled user | check in `Users.Disable` |
 | A user is disabled while signed in | their next call is 401 | sessions end at disable |
-| A coordinator restart | every session ends; the sign-in form shows | sessions are in memory |
+| A coordinator restart | over the files every session ends and the sign-in form shows; over a database nothing ends | sessions are in memory, or rows of the database (coordinator-multi-instance.md, section 8) |
 | Postgres is down | login answers 503 `store_unreachable`; bearer tokens from the tokens file still work; stored tokens and users do not | tokens file is a file; the store's health gate (coordinator-storage.md section 5) |
 | A clock steps back | sessions live longer until the clock catches up; no session is created with a past deadline | deadlines are absolute times from the injected clock, with a saturating compare |
 | The same name as a token and a user | refused at creation | one namespace |

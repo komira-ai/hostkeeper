@@ -5,8 +5,7 @@
 
 use super::lint::{WRITE_ALLOWED, lint};
 use super::release::{
-    PLAN_IF, PLAN_RUN, PUBLISH_GROUP, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF,
-    publish_problems,
+    PLAN_RUN, PUBLISH_GROUP, RELEASE_EXEMPT, RELEASE_GROUP, RELEASE_IF, SIGN_IF, publish_problems,
 };
 use super::{CLEAN, push_only, with, with_in, workflows};
 
@@ -136,23 +135,28 @@ fn only_the_attest_job_holds_id_token_write() {
         .filter(|a| a.scope == "id-token" || a.scope == "attestations")
         .map(|a| (a.file, a.job))
         .collect();
-    // The two other jobs with `id-token: write` sign nothing, and hold no `attestations` scope:
-    // the coordinator wait of release.yml holds it for the tailnet join (coordinator_wait_tests.rs),
-    // and the control-plane deploy for the OIDC tokens of its requests (cp_deploy_tests.rs).
+    // The other jobs with `id-token: write` hold no `attestations` scope: the coordinator wait of
+    // release.yml holds it for the tailnet join (coordinator_wait_tests.rs), the control-plane
+    // deploy for the OIDC tokens of its requests (cp_deploy_tests.rs), and the farm build of the
+    // macOS programs for its tailnet join, in mac-farm.yml, whose token names that file as its
+    // signer, not artifacts.yml (mac_farm_tests.rs); artifacts.yml's job compile-macos-farm only
+    // grants it the scope.
     assert_eq!(
         signers,
         [
             ("artifacts.yml", "attest"),
             ("artifacts.yml", "attest"),
             ("release.yml", "coordinator"),
-            ("release.yml", "cp-deploy")
+            ("release.yml", "cp-deploy"),
+            ("artifacts.yml", "compile-macos-farm"),
+            ("mac-farm.yml", "compile"),
         ]
     );
-    assert!(
-        WRITE_ALLOWED
-            .iter()
-            .all(|a| (a.job != "coordinator" && a.job != "cp-deploy") || a.scope == "id-token")
-    );
+    assert!(WRITE_ALLOWED.iter().all(|a| (a.job != "coordinator"
+        && a.job != "cp-deploy"
+        && a.job != "compile-macos-farm"
+        && a.job != "compile")
+        || a.scope == "id-token"));
     let version_job = "  version:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read\n";
     let text = with_in(
         &workflow("artifacts.yml"),
@@ -223,18 +227,18 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         "job verify: `contents: write` is not allowed in release.yml",
     );
-    let plan = "      actions: read\n      issues: write\n";
+    let plan = "      contents: read\n      actions: read\n    outputs:\n      release:";
     let text = with_in(
         &workflow("release.yml"),
         plan,
-        &format!("{plan}      contents: write\n"),
+        &plan.replace("    outputs:", "      contents: write\n    outputs:"),
     );
     assert_refused(
         "release.yml",
         &text,
         "job plan: `contents: write` is not allowed in release.yml",
     );
-    let attest = "      id-token: write\n";
+    let attest = "      id-token: write\n      attestations: write\n";
     let text = with_in(
         &workflow("artifacts.yml"),
         attest,
@@ -245,11 +249,11 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         "job attest: `contents: write` is not allowed in artifacts.yml",
     );
-    let publish = format!("    needs: [plan, verify]\n    if: {RELEASE_IF}\n");
+    let publish = format!("  publish:\n    needs: [plan, verify]\n    if: {RELEASE_IF}\n");
     let text = with_in(
         &workflow("release.yml"),
         &publish,
-        "    needs: [plan, verify]\n    if: ${{ always() }}\n",
+        "  publish:\n    needs: [plan, verify]\n    if: ${{ always() }}\n",
     );
     assert_refused(
         "release.yml",
@@ -261,16 +265,16 @@ fn publish_job_alone_holds_contents_write() {
         &text,
         &format!("release.yml: job publish needs the exact `if: {RELEASE_IF}`"),
     );
-    // The plan opens the issue of a held release under its own exact condition.
+    // The plan writes nothing: an issue write is no longer allowed it under any condition.
     let text = with_in(
         &workflow("release.yml"),
-        &format!("    if: {PLAN_IF}\n"),
-        &format!("    if: {}\n", PLAN_IF.replacen("&&", "||", 1)),
+        plan,
+        &plan.replace("    outputs:", "      issues: write\n    outputs:"),
     );
     assert_refused(
         "release.yml",
         &text,
-        &format!("job plan: `issues: write` needs the exact `if: {PLAN_IF}`"),
+        "job plan: `issues: write` is not allowed in release.yml",
     );
 }
 
@@ -395,16 +399,22 @@ fn a_workflow_that_publishes_outside_the_release_group_is_refused() {
     );
     assert_eq!(publish_problems("ci.yml", &commented), Vec::<String>::new());
     assert_eq!(publish_problems("ci.yml", CLEAN), Vec::<String>::new());
+    let want = "artifacts.yml: concurrency must be group artifacts-${{ github.sha }}-${{ github.event_name }}, cancel-in-progress false";
+    let committed = "  group: artifacts-${{ github.sha }}-${{ github.event_name }}\n";
     let shared = with_in(
         &workflow("artifacts.yml"),
-        "  group: artifacts-${{ github.sha }}\n",
+        committed,
         "  group: artifacts\n",
     );
-    assert_refused(
-        "artifacts.yml",
-        &shared,
-        "artifacts.yml: concurrency must be group artifacts-${{ github.sha }}, cancel-in-progress false",
+    assert_refused("artifacts.yml", &shared, want);
+    // Catches: a run by hand at main's commit in the push run's group, where, pending, it
+    // would replace that push run.
+    let per_commit = with_in(
+        &workflow("artifacts.yml"),
+        committed,
+        "  group: artifacts-${{ github.sha }}\n",
     );
+    assert_refused("artifacts.yml", &per_commit, want);
     for (file, reason) in RELEASE_EXEMPT {
         assert!(
             !reason.trim().is_empty(),
@@ -418,18 +428,29 @@ fn a_workflow_that_publishes_outside_the_release_group_is_refused() {
 }
 
 #[test]
-fn release_workflow_run_names_exactly_the_three_required_workflows() {
-    // Catches: a release that no longer waits for one of ci, privileged and artifacts (a red
-    // privileged run would no longer hold it), or that starts for a run on another branch.
+fn release_workflow_run_names_exactly_the_two_required_workflows() {
+    // Catches: a release that no longer starts on the completion of the unit tests or the
+    // build, one that starts on (and so reads as waiting for) a slow suite such as the
+    // privileged tests, or one that starts for a run on another branch.
     let text = with_in(
         &release_yml(),
-        "workflows: [ci, privileged, artifacts]",
         "workflows: [ci, artifacts]",
+        "workflows: [ci]",
     );
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: workflow_run.workflows is [\"artifacts\", \"ci\"], not [\"artifacts\", \"ci\", \"privileged\"]",
+        "release.yml: workflow_run.workflows is [\"ci\"], not [\"artifacts\", \"ci\"]",
+    );
+    let text = with_in(
+        &release_yml(),
+        "workflows: [ci, artifacts]",
+        "workflows: [ci, privileged, artifacts]",
+    );
+    assert_refused(
+        "release.yml",
+        &text,
+        "release.yml: workflow_run.workflows is [\"artifacts\", \"ci\", \"privileged\"], not [\"artifacts\", \"ci\"]",
     );
     let text = with_in(
         &release_yml(),
@@ -559,8 +580,8 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
     // no longer running the binary it is about to release.
     let text = with_in(
         &workflow("release.yml"),
-        "    needs: [plan, verify]\n",
-        "    needs: [plan]\n",
+        "  publish:\n    needs: [plan, verify]\n",
+        "  publish:\n    needs: [plan]\n",
     );
     assert_refused(
         "release.yml",
@@ -828,47 +849,6 @@ fn attest_job_attests_every_package_for_every_platform_and_copies_each_bundle() 
         "artifacts.yml",
         &text,
         "job attest does not attest hello_<version>_arm64.deb",
-    );
-}
-
-#[test]
-fn attest_job_attests_the_command_line_and_copies_its_bundle() {
-    // Catches: a release asset list that names the bundle of `hkctl-<version>` while
-    // artifacts.yml has no step that signs it, one that signs another file under its name, or
-    // one that copies the bundle of another step beside it.
-    let hkctl = attest_steps(
-        "hkctl",
-        "Name the bundle of the command line",
-        "hkctl-${V}",
-        "hkctl-${{ needs.version.outputs.version }}",
-    );
-    let text = workflow("artifacts.yml");
-    assert!(
-        text.contains(&hkctl),
-        "the helper writes the steps as the file has them"
-    );
-    assert_refused(
-        "artifacts.yml",
-        &with_in(&text, &hkctl, ""),
-        "artifacts.yml: job attest does not attest hkctl-<version> (a provenance step with an id and the subject-path dist/hkctl-${{ needs.version.outputs.version }})",
-    );
-    assert_refused(
-        "artifacts.yml",
-        &with_in(
-            &text,
-            "subject-path: dist/hkctl-${{ needs.version.outputs.version }}",
-            "subject-path: dist/hkctl",
-        ),
-        "artifacts.yml: job attest does not attest hkctl-<version>",
-    );
-    assert_refused(
-        "artifacts.yml",
-        &with_in(
-            &text,
-            "steps.hkctl.outputs.bundle-path",
-            "steps.netboot.outputs.bundle-path",
-        ),
-        "artifacts.yml: job attest does not copy the bundle of hkctl-<version> from the step hkctl to dist/hkctl-${V}.sigstore.json",
     );
 }
 

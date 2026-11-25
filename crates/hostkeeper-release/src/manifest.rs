@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 
 use hostkeeper_config::manifest::{
     BadHostkeeperVersion, HealthUrlError, HostkeeperVersion, REFUSED_PREFIXES, check_health_url,
-    is_boot_step,
+    is_boot_step, is_drain_step, is_resume_step,
 };
 use hostkeeper_config::names::{
     PathError, ServiceName, UnitError, UnitName, check_path, check_relative, is_within,
@@ -102,13 +102,54 @@ pub enum ManifestError {
     },
     /// `hook.boot` is not the name of an additive step.
     #[error(
-        "hook.boot {0:?} is not the name of an additive step: 1 to 64 of a-z, 0-9 and `_`, and none of prepare, cutover, verify, rollback, cleanup, uninstall"
+        "hook.boot {0:?} is not the name of an additive step: 1 to 64 of a-z, 0-9 and `_`, and none of prepare, cutover, verify, rollback, cleanup, uninstall, drain, resume"
     )]
     Boot(String),
     /// `hook.boot` with an empty `command` ([`check_hook_of`]), whatever the installer: the
     /// built-in steps have no additive step.
     #[error("hook.boot {0:?} needs a hook.command; the built-in steps have no boot step")]
     BootWithoutCommand(String),
+    /// `hook.drain` or `hook.resume` is not the name of its step.
+    #[error(
+        "hook.{field} {name:?} is not the name of the {field} step: {field} itself, or 1 to 64 of a-z, 0-9 and `_` and none of prepare, cutover, verify, rollback, cleanup, uninstall, drain, resume"
+    )]
+    MaintenanceStep {
+        /// `drain` or `resume`.
+        field: &'static str,
+        /// The name as given.
+        name: String,
+    },
+    /// One of `hook.drain` and `hook.resume` without the other: a service a maintenance run
+    /// takes out of service must be put back by the same hook.
+    #[error("hook.{given} {name:?} needs a hook.{missing}; drain and resume go together")]
+    MaintenancePair {
+        /// The field given.
+        given: &'static str,
+        /// The field missing.
+        missing: &'static str,
+        /// The name the given field holds.
+        name: String,
+    },
+    /// Two of `hook.boot`, `hook.drain` and `hook.resume` name one step, which would run it for
+    /// both (a daemon's start draining the host, a resume draining it).
+    #[error("hook.{first} and hook.{second} both name the step {name:?}")]
+    StepNamedTwice {
+        /// The first field, in the order boot, drain, resume.
+        first: &'static str,
+        /// The second.
+        second: &'static str,
+        /// The name both hold.
+        name: String,
+    },
+    /// `hook.drain` or `hook.resume` with an empty `command` ([`check_hook_of`]), whatever the
+    /// installer: the built-in steps have no drain or resume step.
+    #[error("hook.{field} {name:?} needs a hook.command; the built-in steps have no {field} step")]
+    MaintenanceWithoutCommand {
+        /// `drain` or `resume`.
+        field: &'static str,
+        /// The name as given.
+        name: String,
+    },
     /// `hook.timeout_secs` is absent.
     #[error("hook.timeout_secs is missing")]
     NoStepBounds,
@@ -337,8 +378,9 @@ pub fn check_for(
 /// The rules of the hook that depend on the entry's installer. `hook.command` may be empty for
 /// every installer (the built-in steps). When it is not, its program is an absolute path of
 /// plain names (the file a native package installs) on a native entry, and a relative path of
-/// plain names (a file of the staged tree) on any other; its arguments are free. `hook.boot`
-/// needs a `hook.command` for every installer, since the built-in steps have no boot step. The
+/// plain names (a file of the staged tree) on any other; its arguments are free. `hook.boot`,
+/// `hook.drain` and `hook.resume` need a `hook.command` for every installer, since the built-in
+/// steps have none of them. The
 /// coordinator applies it to every entry ([`crate::target::check_entry`], native by
 /// [`crate::target::is_native_entry`]), the daemon in [`check_for`] (native by
 /// [`Installer::is_native`]).
@@ -347,8 +389,18 @@ pub fn check_hook_of(native: bool, manifest: &Manifest) -> Result<(), ManifestEr
         return Ok(());
     };
     let Some(program) = hook.command.first() else {
-        return match &hook.boot {
-            Some(name) => Err(ManifestError::BootWithoutCommand(name.clone())),
+        if let Some(name) = &hook.boot {
+            return Err(ManifestError::BootWithoutCommand(name.clone()));
+        }
+        let maintenance = [("drain", &hook.drain), ("resume", &hook.resume)];
+        return match maintenance
+            .into_iter()
+            .find_map(|(field, name)| Some((field, name.as_ref()?)))
+        {
+            Some((field, name)) => Err(ManifestError::MaintenanceWithoutCommand {
+                field,
+                name: name.clone(),
+            }),
             None => Ok(()),
         };
     };
@@ -371,6 +423,53 @@ pub fn min_hostkeeper(manifest: &Manifest) -> Result<HostkeeperVersion, Manifest
     HostkeeperVersion::parse(&manifest.min_hostkeeper).map_err(ManifestError::MinHostkeeper)
 }
 
+/// `hook.drain` and `hook.resume`: each of its step's grammar ([`is_drain_step`],
+/// [`is_resume_step`]), both or neither, and no step named by two of `boot`, `drain` and
+/// `resume`.
+fn maintenance_steps(hook: &Hook) -> Result<(), ManifestError> {
+    let named = [
+        ("drain", &hook.drain, is_drain_step as fn(&str) -> bool),
+        ("resume", &hook.resume, is_resume_step),
+    ];
+    for (field, name, rule) in named {
+        if let Some(name) = name.as_ref().filter(|name| !rule(name)) {
+            return Err(ManifestError::MaintenanceStep {
+                field,
+                name: name.clone(),
+            });
+        }
+    }
+    let pair = match (&hook.drain, &hook.resume) {
+        (Some(name), None) => Some(("drain", "resume", name)),
+        (None, Some(name)) => Some(("resume", "drain", name)),
+        _ => None,
+    };
+    if let Some((given, missing, name)) = pair {
+        return Err(ManifestError::MaintenancePair {
+            given,
+            missing,
+            name: name.clone(),
+        });
+    }
+    let pairs = [
+        ("boot", &hook.boot, "drain", &hook.drain),
+        ("boot", &hook.boot, "resume", &hook.resume),
+        ("drain", &hook.drain, "resume", &hook.resume),
+    ];
+    for (first, one, second, other) in pairs {
+        if let (Some(name), Some(other)) = (one, other)
+            && name == other
+        {
+            return Err(ManifestError::StepNamedTwice {
+                first,
+                second,
+                name: name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn counts(manifest: &Manifest) -> Result<(), ManifestError> {
     let over = [
         ("run", manifest.run.len(), MAX_RUN),
@@ -390,12 +489,14 @@ fn counts(manifest: &Manifest) -> Result<(), ManifestError> {
     }
 }
 
-/// The hook: its boot step's name and its bounds as `[hook]` has them today. The shape of its
-/// program, and a boot step without one, depend on the installer ([`check_hook_of`]).
+/// The hook: its boot, drain and resume steps' names and its bounds as `[hook]` has them today.
+/// The shape of its program, and an additive step without one, depend on the installer
+/// ([`check_hook_of`]).
 fn check_hook(hook: &Hook) -> Result<(), ManifestError> {
     if let Some(name) = hook.boot.as_ref().filter(|name| !is_boot_step(name)) {
         return Err(ManifestError::Boot(name.clone()));
     }
+    maintenance_steps(hook)?;
     let bounds = hook.timeout_secs.ok_or(ManifestError::NoStepBounds)?;
     let zero = [
         ("cutover", bounds.cutover),

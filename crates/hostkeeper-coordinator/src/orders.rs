@@ -2,14 +2,16 @@
 //! operator's, which go instead of the rollout gate's update (an `abort` an operator queued,
 //! `Hosts.Abort`, a `clear_record` one queued, `Hosts.ClearRecord` ([`crate::clear_record`]),
 //! and the `force` of a standing force, [`crate::force`]); the gate's update
-//! itself, with the terms the JSON answer carries ([`Order::Update`]); and the gate's own
-//! `install` and `uninstall` ([`crate::decide`]).
+//! itself, with the terms the JSON answer carries ([`Order::Update`]); the gate's own
+//! `install` and `uninstall` ([`crate::decide`]); and a maintenance run's `maintain`
+//! ([`crate::decide_maintenance`]).
 //!
 //! They go only over a transport that carries typed orders
 //! ([`crate::service::Coordinator::heartbeat_with_orders`], the `Order` of
 //! `hostkeeper.agent.v1`), and only to a daemon that announced the order's feature: [`ABORT_FEATURE`]
 //! for an abort, [`crate::clear_record::FEATURE`] for a clear-record, [`crate::force::FEATURE`]
-//! for a force, [`INSTALL_FEATURE`] for an install or an uninstall. The JSON heartbeat route
+//! for a force, [`INSTALL_FEATURE`] for an install or an uninstall, [`crate::maintenance::FEATURE`]
+//! for a `maintain`. The JSON heartbeat route
 //! carries none of the operator's orders, an install or an uninstall, so its answers never name
 //! them, and an abort or a clear-record queued for a host that cannot be sent it waits. An
 //! abort, a clear-record and a force take no update slot; an install and an uninstall take it as
@@ -185,6 +187,84 @@ pub enum Order {
         /// The try ([`Fleet::next_try`]).
         order_try: u64,
     },
+    /// Start, retry or put back the host's turn of a maintenance run
+    /// ([`crate::decide_maintenance`]).
+    Maintain {
+        /// What the turn applies, and how.
+        maintain: Maintain,
+        /// The order's id: `maintain-<run id>`, then `-<n>` for a turn offered again
+        /// ([`crate::maintenance_runs::RunHost::order_id`]).
+        order_id: String,
+        /// The try: 1 for the `RUN` that starts the turn, which a resend of the order keeps; a
+        /// new try for each operator's `RETRY` or `PUT_BACK` of the halted turn
+        /// ([`crate::maintenance_runs::RunHost::order_try`]).
+        order_try: u64,
+    },
+}
+
+/// The arguments of a `maintain` of a host's turn, as [`crate::decide_maintenance`] made them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Maintain {
+    /// The run's id.
+    pub run_id: String,
+    /// What to do with the turn: `RUN` starts it; `RETRY` and `PUT_BACK` act on it once it
+    /// halted, as an operator asked.
+    pub action: agent::MaintainAction,
+    /// The kinds the turn applies, as the run holds them for the host.
+    pub kinds: Vec<agent::MaintenanceKind>,
+    /// Which Linux updates a `linux` kind applies: the group's `linux_scope`.
+    pub linux_scope: agent::LinuxScope,
+    /// How long the drain may take; none: no deadline.
+    pub drain_deadline_secs: Option<u64>,
+    /// How a `macos` kind is applied: `install`, the one path built.
+    pub macos_path: agent::MacosPath,
+    /// For `macos`: whether a major upgrade may be staged and installed: the group's
+    /// `macos_major`.
+    pub macos_major: bool,
+    /// How long the host may be silent while it reboots: the group's `return_secs` for the
+    /// host's platform.
+    pub return_secs: u64,
+    /// For `xcode`: the Xcodes of the coordinator's store the host is to have, the versions to
+    /// remove and the default ([`crate::maintenance_xcode`]); none when the host's group keeps no
+    /// Xcode, the store holds none, or the turn holds no `xcode`.
+    pub xcode: Option<XcodeOrder>,
+}
+
+/// What a `maintain` with `xcode` carries (`Maintain.xcodes`, `xcode_remove` and
+/// `xcode_default` of `hostkeeper.agent.v1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct XcodeOrder {
+    /// The newest releases of the store the host's group keeps (`xcode_keep`), newest first: at
+    /// least one.
+    pub entries: Vec<agent::XcodeEntry>,
+    /// The versions to remove: each installed in its own directory and older than every entry,
+    /// oldest first.
+    pub remove: Vec<String>,
+    /// The version `xcode-select` is to name, one of the entries'; none: leave it.
+    pub default: Option<String>,
+}
+
+impl Maintain {
+    /// The arguments as `hostkeeper.agent.v1` says them.
+    fn to_proto(&self) -> agent::Maintain {
+        let xcode = self.xcode.clone();
+        let (xcodes, xcode_remove, xcode_default) = xcode.map_or_else(Default::default, |x| {
+            (x.entries, x.remove, x.default.unwrap_or_default())
+        });
+        agent::Maintain {
+            run_id: self.run_id.clone(),
+            action: self.action.into(),
+            kinds: self.kinds.iter().map(|kind| i32::from(*kind)).collect(),
+            linux_scope: self.linux_scope.into(),
+            drain_deadline_secs: self.drain_deadline_secs,
+            macos_path: self.macos_path.into(),
+            xcodes,
+            xcode_remove,
+            xcode_default,
+            return_secs: self.return_secs,
+            macos_major: self.macos_major,
+        }
+    }
 }
 
 impl Order {
@@ -277,6 +357,15 @@ impl Order {
                 agent::order::Verb::Uninstall(agent::Uninstall {
                     service: service.clone(),
                 }),
+            ),
+            Self::Maintain {
+                maintain,
+                order_id,
+                order_try,
+            } => (
+                order_id,
+                *order_try,
+                agent::order::Verb::Maintain(maintain.to_proto()),
             ),
         };
         agent::Order {

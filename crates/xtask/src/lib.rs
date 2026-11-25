@@ -3,6 +3,14 @@
 //!
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
+//! - `farm-build`: the farm lane's `buck2 build`, refused unless buck2 has the farm's workers, the
+//!   generated build table is fresh (a stale one is handed over as a patch) and its summary line
+//!   says `local: 0`; a build whose only failures are cut connections to the farm runs once more
+//!   (`farm`).
+//! - `mac-farm`: one Cargo command of this workspace on a Mac of the build farm, from a Linux
+//!   runner, as one Remote Execution action whose inputs are the checkout, the crates of
+//!   `Cargo.lock` and the pinned Rust toolchain; the files it names with `--output` are written
+//!   back into the checkout (`mac_farm`, docs/design/mac-farm.md).
 //! - `release <verb>`: the release steps: the version of a commit, the release plan, the check
 //!   and publication of a release's assets, the native packages of the services and the
 //!   `targets` that deploy them (`release`).
@@ -49,7 +57,9 @@ mod channels;
 mod coordinator_update;
 mod db_backup;
 mod debs;
+mod farm;
 mod install;
+mod mac_farm;
 mod mirrored;
 mod netboot_iso;
 mod netinstall_report;
@@ -92,6 +102,10 @@ enum Error {
     Debs(#[from] debs::Error),
     #[error(transparent)]
     NetbootIso(#[from] netboot_iso::Error),
+    #[error(transparent)]
+    Farm(#[from] farm::Error),
+    #[error(transparent)]
+    MacFarm(#[from] mac_farm::Error),
     /// The roots of `--ca-bundle` could not be read.
     #[error(transparent)]
     CaBundle(#[from] release::ports::PortError),
@@ -125,6 +139,37 @@ enum Verb {
         #[arg(long)]
         member: Option<PathBuf>,
     },
+    /// The farm lane's build: `buck2 build <target>` with the farm's workers configured and the
+    /// generated build table fresh, run once more when its only failures are cut connections to
+    /// the farm, its summary line saying `local: 0` (docs/farm.md); buck2's daemon is stopped
+    /// after.
+    FarmBuild {
+        /// The buck2 program (the workflow installed the pinned release there).
+        #[arg(long)]
+        buck2: PathBuf,
+        /// What to build (`//:ci`).
+        #[arg(long)]
+        target: String,
+        /// Where a stale table's fix, the patch of `buildrules sync`, is written.
+        #[arg(long)]
+        patch: PathBuf,
+        /// The job summary: a stale table's fix and a build run again after a cut are told there.
+        #[arg(long)]
+        summary: PathBuf,
+        /// The repository of the run (`owner/name`), for the command that applies the patch.
+        #[arg(long)]
+        repo: String,
+        /// The run's id, for the same command.
+        #[arg(long)]
+        run_id: u64,
+    },
+    /// One Cargo command of this workspace on a Mac of the build farm, as one Remote Execution
+    /// action from this machine (docs/design/mac-farm.md): the checkout, the crates of
+    /// `Cargo.lock` for aarch64-apple-darwin and the pinned Rust toolchain are its inputs, its
+    /// stdout and stderr are printed, and each `--output` is written back into the checkout.
+    /// Ends 0 only when the command exited 0 and every output was written; prints a notice and
+    /// ends 0 when `--address` is empty.
+    MacFarm(mac_farm::Args),
     /// The release steps: version, package, plan, check and publish.
     Release {
         #[command(subcommand)]
@@ -213,6 +258,28 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 &download, &sha256, &unpack, &out,
             )?])
         }
+        Verb::FarmBuild {
+            buck2,
+            target,
+            patch,
+            summary,
+            repo,
+            run_id,
+        } => {
+            let handoff = farm::Handoff {
+                patch,
+                summary,
+                repo,
+                run_id,
+            };
+            Ok(vec![farm::build(
+                &buck2,
+                &target,
+                &handoff,
+                &mut std::io::stderr(),
+            )?])
+        }
+        Verb::MacFarm(args) => Ok(mac_farm::run(&args)?),
         Verb::Release { verb } => Ok(release::run(verb, release::real::connect)?),
         Verb::Advisories { repo } => {
             let adapters = release::real::connect();
@@ -273,7 +340,9 @@ pub fn main() -> ExitCode {
         Err(e) => {
             eprintln!("xtask: {e}");
             match e {
-                Error::Usage(_) | Error::Channels(channels::Error::Usage(_)) => ExitCode::from(2),
+                Error::Usage(_)
+                | Error::Channels(channels::Error::Usage(_))
+                | Error::MacFarm(mac_farm::Error::Usage(_)) => ExitCode::from(2),
                 Error::Install(_)
                 | Error::Release(_)
                 | Error::Advisories(_)
@@ -282,6 +351,8 @@ pub fn main() -> ExitCode {
                 | Error::Channels(_)
                 | Error::Debs(_)
                 | Error::NetbootIso(_)
+                | Error::Farm(_)
+                | Error::MacFarm(_)
                 | Error::CaBundle(_) => ExitCode::FAILURE,
             }
         }

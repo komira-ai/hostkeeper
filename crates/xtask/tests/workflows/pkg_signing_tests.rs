@@ -10,7 +10,7 @@ use super::pkg_signing::{
     SIGN_BOOTSTRAP, SIGN_ENV, SIGN_HELLO, SIGN_JOB, SIGN_STEPS, SIGNED_ARTIFACT, SUMS_IF, Step,
     UNSIGNED_ARTIFACT,
 };
-use super::release::SIGN_IF;
+use super::signing_run::SIGN_JOB_IF;
 use super::{with_in, workflows};
 
 /// The repository's artifacts.yml.
@@ -89,14 +89,20 @@ fn the_keychain_cleanup_missing_or_not_run_on_failure_is_refused() {
     let text = artifacts_yml();
     let not_always = with_in(
         &text,
-        DELETE_KEYCHAIN_STEP,
-        "      - name: Delete the keychain\n",
+        &format!("{DELETE_KEYCHAIN_STEP}{}", run_line(DELETE_KEYCHAIN)),
+        &format!(
+            "      - name: Delete the keychain\n{}",
+            run_line(DELETE_KEYCHAIN)
+        ),
     );
     assert_refused(&not_always, &step_problem(13));
     let p12_not_always = with_in(
         &text,
-        DELETE_P12_STEP,
-        "      - name: Delete the identity's file\n        if: ${{ success() }}\n",
+        &format!("{DELETE_P12_STEP}{}", run_line(DELETE_P12)),
+        &format!(
+            "      - name: Delete the identity's file\n        if: ${{{{ success() }}}}\n{}",
+            run_line(DELETE_P12)
+        ),
     );
     assert_refused(&p12_not_always, &step_problem(14));
 
@@ -153,7 +159,8 @@ fn the_signing_job_running_repository_code_or_holding_more_is_refused() {
     // dependency would run beside it), the job on another trigger, runner or environment, a
     // write scope, or other needs.
     let text = artifacts_yml();
-    let header = format!("  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {SIGN_IF}\n");
+    let header =
+        format!("  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {SIGN_JOB_IF}\n");
     let checkout = with_in(
         &text,
         "          name: pkg-unsigned-macos-arm64\n          path: unsigned\n      - name: The identity",
@@ -174,41 +181,40 @@ fn the_signing_job_running_repository_code_or_holding_more_is_refused() {
     );
     assert_refused(
         &dispatch,
-        &format!("artifacts.yml: job {SIGN_JOB} needs the exact `if: {SIGN_IF}`"),
+        &format!("artifacts.yml: job {SIGN_JOB} needs the exact `if: {SIGN_JOB_IF}`"),
     );
     let needs = with_in(
         &text,
         &header,
-        &format!("  {SIGN_JOB}:\n    needs: [version, build-macos, build]\n    if: {SIGN_IF}\n"),
+        &format!(
+            "  {SIGN_JOB}:\n    needs: [version, build-macos, build]\n    if: {SIGN_JOB_IF}\n"
+        ),
     );
     assert_refused(
         &needs,
         &format!("artifacts.yml: job {SIGN_JOB} must need exactly [\"build-macos\", \"version\"]"),
     );
+    let head = format!(
+        "{header}    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
+    );
     let env = with_in(
         &text,
-        &format!("    environment: {SIGN_ENV}\n"),
-        "    environment: release\n",
+        &head,
+        &head.replace(&format!("environment: {SIGN_ENV}"), "environment: release"),
     );
     assert_refused(
         &env,
         &format!("artifacts.yml: job {SIGN_JOB} must be in the environment {SIGN_ENV}"),
     );
-    let runner = with_in(
-        &text,
-        &format!("    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"),
-        &format!("    runs-on: macos-14\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"),
-    );
+    let runner = with_in(&text, &head, &head.replace("macos-15", "macos-14"));
     assert_refused(
         &runner,
         &format!("artifacts.yml: job {SIGN_JOB} must run on macos-15"),
     );
     let scope = with_in(
         &text,
-        &format!("    environment: {SIGN_ENV}\n    permissions:\n      contents: read\n"),
-        &format!(
-            "    environment: {SIGN_ENV}\n    permissions:\n      contents: read\n      id-token: write\n"
-        ),
+        &format!("{head}    permissions:\n      contents: read\n"),
+        &format!("{head}    permissions:\n      contents: read\n      id-token: write\n"),
     );
     assert_refused(
         &scope,
@@ -229,7 +235,9 @@ fn a_secret_named_outside_the_signing_steps_is_refused() {
     );
     assert_refused(
         &in_build,
-        &format!("artifacts.yml: job build-macos names a secret; only {SIGN_JOB} may"),
+        &format!(
+            "artifacts.yml: job build-macos names a secret; only {SIGN_JOB} and sign-code may"
+        ),
     );
     let beside = with_in(
         &text,
@@ -311,7 +319,7 @@ fn the_signature_check_missing_skipped_or_after_the_upload_is_refused() {
         &format!("{}{check}", published_upload()),
     );
     assert_refused(&late, &check_step_problem(5));
-    assert_refused(&late, &check_step_problem(13));
+    assert_refused(&late, &check_step_problem(23));
     for key in [
         "continue-on-error: true",
         "if: ${{ false }}",
@@ -416,13 +424,13 @@ fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
         &published,
         &format!("          name: {PUBLISHED_ARTIFACT}\n          path: unsigned/\n"),
     );
-    assert_refused(&elsewhere, &check_step_problem(17));
+    assert_refused(&elsewhere, &check_step_problem(23));
     let unnamed = with_in(
         &text,
         &published,
         "          name: assets-macos-arm64-pkg\n          path: dist/\n",
     );
-    assert_refused(&unnamed, &check_step_problem(17));
+    assert_refused(&unnamed, &check_step_problem(23));
     // The unsigned pkg fetched over the checked one, under the same name, before the upload.
     let swapped = with_in(
         &text,
@@ -434,9 +442,9 @@ fn the_recorded_sha256_of_the_pkg_is_of_the_signed_file() {
     );
     assert_refused(
         &swapped,
-        &format!("artifacts.yml: job {CHECK_JOB} has 18 steps, not the 17 of CHECK_STEPS"),
+        &format!("artifacts.yml: job {CHECK_JOB} has 24 steps, not the 23 of CHECK_STEPS"),
     );
-    assert_refused(&swapped, &check_step_problem(17));
+    assert_refused(&swapped, &check_step_problem(23));
     // The signing job fed a pkg of another run.
     let other_run = with_in(
         &text,
@@ -520,7 +528,9 @@ fn a_signing_step_or_job_with_a_key_of_its_own_is_refused() {
         &format!("        timeout-minutes: 0\n{cleanup}"),
     );
     assert_refused(&timed, &step_problem(13));
-    let header = format!("    environment: {SIGN_ENV}\n");
+    let header = format!(
+        "  {SIGN_JOB}:\n    needs: [version, build-macos]\n    if: {SIGN_JOB_IF}\n    runs-on: macos-15\n    timeout-minutes: 15\n    environment: {SIGN_ENV}\n"
+    );
     let job_key = with_in(
         &text,
         &header,
@@ -576,9 +586,9 @@ fn hellos_pkg_built_into_the_release_files_unsigned_or_unchecked_is_refused() {
         &run_line(CHECK_HELLO_SIGNATURE),
         "        run: echo nothing\n",
     );
-    assert_eq!(found(&unchecked), [check_step_problem(9)]);
+    assert_eq!(found(&unchecked), [check_step_problem(11)]);
     let installer_twice = with_in(&text, &run_line(SAME_HELLO_FILES), &run_line(SAME_FILES));
-    assert_eq!(found(&installer_twice), [check_step_problem(12)]);
+    assert_eq!(found(&installer_twice), [check_step_problem(14)]);
 }
 
 #[test]
@@ -625,11 +635,11 @@ fn the_bootstrap_pkg_built_into_the_release_files_unsigned_or_unchecked_is_refus
         &run_line(CHECK_BOOTSTRAP_SIGNATURE),
         "        run: echo nothing\n",
     );
-    assert_eq!(found(&unchecked), [check_step_problem(13)]);
+    assert_eq!(found(&unchecked), [check_step_problem(17)]);
     let installer_twice = with_in(
         &text,
         &run_line(SAME_BOOTSTRAP_FILES),
         &run_line(SAME_FILES),
     );
-    assert_eq!(found(&installer_twice), [check_step_problem(16)]);
+    assert_eq!(found(&installer_twice), [check_step_problem(20)]);
 }

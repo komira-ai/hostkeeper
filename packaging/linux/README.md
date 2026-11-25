@@ -161,9 +161,9 @@ directory, byte for byte; the test above fails when they differ.
 ## Debugging a wedged node
 
 The daemon binds no admin socket and `hostkeeper admin` is gone. The status of a host is
-`hkctl hosts get --node-id <id>`: whether the host is live, its last heartbeat, and each
+`hk hosts get --node-id <id>`: whether the host is live, its last heartbeat, and each
 service's lifecycle, health and step records (a pending request's `key_sha256`, to check
-against the host, is in `hkctl enrollment list`). `hkctl hosts abort` stops a hung step and
-`hkctl hosts clear-record` clears a step record that cannot be read. With the coordinator
+against the host, is in `hk enrollment list`). `hk hosts abort` stops a hung step and
+`hk hosts clear-record` clears a step record that cannot be read. With the coordinator
 unreachable, root stops the daemon and reads `journalctl -u hostkeeper.service`; `docs/admin.md`
 is the runbook, including the by-hand rename of a record.

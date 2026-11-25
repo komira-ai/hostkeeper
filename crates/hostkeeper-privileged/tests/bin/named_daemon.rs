@@ -31,7 +31,10 @@ const EXIT_USAGE: u8 = 2;
 
 fn main() -> ExitCode {
     let Cli { command } = Cli::parse();
-    let Command::Daemon(flags) = command;
+    let Command::Daemon(flags) = command else {
+        eprintln!("`daemon` is the only verb of this program");
+        return ExitCode::from(EXIT_USAGE);
+    };
     daemon(&flags)
 }
 
@@ -79,7 +82,17 @@ fn daemon(flags: &DaemonFlags) -> ExitCode {
         runtime.block_on(async {
             let files = HostFiles::host();
             let started = cli::start_with(&settings, &files, own, notifier.as_ref(), &platform)?;
-            let links = cli::host_links(started.daemon(), &files, period, platform.kind, watchdog);
+            let links = cli::host_links(
+                started.daemon(),
+                &files,
+                period,
+                platform.kind,
+                flags.maintenance_linux_scope,
+                hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::from_flag(
+                    flags.maintenance_macos_major,
+                ),
+                watchdog,
+            );
             start::serve(started, links).await;
             Ok(())
         })

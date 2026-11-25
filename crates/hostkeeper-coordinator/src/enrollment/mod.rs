@@ -28,7 +28,8 @@
 //! - `reject`: `Enrollment.Reject` ([`Enrollment::reject`]), and the deny row `Hosts.Retire`
 //!   writes ([`Enrollment::deny_host`]);
 //! - `expiry`: a request no operator approved within the request TTL expires
-//!   ([`Enrollment::expire_requests`], run by the reload tick), audited `request_expired`;
+//!   ([`Enrollment::expire_requests`], run by the reload tick over files and by the claimed job
+//!   `request-expiry` over a database, [`crate::jobs`]), audited `request_expired`;
 //!
 //! The heartbeat path asks [`Enrollment::identity_of`] who a certificate the CA issued names,
 //! [`Enrollment::admission`] whether its host is denied, retiring or neither,
@@ -42,7 +43,7 @@ mod by_record;
 mod expiry;
 pub(crate) mod groups;
 mod list;
-mod nonce;
+pub(crate) mod nonce;
 mod refusal;
 mod reject;
 mod rpc;
@@ -51,7 +52,7 @@ mod setup;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_enrollment::ca::{Ca, CaBundle, Signer};
-use hostkeeper_enrollment::enroll::{EnrollmentStore, HostRunning};
+use hostkeeper_enrollment::enroll::{EnrollmentStore, HostBmc, HostRunning};
 use hostkeeper_enrollment::names::HostId;
 use hostkeeper_enrollment::validity::UnixClock;
 pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
@@ -354,6 +355,17 @@ impl Enrollment {
             store_host(host).map(|host| self.store.note_running(&host, running, now))
         {
             tracing::warn!(%why, host_id = %host, "what a host runs was not recorded");
+        }
+    }
+
+    /// Records that a heartbeat of `host` accepted now, by the enrollment's clock, reported the
+    /// host's BMC `bmc`: it is kept with the host ([`EnrollmentStore::note_bmc`]) when it differs
+    /// from the one the host record holds. A host the store never approved is not tracked; a
+    /// store that cannot be written is logged, and the next heartbeat tries again.
+    pub fn note_bmc(&self, host: &hostkeeper_wire::HostId, bmc: HostBmc) {
+        let now = self.clock.now_unix();
+        if let Some(Err(why)) = store_host(host).map(|host| self.store.note_bmc(&host, bmc, now)) {
+            tracing::warn!(%why, host_id = %host, "a host's BMC was not recorded");
         }
     }
 

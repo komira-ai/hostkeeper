@@ -106,7 +106,8 @@ fn an_update_deletes_the_files_the_old_bom_listed_and_the_new_one_does_not_and_n
     let (dir2, order2) = i.stage_v2();
     rig.mac.clear_calls();
     assert_eq!(
-        rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap(),
+        rig.activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+            .unwrap(),
         Activated { drift: None }
     );
     assert_eq!(rig.read_text(&home("svc")), "program svc 2.0");
@@ -146,7 +147,9 @@ fn an_update_keeps_a_recorded_directory_that_still_holds_a_file_it_did_not_insta
     let i = installed("act-update-keeps-dir");
     i.rig.write(&home("old/user.txt"), b"mine", 0o644);
     let (dir2, order2) = i.stage_v2();
-    i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap();
+    i.rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap();
     assert!(!i.rig.exists(&home("old/legacy")));
     assert_eq!(i.rig.read_text(&home("old/user.txt")), "mine");
     assert!(
@@ -170,7 +173,9 @@ fn an_update_deletes_nothing_through_a_directory_that_became_a_link() {
     fs::remove_dir(i.rig.real(&home("old"))).unwrap();
     symlink(&outside, i.rig.real(&home("old"))).unwrap();
     let (dir2, order2) = i.stage_v2();
-    i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap();
+    i.rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap();
     assert_eq!(fs::read(outside.join("legacy")).unwrap(), b"not ours");
 }
 
@@ -204,7 +209,9 @@ fn an_activate_cut_short_after_installer_resumes_and_finishes_the_deletions() {
         "1.0's file is still there"
     );
     assert_eq!(
-        i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap(),
+        i.rig
+            .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+            .unwrap(),
         Activated { drift: None }
     );
     assert!(!i.rig.exists(&home("old")));
@@ -217,7 +224,7 @@ fn an_activate_cut_short_after_installer_resumes_and_finishes_the_deletions() {
 /// Catches: a rollback that checks the signature again, expands the package again, or leaves the newer version's files or directories.
 #[test]
 fn a_rollback_installs_the_kept_package_without_a_fetch_or_a_signature_check() {
-    let (mut i, dir2, _) = Installed::updated("act-rollback");
+    let (mut i, dir2, order2) = Installed::updated("act-rollback");
     let rig = &mut i.rig;
     rig.write(&home("data/user.db"), b"user data", 0o600);
     let before = rig.records.saves()[1].clone();
@@ -229,7 +236,8 @@ fn a_rollback_installs_the_kept_package_without_a_fetch_or_a_signature_check() {
     }
     rig.mac.clear_calls();
     assert_eq!(
-        rig.activate(&i.order1, &i.dir1, Some(&dir2)).unwrap(),
+        rig.activate(&i.order1, &i.dir1, replaces(&dir2, &order2))
+            .unwrap(),
         Activated { drift: None }
     );
     assert_eq!(rig.mac.runs_of(Tool::Pkgutil, "--check-signature"), 0);
@@ -462,7 +470,9 @@ fn an_installer_error_on_an_update_is_followed_by_a_rollback_that_ends_as_before
         let dir2 = rig.stage(&order2, "svc-2.0");
         let (files, receipts, record) =
             (rig.snapshot(), rig.mac.receipts(), rig.records.get(SERVICE));
-        let err = rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap_err();
+        let err = rig
+            .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+            .unwrap_err();
         assert_eq!(err.reason(), Reason::InstallerError, "{what}: {err}");
         assert_eq!(err.reason().class(), Class::Release);
         assert!(
@@ -476,7 +486,8 @@ fn an_installer_error_on_an_update_is_followed_by_a_rollback_that_ends_as_before
             );
         }
         assert_eq!(
-            rig.activate(&i.order1, &i.dir1, Some(&dir2)).unwrap(),
+            rig.activate(&i.order1, &i.dir1, replaces(&dir2, &order2))
+                .unwrap(),
             Activated { drift: None },
             "{what}"
         );
@@ -583,7 +594,7 @@ fn a_file_info_that_fails_or_is_unreadable_during_activate_is_io_error() {
             .mac
             .fault(Tool::Pkgutil, &["--file-info-plist"], Fault::Output(answer));
         assert_eq!(
-            reason(i.rig.activate(&order2, &dir2, Some(&i.dir1))),
+            reason(i.rig.activate(&order2, &dir2, replaces(&i.dir1, &i.order1))),
             Reason::IoError
         );
         no_install_ran_after(&i);
@@ -613,7 +624,7 @@ fn activate_reports_io_error_for_a_missing_tree_a_failing_record_store_or_lock()
         "no staged tree"
     );
     assert_eq!(
-        reason(rig.activate(&order, &dir, Some(&empty))),
+        reason(rig.activate(&order, &dir, replaces(&empty, &order))),
         Reason::IoError,
         "no kept tree"
     );
@@ -666,7 +677,7 @@ fn a_rollback_with_no_from_after_a_cut_short_update_deletes_what_the_failed_vers
     let dir2 = rig.stage(&order2, "svc-2.0");
     let (files, record) = (rig.snapshot(), rig.records.get(SERVICE));
     assert_eq!(
-        reason(rig.activate(&order2, &dir2, Some(&i.dir1))),
+        reason(rig.activate(&order2, &dir2, replaces(&i.dir1, &i.order1))),
         Reason::InstallerError
     );
     assert!(

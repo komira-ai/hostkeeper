@@ -5,7 +5,7 @@
 //!   [`RELEASE_EXEMPT`] lists it with a reason ([`publish_problems`], run over every workflow of
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
-//!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
+//!   of exactly `ci` and `artifacts`, completed, on main), has exactly the jobs
 //!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, the jobs of
 //!   hostkeeper's own deploy, held to [`desired::problems`], and the two jobs of the coordinator's
 //!   deploy to the control plane, held to [`cp_deploy::problems`]; plans with the one step of
@@ -17,14 +17,14 @@
 //!   rpm repositories, never a release file) and, in the two install checks, one `docker` command
 //!   each.
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
-//!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
+//!   own group per commit and event ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
 //!   the coordinator's image twice, compares the two, checks that the image holds the operator
 //!   web app and runs the image's entrypoint ([`IMAGE_BUILD`], [`IMAGE_COMPARE`],
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   each binary tarball of [`TARBALLS`], each file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and
-//!   [`VERSIONED_FILES`], and copies the bundle of each beside it
+//!   each binary tarball of [`TARBALLS`], each file of [`ATTESTED_FILES`] and
+//!   [`NATIVE_FILES`], and copies the bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
 //!   steps that make it. Its build job makes the pxe package with [`PXE_BUILD`] and
@@ -40,8 +40,10 @@ use super::pkg_signing;
 use super::release_macos;
 use super::yaml::{self, Node, Value};
 
-/// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
-pub const SIGN_IF: &str = "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}";
+/// The exact `if:` of artifacts.yml's attest and verify jobs: a push to main, once no job they need
+/// failed or was cancelled (one of the two compile jobs they need, at some depth, is always
+/// skipped: [`super::mac_farm::AFTER_COMPILE`]). The only condition under which a token can sign.
+pub const SIGN_IF: &str = "${{ !cancelled() && !failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}";
 
 /// The `if:` of the plan job: a run of main, by hand, on the schedule, or the completion of a
 /// push run on main of this repository.
@@ -66,8 +68,10 @@ pub const PUBLISH_GROUP: &str = "release-publish-${{ matrix.tag }}";
 /// behind.
 pub const PLAN_RUN: &str = "cargo xtask release plan --repo \"$GITHUB_REPOSITORY\" --commit \"$GITHUB_SHA\" --version-file VERSION --freeze \"$FREEZE\" --output \"$GITHUB_OUTPUT\"";
 
-/// The group of artifacts.yml: one per commit.
-pub const ARTIFACTS_GROUP: &str = "artifacts-${{ github.sha }}";
+/// The group of artifacts.yml: one per commit and event.
+/// The event is in it so a run by hand at main's commit never shares (and, pending, never
+/// replaces) the push run of that commit.
+pub const ARTIFACTS_GROUP: &str = "artifacts-${{ github.sha }}-${{ github.event_name }}";
 
 /// Workflows outside the release group on purpose, each with its reason.
 pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
@@ -98,14 +102,17 @@ pub const RELEASE_JOBS: [&str; 12] = [
 /// The triggers release.yml may have.
 pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workflow_run"];
 
-/// The workflows whose completion starts release.yml, sorted: the three a release requires.
-pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
+/// The workflows whose completion starts release.yml, sorted: the two a release requires, the
+/// unit tests and the build. The privileged tests are not among them: no release waits for them
+/// (a red run of them opens a RELEASE-RED issue, release-red.yml).
+pub const REQUIRED_WORKFLOWS: [&str; 2] = ["artifacts", "ci"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
-pub const SHIPPED_BINARIES: [&str; 3] = [
+pub const SHIPPED_BINARIES: [&str; 4] = [
     "hostkeeper",
     "hostkeeper-coordinator",
     "hostkeeper-coordinator-update",
+    "hk",
 ];
 
 /// How each of the two builds of the coordinator's image in the image job of artifacts.yml
@@ -168,16 +175,17 @@ pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TAR
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the coordinator's and the coordinator updater's on the two
-/// Linux platforms. Each has a bundle and an attested SBOM
+/// every platform, the command line's (`hk`) on every platform, the
+/// coordinator's and the coordinator updater's on the two Linux platforms. Each has a bundle and an attested SBOM
 /// (`<program>-<version>-<platform>.cdx.json`).
-pub const TARBALLS: [(&str, &[&str]); 3] = [
+pub const TARBALLS: [(&str, &[&str]); 4] = [
     ("hostkeeper", &PLATFORMS),
     ("hostkeeper-coordinator", &["linux-x86_64", "linux-arm64"]),
     (
         "hostkeeper-coordinator-update",
         &["linux-x86_64", "linux-arm64"],
     ),
+    ("hk", &PLATFORMS),
 ];
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and
@@ -200,11 +208,6 @@ pub const NATIVE_FILES: [&str; 8] = [
     "pxe_<version>_amd64.deb",
     "pxe_<version>_arm64.deb",
 ];
-
-/// The release's other files that the attest job attests alone and whose name carries the
-/// version, each as the stem before `-<version>`: `hkctl-<version>`, the command line of the
-/// coordinator, one script for every platform.
-pub const VERSIONED_FILES: [&str; 1] = ["hkctl"];
 
 /// Whether the attest job may run `run`: one of [`ATTEST_RUNS`], or a [`BUNDLE_COPY`].
 fn attest_may_run(run: &str) -> bool {
@@ -618,12 +621,14 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
              (`{IMAGE_RUN}...`) and compare it with the coordinator's stamp"
         ));
     }
-    let attest = job(doc, "attest");
-    if text_of(attest, "if") != Some(SIGN_IF) {
-        problems.push(format!(
-            "artifacts.yml: job attest needs the exact `if: {SIGN_IF}`"
-        ));
+    for name in ["attest", "verify"] {
+        if text_of(job(doc, name), "if") != Some(SIGN_IF) {
+            problems.push(format!(
+                "artifacts.yml: job {name} needs the exact `if: {SIGN_IF}`"
+            ));
+        }
     }
+    let attest = job(doc, "attest");
     for uses in step_values(attest, "uses") {
         if uses.starts_with("actions/checkout@") {
             problems.push("artifacts.yml: job attest checks out the repository".to_owned());
@@ -671,7 +676,7 @@ fn pxe_problems(doc: &Node) -> Vec<String> {
 }
 
 /// One line per Linux package (the deb and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
-/// [`TARBALLS`], per file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and [`VERSIONED_FILES`], that the
+/// [`TARBALLS`], per file of [`ATTESTED_FILES`] and [`NATIVE_FILES`], that the
 /// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
 /// `<file>.sigstore.json` from the outputs of that same step; and one per binary tarball whose
@@ -724,12 +729,6 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
         let subject = format!("dist/{}", file.replace("<version>", version));
         let copied = file.replace("<version>", "${V}");
         problems.extend(attest_problem(attest, &subject, file, &copied));
-    }
-    for stem in VERSIONED_FILES {
-        let subject = format!("dist/{stem}-${{{{ needs.version.outputs.version }}}}");
-        let file = format!("{stem}-<version>");
-        let copied = format!("{stem}-${{V}}");
-        problems.extend(attest_problem(attest, &subject, &file, &copied));
     }
     problems
 }

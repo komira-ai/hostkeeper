@@ -28,9 +28,9 @@ const ATTRIBUTES = new Set([
   "x", "y", "x1", "y1", "x2", "y2", "width", "height", "rx", "points", "focusable",
 ]);
 // Numbers the page hands its stylesheet, as custom properties of the element (`--row`, `--span`).
-// They are set through the element's style object, which a content security policy of
-// `default-src 'self'` allows (a `style` attribute it does not), and only a finite number under a
-// name of lower-case letters and dashes is accepted.
+// They are set through the element's style object, which any content security policy allows (only a
+// `style` attribute needs `'unsafe-inline'`; the app's own sources have none, which the scan of the
+// sources holds), and only a finite number under a name of lower-case letters and dashes is accepted.
 const CUSTOM_PROPERTY = /^--[a-z][a-z-]*$/;
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
@@ -56,7 +56,7 @@ export function deployDocLink(name, text, page, anchor) {
 
 const EVENTS = new Set([
   "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
-  "drop", "dragend", "dragleave", "scroll",
+  "drop", "dragend", "dragleave", "scroll", "paste",
 ]);
 // Two names that are not events of the element: `mounted` runs its handler once, when the tree is
 // in the document, and `resize` runs it each time the window is resized, both with the element as
@@ -107,6 +107,8 @@ const ICONS = {
     ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }], ["line", { x1: 9, y1: 16, x2: 12, y2: 16 }]],
   enrollment: [["path", { d: "M4 7h10a4 4 0 0 1 0 8H4" }], ["polyline", { points: "8 11 4 15 8 19" }], ["line", { x1: 18, y1: 4, x2: 18, y2: 8 }],
     ["line", { x1: 16, y1: 6, x2: 20, y2: 6 }]],
+  maintenance: [["path", { d: "M20 12a8 8 0 1 1-2.34-5.66" }], ["polyline", { points: "20 4 20 9 15 9" }],
+    ["polyline", { points: "12 8 12 12 15 14" }]],
   settings: [["line", { x1: 4, y1: 7, x2: 20, y2: 7 }], ["line", { x1: 4, y1: 17, x2: 20, y2: 17 }],
     ["circle", { cx: 9, cy: 7, r: 2.5 }], ["circle", { cx: 15, cy: 17, r: 2.5 }]],
   "theme-system": [["circle", { cx: 12, cy: 12, r: 8 }], ["path", { d: "M12 4a8 8 0 0 1 0 16z" }]],
@@ -198,6 +200,13 @@ export function mount(doc, root, tree) {
       windowListeners.push([view, "resize", listener]);
     }
   }
+}
+
+// Replaces what the live `element` shows with `tree`, without mounting a page again: the window's
+// listeners and the other elements stay as they are. The tree's `mounted` and `resize` hooks are
+// not run. A terminal draws its screen this way, many times a second.
+export function redraw(element, tree) {
+  element.replaceChildren(build(element.ownerDocument, tree, []));
 }
 
 // The words an operator reads for an error: the code and the refusal token, never more.

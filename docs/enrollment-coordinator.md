@@ -7,14 +7,18 @@ certificate (`Poll`) and renews it while it is valid (`Renew`). Why it is shaped
 the store are the crate `hostkeeper-enrollment`; the coordinator's side is the module
 `crates/hostkeeper-coordinator/src/enrollment/`.
 
-A host certificate names its host as `CN=host:<id>` and carries one subjectAltName, the URI of
-the fixed host role `host`: the coordinator's `--host-role-uri-prefix` (by default
-`urn:hostkeeper:host-role:`) followed by `host`, so `urn:hostkeeper:host-role:host`. That role
+A host certificate names its host as `CN=host:<id>` and carries two subjectAltNames, not
+critical: the URI of the fixed host role `host`, the coordinator's `--host-role-uri-prefix` (by
+default `urn:hostkeeper:host-role:`) followed by `host`, so `urn:hostkeeper:host-role:host`, and
+one DNS name, the host id, which a server that trusts this CA reads the host from
+([docs/design/host-identity.md](design/host-identity.md)); its extended key usage is `clientAuth`
+alone. A certificate issued before the DNS name existed has none until the host renews it, which a
+daemon that knows the DNS name does at its start ([operations](operations/enrollment.md#renewal)). The role
 means nothing and is the same for every host: the coordinator reads who a host is from its host
 id and its key, and which host group it is in from its enrollment record
 ([docs/design/hostgroups.md](design/hostgroups.md) section 1.2), never from its certificate. A
 certificate issued by a release before names no host role and keeps working until it is renewed,
-read for its host id alone; its renewal carries the URI.
+read for its host id alone; its renewal carries the URI and the DNS name.
 
 The handlers of `Enroll`, `Poll` and `Renew` are built here. The heartbeat listener serves them
 as gRPC calls of `hostkeeper.agent.v1.Coordinator` (`crates/hostkeeper-coordinator/src/grpc/`),
@@ -88,11 +92,15 @@ of it is `UNIMPLEMENTED`), its JSON gateway, the private listener's JSON routes 
 On the database store (`--database-dsn-file`) the enrollment store is the tables
 `enrollment_requests`, `enrollment_issued`, `enrollment_hosts`, `enrollment_deny`,
 `enrollment_serial` and `mac_nonces` (which nothing writes now), one column per field of the messages below, and an approval
-(the host, the request, the deny row cleared) is one transaction. The
-store's lock is its in-process mutex; the database's advisory lock keeps other coordinators off.
-The heartbeat's reads (a host's key, role and host group, its deny row, its duplicate mark) come from a copy of
-the hosts and the deny rows in memory, loaded at start and changed after each commit, so a
-heartbeat runs no query; the first heartbeat time and the duplicate mark are each written once.
+(the host, the request, the deny row cleared) is one transaction. Several coordinators may share
+the database, and no lock in a process keeps them apart: each write carries the rows its decision
+read, and in its transaction locks each row it read or writes (a row not there yet too), reads the
+ones it read again `FOR UPDATE`, and writes nothing when another coordinator changed one since.
+The decision then runs again on what that one left, so of two approvals of one request the second
+is refused `not_pending`, and of two polls of one approved request both get the one certificate
+recorded. The heartbeat's reads (a host's key, role and host group, its deny row, its duplicate
+mark) read the tables at each heartbeat, so a host another coordinator denied is refused at its
+next heartbeat; the first heartbeat time and the duplicate mark are each written once.
 An enrollment change's audit row is the coordinator's second transaction, as its second write is
 on the files: when it fails, the change stands, the failure is logged, and the next start audits
 it.
@@ -122,9 +130,9 @@ coordinator's gRPC serving registers them. Both take the operator token only: a 
 `forbidden` and no token or any other `unauthorized`, before the request is looked at.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <id> --key-sha256 <key-sha256> \
     --host-id web-17 --host-group web --reason "racked in row 4"
 ```
@@ -165,6 +173,17 @@ certificate is made at the host's next `Poll`, never answered here. With `replac
 earlier key no longer names the host: a certificate of it is not admitted at the heartbeat, and
 it cannot renew.
 
+An approval of a request no record matches is followed, in the same call, by the host's record,
+written from the claims of the request (a Mac's serial; the universally administered data MACs
+among its addresses, at most 16; its BMC MAC), added by `coordinator`, with no host group and no
+window, so it approves nothing; and a place the lab layout gave the host as itself moves to that
+record. The coordinator writes the same record at each start for every enrolled host no record
+matches. Each record is one change of the ops file, audited `record_add` by `coordinator`, made
+only when, on the records that change is applied to, no record matches the host and none holds
+its host id, a MAC or its serial; so each is written once, on any number of coordinators. A
+record that cannot be written leaves the approval standing (logged). See
+[operations/enrollment.md](operations/enrollment.md#a-host-approved-without-a-record).
+
 Each approval is audited `enroll_approve` (`enroll_replace` with `replace`) under the operator's
 token name, with the request id, the group (`group web`, and the entry's `host_group`) and the
 claims; each refused one
@@ -191,7 +210,11 @@ reload tick (`--tls-reload-secs`), at the time its wall clock reads, so a reques
 one tick after its TTL; one that has waited exactly the TTL still waits. A duplicate claim expires
 like any waiting request; an approved, issued or denied one never does. Under the store's lock the
 request is marked expired, once, and audited `request_expired`; an expiry whose entry did not land
-is audited when the coordinator next starts, as an approval is.
+is audited when the coordinator next starts, as an approval is. Over a database the reload tick
+does not expire requests: the periodic job `request-expiry` does (`--job-every`, every 15 seconds by
+default, on one of the coordinators of the database); the store's write lands only on the requests
+as it read them, so two coordinators that both expire never audit one expiry twice
+([coordinator-state.md](operations/coordinator-state.md), "Periodic jobs").
 
 An expired request is unenrolled: `Approve` refuses it `not_pending`, it no longer counts toward
 `--max-pending-enrollments`, and `List` with `unenrolled` lists it (with `state` `UNENROLLED`,
@@ -258,7 +281,9 @@ no MDM at the coordinator: the coordinator's own MDM, which gave a Mac a one-tim
 approved it by an allowlist of serials, was removed (2026-11-14), and Macs come to the coordinator
 through the bootstrap package of Apple Business device management
 (`docs/operations/mac-bootstrap.md`, `docs/design/mac-bootstrap.md`). A serial a Mac claims is its
-own word, as any claim is: what approves it is an operator's click or a record's window.
+own word, as any claim is: what approves it is an operator's click or a record's window. A Mac
+approved by a click with no record that holds its serial gets one, written by the coordinator
+from its serial (Approving a request, above).
 
 An `Enroll` that carries a `mac_nonce` (a daemon of an earlier release does, when its managed
 preferences hold one) is read as any other: the field is ignored, the request is pending, and

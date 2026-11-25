@@ -29,7 +29,7 @@ operator:
 1. Records the machine as an inventory record: its data MACs, its BMC MAC and serial from the chassis label, and its
    platform, `linux-x86_64` or `linux-arm64` (section 3). A Linux request is matched by its data MACs and BMC MAC; the
    serial is shown beside the claim for the person to compare, and takes no part in the match. The record is built
-   (`hkctl enrollment add-record`; the UI's Inventory page adds a server with its MACs and notes only), its platform an additive field
+   (`hk enrollment add-record`; the UI's Inventory page adds a server with its MACs and notes only), its platform an additive field
    (item N14, **Built**).
 
 The machine is then racked and powered on, as every machine is. Its firmware tries network boot, it installs Ubuntu
@@ -177,7 +177,7 @@ fetched (section 5): `linux-x86_64`, `linux-arm64`, or both.
 - **The record's platform.** The record carries an optional platform (item N14): `linux-x86_64` or `linux-arm64`. It
   chooses the boot set of the install entry, and the deb the seed installs. It is additive everywhere it appears: a new
   optional field of `InventoryRecord` and `AddRecordRequest`, typed as the existing `hostkeeper.agent.v1.Platform` with
-  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hkctl enrollment add-record` (the UI's Inventory page shows four fields and not the platform, and an edit there keeps it); and a value the coordinator's store keeps for the record, behind the store's
+  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hk enrollment add-record` (the UI's Inventory page shows four fields and not the platform, and an edit there keeps it); and a value the coordinator's store keeps for the record, behind the store's
   interface with the rest of the inventory (`crates/hostkeeper-coordinator/src/inventory.rs`, **Built**; item N14), so the move of
   that state to Postgres takes it as a column with a default. In today's file store the inventory is in the ops file,
   whose reader refuses unknown keys, so a platform there would make the release before refuse the whole file. The
@@ -348,8 +348,15 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
     `Restart=always` with no start limit), so this ordering is not load-bearing.
   - With `--serial-console <port>` (`ttyS<n>` or `ttyAMA<n>`, at 115200 baud), the installed kernel's `console=` names
     that serial port and its serial getty is enabled, so the BMC's serial console shows the login prompt (section 7).
-    The kernel's console is a GRUB default the first boot's cloud-init writes and applies, so it takes effect from the
-    second boot; the getty is started on the first.
+    On a `ttyS<n>` port GRUB's terminal is that port as well (`GRUB_TERMINAL="console serial"`,
+    `GRUB_SERIAL_COMMAND="serial --unit=<n> --speed=115200"`), so GRUB's output shows there too. The farm's port is
+    `ttyS1`, COM2, on every Linux server (console-broker.md section 5.2); the runbook's install configuration sets it.
+    On either kind of port a systemd drop-in, `serial-getty@<port>.service.d/99_hostkeeper.conf`, clears the stock
+    getty's `ExecStart` and runs `agetty -o '-p -- \\u' 115200 - $TERM`: the stock `--keep-baud
+    115200,57600,38400,9600` drops the port to 9600 at the first Enter over Serial over LAN, and the BMC's serial
+    console then shows NUL bytes. The kernel's console and GRUB's terminal are GRUB defaults the first boot's
+    cloud-init writes and applies, so they take effect from the second boot; the getty is started on the first, after
+    a `systemctl daemon-reload` so that it starts with the drop-in.
   - Curtin's `reorder_uefi` is left at its default, which puts the installed system's entry first in the UEFI boot order
     after the install (section 1, **[V]**). The design's safety does not rest on it: a board that keeps network boot
     first still gets no install answer for an installed machine (section 3).
@@ -647,9 +654,12 @@ tries network boot before its disk; a person picks network boot once on a board 
 - Legacy BIOS PXE, and 32-bit ARM.
 - UEFI HTTP boot in router mode. The router names a TFTP boot file, and an HTTP boot client needs an `http://` URL and
   the `HTTPClient` vendor class in its answer, which only proxy mode gives (section 3).
-- **BMC power and boot-device control.** Today the BMC MAC is recorded and nothing else (hostkeeper-design.md section
-  12.1). With it, the BMC sets a one-time network boot and powers the machine on: the third step of a board that does
-  not boot network first (section 1), and the one-time network boot of a reinstall (section 8), go away.
+- **BMC power and boot-device control** in the reinstall flow. Power and boot device through the BMC are built as
+  `Console.Power` and `Console.SetBootDevice` and the host page's Power and boot tab (console-broker.md, row C2; the
+  rest of that design, the serial console and the Mac desktop, is still designed). The reinstall flow does not use
+  them automatically yet: an operator sets a one-time network boot and powers the machine on by hand. Using them from
+  the flow would remove the third step of a board that does not boot network first (section 1) and the one-time
+  network boot of a reinstall (section 8).
 - The fully verified boot chain with the farm's own Secure Boot keys (section 6).
 - A TPM claim, and with it Q15 (b).
 - An optional product UUID field on the inventory record (section 7).
@@ -772,7 +782,7 @@ The workflow lint knows the jobs and their runners.
   - the real `pxe`, with a boot set the job fetched by pinned URL and SHA-256 before the test;
   - the real coordinator, with `--lan-listen` on the bridge address.
 - It waits on progress events, never on time. Each event is a line on the guest's serial console, read as a stream, a
-  line of `pxe`'s log, or an answer from `hkctl`. Each wait ends on its event or on the guest's
+  line of `pxe`'s log, or an answer from `hk`. Each wait ends on its event or on the guest's
   exit, and the job's `timeout-minutes` is the only bound.
 - In order, it checks that:
   - in proxy mode: the fake DHCP saw the guest's DISCOVER, and `pxe` sent its proxy offer;
@@ -911,7 +921,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N9b | `InventoryRecord.host_held`: what the enrollment store holds for the record's host id (`NONE`, `APPROVED`, `DENIED`, `RETIRED`; `UNSPECIFIED` without a store), read by host id in `Enrollment.ListRecords` and `Enrollment.AddRecord`; the tests of section 11 | N1b | S |
 | N10 | Privileged end-to-end: the `net-install` job (x86-64, proxy mode then router mode) and the `net-install-arm64` job with the one arm64 test the hosted runners allow (section 11), and the workflow lint | N2, N3, N9 | M |
 | N11 | `cargo xtask netinstall-report`, and the report artifact of N10. **Built**: `crates/xtask/src/netinstall_report.rs`, the artifact `net-install-report` | N10 | S |
-| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hkctl` lines and settings files a test parses with each program's parser | N9 | S |
+| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hk` lines and settings files a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
 | N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built"). **Built**: `platform` on `InventoryRecord` and `AddRecordRequest` (`crates/hostkeeper-proto/proto/hostkeeper/operator/v1/enrollment.proto`), `crates/hostkeeper-coordinator/src/inventory.rs` and the `platforms` key of the halts file in `ops_file.rs`, the ctl's `--platform` (generated from the descriptor), the record platforms read by `crates/hostkeeper-pxe/src/serve/` | N1b | S |
 

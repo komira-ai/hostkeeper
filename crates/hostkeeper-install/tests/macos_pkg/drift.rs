@@ -228,7 +228,10 @@ fn repaired(name: &str, drifted: impl FnOnce(&Rig), found: Option<&str>) {
     let i = installed(name);
     drifted(&i.rig);
     let (dir2, order2) = i.stage_v2();
-    let done = i.rig.activate(&order2, &dir2, Some(&i.dir1)).unwrap();
+    let done = i
+        .rig
+        .activate(&order2, &dir2, replaces(&i.dir1, &i.order1))
+        .unwrap();
     assert_eq!(
         done,
         Activated {
@@ -295,7 +298,9 @@ fn the_next_update_repairs_a_file_with_other_bytes_and_a_moved_link() {
     rig.mac.add(v2());
     let order2 = rig.order("2.0");
     let dir2 = rig.stage(&order2, "svc-2.0");
-    let done = rig.activate(&order2, &dir2, Some(&dir1)).unwrap();
+    let done = rig
+        .activate(&order2, &dir2, replaces(&dir1, &order))
+        .unwrap();
     assert_eq!(
         done,
         Activated {
@@ -348,7 +353,7 @@ fn a_receipt_listing_that_cannot_be_read_during_a_repair_is_io_error() {
             .mac
             .fault(Tool::Pkgutil, &["--only-files"], Fault::Output(answer));
         assert_eq!(
-            reason(i.rig.activate(&order2, &dir2, Some(&i.dir1))),
+            reason(i.rig.activate(&order2, &dir2, replaces(&i.dir1, &i.order1))),
             Reason::IoError
         );
     }

@@ -18,8 +18,9 @@
 //! and CI's.
 //!
 //! A bearer is hashed and compared with the hash of each token in constant time
-//! ([`OperatorTokens::name_of`]); the name of the token that matches is who the operator is,
-//! and it is what the audit records as `by` ([`crate::ops::AuditEntry`]).
+//! ([`OperatorTokens::name_of`]); the name of the token of this file that matches is who the
+//! operator is, and it is what the audit records as `by` ([`crate::ops::AuditEntry`]). An API
+//! token of the store acts as its owner instead ([`Operator`]).
 //! `--operator-token-file` is one token named `operator` ([`OperatorTokens::single`]).
 //!
 //! The tokens file is read again on the tick that looks at the TLS files (`--tls-reload-secs`,
@@ -102,6 +103,60 @@ impl TokenName {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Which list a bearer's token is in ([`OperatorTokens::name_of_among`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Bearer {
+    /// A token of the tokens file (or `--operator-token-file`), by name: it acts as the operator
+    /// it is named for.
+    File(TokenName),
+    /// An API token of the store, by name: it acts as its owner, if the owner may.
+    Stored(TokenName),
+}
+
+/// Who an operator's credential acts as: the name every check of what the operator may do reads
+/// and the audit records as `by`, and the API token it called with, if it did, which the audit
+/// records as `api_token`.
+///
+/// A signed-in user and a token of the tokens file act as their own name, with no API token; an
+/// API token acts as the user who owns it ([`crate::accounts::Accounts::acting_owner`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Operator {
+    name: TokenName,
+    api_token: Option<TokenName>,
+}
+
+impl Operator {
+    /// The operator `name`, with no API token: a signed-in user, or a token of the tokens file.
+    #[must_use]
+    pub fn named(name: TokenName) -> Self {
+        Self {
+            name,
+            api_token: None,
+        }
+    }
+
+    /// The user `owner`, calling with their API token `token`.
+    #[must_use]
+    pub fn by_token(owner: TokenName, token: TokenName) -> Self {
+        Self {
+            name: owner,
+            api_token: Some(token),
+        }
+    }
+
+    /// The name the operator acts as.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    /// The API token the operator called with, if any.
+    #[must_use]
+    pub fn api_token(&self) -> Option<&str> {
+        self.api_token.as_ref().map(TokenName::as_str)
     }
 }
 
@@ -285,40 +340,49 @@ impl OperatorTokens {
     /// compared with each token's in constant time.
     #[must_use]
     pub fn name_of(&self, presented: &str) -> Option<TokenName> {
-        self.name_of_among(presented, std::iter::empty())
+        match self.name_of_among(presented, std::iter::empty()) {
+            Some(Bearer::File(name)) => Some(name),
+            _ => None,
+        }
     }
 
-    /// The name of the token `presented`, if it is one of the tokens file's or one of `stored`,
-    /// the API tokens of the store, each given as its name and its SHA-256: one pass over both
-    /// lists, each compared in constant time. A digest the file and the store share (the file was
-    /// edited after the store's token was made) answers the file's name, so the answer does not
-    /// depend on the order the store lists its tokens in.
+    /// The token `presented`, if it is one of the tokens file's or one of `stored`, the API tokens
+    /// of the store, each given as its name and its SHA-256: one pass over both lists, each
+    /// compared in constant time. A digest the file and the store share (the file was edited after
+    /// the store's token was made) answers the file's name, so the answer does not depend on the
+    /// order the store lists its tokens in.
     #[must_use]
     pub fn name_of_among<'a>(
         &self,
         presented: &str,
         stored: impl Iterator<Item = (&'a str, &'a str)>,
-    ) -> Option<TokenName> {
+    ) -> Option<Bearer> {
         let hash = digest(presented.as_bytes());
         let tokens = self
             .inner
             .tokens
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        let mut found: Option<String> = None;
-        let mut consider = |name: &str, sha256: &str| {
+        let mut found: Option<(String, bool)> = None;
+        let mut consider = |name: &str, sha256: &str, file: bool| {
             if bool::from(sha256.as_bytes().ct_eq(hash.as_bytes())) && found.is_none() {
-                found = Some(name.to_owned());
+                found = Some((name.to_owned(), file));
             }
         };
         for token in tokens.iter() {
-            consider(&token.name.0, &token.sha256);
+            consider(&token.name.0, &token.sha256, true);
         }
         for (name, sha256) in stored {
-            consider(name, sha256);
+            consider(name, sha256, false);
         }
         // A stored name was judged when it was made or read; a name that is not a name finds none.
-        found.and_then(|name| name.parse().ok())
+        let (name, file) = found?;
+        let name = name.parse().ok()?;
+        Some(if file {
+            Bearer::File(name)
+        } else {
+            Bearer::Stored(name)
+        })
     }
 
     /// The names of the tokens of the file in use, in the file's order.

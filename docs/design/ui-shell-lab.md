@@ -42,25 +42,32 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   run of U; hover says name, group, version, state; a click opens the host page. **Rack**: one rack larger, and a table of its
   servers. Breadcrumbs `Lab > Row > Rack > Host` (none on the floor plan itself). Above the floor plan: the alerts as one compact strip
   (toned by the worst alert; "No alerts" when there are none). Below it: the servers not placed, a quiet line of outlined chips. A
-  Floor / List switch (`list` in the page's params) shows every server in one compact list (server, state, where, group, version) in
+  Floor / List switch (`list` in the page's params) shows every server in one compact list (server, state, why, where, group, version) in
   place of the floor plan; the Fleet page's table of hosts is gone from Home. A rack footprint is a small elevation (a block per
   server in the colour of its state); the strip of racks shows "Rack n of m" for the rack at its left edge, two arrow buttons, fades
   at an end with more beyond, snaps to a rack, and fits a rack's height to the viewport; a phone shows one rack at a time.
 - **Host page** (`ui/pages/host.js`, `ui/styles/host.css`): a dark status header (name, a light and the state in words, role,
   group, what it runs, the last heartbeat, and a small elevation of the rack the host stands in with its U lit, or "Unplaced"), then
-  tabs (Overview, Services, Certificate, Labels, Placement, Host group; a dot on Services or Certificate when something needs
+  tabs (Overview, Services, Certificate, Labels, Placement, Host group, Remote SSH; a dot on Services or Certificate when something needs
   attention; the tab chosen is kept across a refresh of the same host), then Retire alone in a red-bordered danger zone at the bottom.
-  The state is `degraded`, not `healthy`, for a live host whose service reports unhealthy or whose last update failed.
+  The state is `degraded`, not `healthy` or `updating`, for a live host with any reason (`ui/health.js`): an alert of
+  `Alerts.List` that names it and says it is not healthy, or a service of it halted, unhealthy or whose last update failed. Under the header, each reason
+  in plain words with the time it began and its one action (Clear halt, Retry update), or why there is none.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
-  from a list, 42 U by default), resize, move to another row, remove. A sled is what goes in a rack (docs/design/rack-sleds.md): **Add
-  sled** asks Size (1 to 60 U from a list), Slots (1 to 8) and U location (only where that size fits); a sled is resized, moved
+  from a list, 42 U by default), move to another row, remove; a rack's height is set on the rack (a stepper in its head, or a grip on
+  its bottom edge to drag; a shrink that would cut a sled is refused, naming it). A sled is what goes in a rack
+  (docs/design/rack-sleds.md): each rack has **+ Add sled** (Height 1 to 60 U, Slots 1 to 8, an optional Label and Position, only where
+  that height fits) and **+ Add device** (a server or switch on no sled, and a free slot of that rack), each a form titled with what it
+  adds and where that keeps its inputs after an add; a sled is resized, moved
   (dragged to a free U of a rack in view, or picked and moved with the arrow keys and Enter, or Move... to any rack) and removed; an
   item is assigned by clicking an empty bay (or dragging an item, or an Unplaced chip, onto it) and unassigned with Unassign. Each
   change is one call (`PutSled`, `RemoveSled`, `Place`, `Unplace`) and the page is read again. A rack that holds sleds, or a sled that
   holds items, is not removed: the page names them. A refusal (`overlap`, `out_of_rack`, ...) is told in words. An empty lab says so
   and offers "Add a row". Rows and racks are labelled from 0 (their number less one) until the layout numbers them so.
 - Enrollment: the approval form gets one Sled slot (a dropdown of the free slots by address, e.g. C0-R0-R0-S2-S0, first choice
-  "Unplaced"). No free text and no height, row, rack or U. Placement is optional; an approval with none lands the host in Unplaced.
+  "Unplaced", or "Keep its place, <address>" for a matched server that already stands on a sled, whose own slot is not offered again).
+  No free text and no height, row, rack or U. Placement is optional; an approval with none lands the host in Unplaced, or leaves a
+  matched server where it stands. A duplicate claim that matches one record offers "Replace the existing <host>" by name.
   Approve stores the placement (`placement_sled`, `placement_slot`) in the same step.
   Each pending request is one compact card (`ui/styles/enrollment.css`): the inventory match, one small table of the key facts (a
   renewal or a nonce only when there is one), then one row of controls (Host id, Host group with "No group", Sled slot)
@@ -75,7 +82,9 @@ Look: the komira palette as CSS tokens (`ui/app.css`: the ink `#0B0B0A`, the acc
 mode), system fonts, light and dark by `prefers-color-scheme` and the toggle; the lab hardware (`ui/lab.css`) stays graphite in both
 themes with thin accent lines and a glow on hover. No image, no web font, no runtime CDN, no build step; the layout is HTML and
 CSS grid, a position handed to the stylesheet as a custom property (`--r`, `--s`) set through the element's style object, which the
-content security policy `default-src 'self'` allows (a `style` attribute it does not). `prefers-reduced-motion` turns the pulse and
+content security policy allows whatever its `style-src` (a `style` attribute only with `'unsafe-inline'`, which the policy has
+for the console's vendored terminal, [console-broker.md](console-broker.md) section 8.2; the app's own sources still
+hold none, which the scan of the sources checks). `prefers-reduced-motion` turns the pulse and
 the smooth scroll off. A state is never a colour alone: the pill, the plate and the tooltip carry its word.
 
 ## 2. Data model (the coordinator)
@@ -118,18 +127,27 @@ with the reason `approval`. A placement the store then cannot write leaves the a
 Compatibility (B8): only additions: a new file, a new service, three optional fields, four enum values, new tables, a new file beside
 the state. Nothing is renumbered or required. The test `crates/hostkeeper-proto/tests/additions_lab_layout.rs` runs the release before on
 the new messages (it keeps every byte, and an `ApproveRequest` carrying a placement) and this build on what the release before wrote (an
-approval asks for no placement); `hkctl` gets the verbs from the generated command table and `ui/gen/` from the generator.
+approval asks for no placement); `hk` gets the verbs from the generated command table and `ui/gen/` from the generator.
 
 ## 4. The frame in the code
 
-- `ui/app.js`: `GROUPS` (the menu), `LINKED` (pages with no entry: Home, Host, the three release pages), `ROUTES` (an old route and the page
+- `ui/app.js`: `GROUPS` (the menu), `LINKED` (pages with no entry: Home, Host, Console, Package, Switch), `ROUTES` (an old route and the page
   it lands on: `fleet` is `home`; `navigate(old, params)` resolves through it), the frame (side, scrim, top bar, collapse, drawer, theme
   port `prefs.apply`).
 - `ui/lab.js`: the model the views share (layout, servers joined with hosts and inventory entries, states, free U for a sled height,
   free slots, breadcrumbs, the words of a refusal). `ui/pages/home.js`: the three levels and the edit mode; `ui/sleds.js` draws the
-  sleds and decides the drops, `ui/sledpanels.js` has the edit panels, `ui/styles/sleds.css` the trays and boxes.
+  sleds and decides the drops, `ui/sledpanels.js` has the edit panels of a picked sled or item, `ui/rackforms.js` the controls on a rack (+ Add sled,
+  + Add device and their forms, which keep their inputs across the page's refreshes; the height stepper and the bottom-edge grip),
+  `ui/styles/sleds.css` the trays and boxes and `ui/styles/rackforms.css` the rack controls and forms.
   `ui/pages/enrollment.js`: the placement control only; `ui/pages/host.js` also lays out the Host page above.
-- `ui/view.js`: `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
+- `ui/sshpanel.js` is the Remote SSH tab of the Host page (the pin of the host's SSH host keys and the terminal; section 13 of
+  `docs/design/ssh-through-coordinator.md`). The terminal is the UI's own, in three modules: `ui/terminal.js` (the model: UTF-8, a grid of
+  cells, the cursor, SGR colours mapped to 16, the scroll region, the alternate screen, the modes the page reads), `ui/terminal_render.js`
+  (the model as `pre`, `div` and `span` elements with class names, drawn by `ui/styles/terminal.css`) and `ui/terminal_keys.js` (a key or
+  a paste as the bytes a shell reads). The socket is the one thing the page is handed that it cannot make: `ctx.openSocket(path,
+  handlers, protocols)` is built in `ui/main.js`, the only file that names a WebSocket, and the scan refuses the word in every other file.
+- `ui/view.js`: `redraw(element, tree)` (replaces one live element's children, as the terminal draws its screen), the `paste` event,
+  `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
   `ui/styles/forms.css` holds the page-scoped styles of sign-in, Inventory, Host groups and MDM setup (each rule starts with its page's class).
 
@@ -145,6 +163,11 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   (`fleet`, and Release, Rollout, Holds still open), the lab at each level (floor plan, row, rack, breadcrumbs, empty, gone, failed
   layout, the strip's keys and drag), the edit mode (each call and body, refusals in words, names, pick, click and drag to place, take
   out), the placement on the approval and on the Host page (choices that fit, calls, refusals), and the mounting of custom properties.
+  The Remote SSH tab runs against a fake socket the test drives message by message (no clock): the pin state and the pin, the socket's path
+  and first message, binary keys and pastes, the drawn screen, every cause in words, a close with no cause, Close; the terminal model, the
+  key encoder and the renderer are tested on byte inputs and exact screens. The Console page
+  (`crates/hostkeeper-ui-tests/tests/serial_console_page.rs`) runs against a fake socket and a fake terminal the same way, its quiet
+  note against ticks the test runs itself.
 - Report: `docs/report/hostkeeper.html` draws the shell (wide and narrow, light and dark), the lab at each level and the edit mode, and the
   placement fields of the approval and the Host page; its test checks each UI string against the page modules.
 

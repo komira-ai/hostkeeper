@@ -26,13 +26,14 @@ use p256::pkcs8::{DecodePublicKey, EncodePrivateKey};
 use sha2::{Digest, Sha256};
 use x509_cert::builder::profile::BuilderProfile;
 use x509_cert::builder::{Builder, CertificateBuilder};
-use x509_cert::der::asn1::{ObjectIdentifier, OctetString};
+use x509_cert::der::asn1::{Ia5String, ObjectIdentifier, OctetString};
 use x509_cert::der::oid::AssociatedOid;
 use x509_cert::der::oid::db::rfc5280::ID_KP_CLIENT_AUTH;
 use x509_cert::der::pem::{LineEnding, encode_string};
 use x509_cert::der::{DateTime, Decode, DecodePem, Encode, EncodePem};
 use x509_cert::ext::Extension;
-use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage};
+use x509_cert::ext::pkix::name::GeneralName;
+use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, SubjectAltName};
 use x509_cert::name::Name;
 use x509_cert::request::CertReq;
 use x509_cert::serial_number::SerialNumber;
@@ -269,15 +270,36 @@ pub type Issue = Box<dyn FnMut(&Ca, &Args) -> Issued + Send>;
 /// Sees each `Enroll` request as it arrives.
 pub type OnEnroll = Box<dyn FnMut(&EnrollRequest) + Send>;
 
-/// What a well-behaved coordinator issues: a seven-day certificate from now for the request's
-/// key, subject `host:<id>`, client authentication, and the CA as the bundle.
+/// The host-role URI the coordinator's CA names in every host certificate by default.
+pub const HOST_ROLE_URI: &str = "urn:hostkeeper:host-role:host";
+
+/// The subject alternative names `uris` and `dns_names`, in that order.
+pub fn san(uris: &[&str], dns_names: &[&str]) -> Extension {
+    let ia5 = |text: &str| Ia5String::new(text).expect("an IA5 string");
+    let names = uris
+        .iter()
+        .map(|uri| GeneralName::UniformResourceIdentifier(ia5(uri)))
+        .chain(dns_names.iter().map(|dns| GeneralName::DnsName(ia5(dns))))
+        .collect();
+    extension(&SubjectAltName(names))
+}
+
+/// The subject alternative name the CA writes in a host certificate of `host_id`: the host-role
+/// URI, then the host id as a DNS name.
+pub fn host_san(host_id: &str) -> Extension {
+    san(&[HOST_ROLE_URI], &[host_id])
+}
+
+/// What a well-behaved coordinator issues, as the CA's profile says (design 4.4): a seven-day
+/// certificate from now for the request's key, subject `host:<id>`, the host-role URI and the
+/// host id as a DNS name, client authentication, and the CA as the bundle.
 pub fn proper(ca: &Ca, args: &Args) -> Issued {
     Issued {
         host_id: args.host_id.clone(),
         cert_pem: ca.leaf(
             &args.spki,
             &format!("CN=host:{}", args.host_id),
-            vec![eku(&[ID_KP_CLIENT_AUTH])],
+            vec![host_san(&args.host_id), eku(&[ID_KP_CLIENT_AUTH])],
             (args.now, args.now + WEEK),
         ),
         ca_bundle_pem: ca.pem.clone(),

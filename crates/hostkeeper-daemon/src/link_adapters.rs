@@ -1,6 +1,6 @@
-//! The daemon behind six ports of the heartbeat loop (`hostkeeper_link`): the executor, the
+//! The daemon behind seven ports of the heartbeat loop (`hostkeeper_link`): the executor, the
 //! held halts, the installed services, the service observer, the enrollment loop's word on the
-//! certificate and the report of the Sigstore trusted root.
+//! certificate, the report of the Sigstore trusted root and the runner of `maintain` orders.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
 //! update, an install, an uninstall, an abort or a clear-record) as the protobuf `Order` that
@@ -8,9 +8,13 @@
 //! ([`order_result`]). It decides nothing about the order: the checks, the locks and the try
 //! rules are the daemon's.
 //!
+//! [`DaemonMaintain`] is the loop's [`MaintainSink`]: a `maintain` order, as the protobuf `Order`
+//! [`Daemon::order`] takes.
+//!
 //! [`DaemonHalts`] is the loop's [`HeldHalts`] over the very store the executor reads
-//! ([`crate::executor::Ctx::halts`]): a generation the loop raises lifts the service's halt as
-//! `clear_halt` does, and is the one the next order of the service is judged against.
+//! ([`crate::executor::Ctx::halts`]): each generation of a reply goes to
+//! [`crate::verbs::clear_halt::heard`], which holds a halt under it, lifts a halt as `clear_halt`
+//! does, or removes the file of a service that holds no halt.
 //!
 //! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
 //! version, at that version, with the target of its step record while the record is unfinished
@@ -31,9 +35,10 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
-    Drift, Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult,
-    OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver,
-    ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
+    Drift, Health, HeldHalt, HeldHalts, Liveness, MaintainOrder, MaintainSink, Observation, Order,
+    OrderId, OrderRef, OrderResult, OrderSink, Outcome, Reason, RecordedService, Renewal,
+    RenewalSource, ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource,
+    Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -45,6 +50,40 @@ use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
 use crate::verbs::force::SELF_SERVICE;
+
+/// The runner of `maintain` orders over the daemon: each order the loop gives it is run by
+/// [`Daemon::order`] (`verbs::maintain`), on the loop's worker, to the turn's end or a wait for a
+/// reboot. The answer goes to the daemon's log only, but for a resend's: how the turn goes is the run state of the
+/// maintenance report ([`crate::maintenance_state::RunReported`]).
+pub struct DaemonMaintain {
+    daemon: Arc<Daemon>,
+}
+
+impl DaemonMaintain {
+    pub fn new(daemon: Arc<Daemon>) -> DaemonMaintain {
+        DaemonMaintain { daemon }
+    }
+}
+
+impl MaintainSink for DaemonMaintain {
+    fn maintain(&self, order: &MaintainOrder) {
+        let maintain = wire::Order {
+            order_id: order.id.as_str().to_owned(),
+            r#try: order.order_try,
+            verb: Some(wire::order::Verb::Maintain(order.maintain.clone())),
+        };
+        let reply = self.daemon.order(&maintain);
+        // A resend is answered `Running` while the turn runs or waits, and from the record once
+        // it ended: neither says anything new.
+        if !matches!(reply, Reply::Running | Reply::Finished { resent: true, .. }) {
+            self.daemon.ctx().log(&format!(
+                "maintain order {} try {}: {reply:?}",
+                order.id.as_str(),
+                order.order_try
+            ));
+        }
+    }
+}
 
 /// The most bytes of a verdict's `detail` (`UpdateResult.detail` of `hostkeeper.agent.v1`).
 pub const MAX_DETAIL: usize = 512;
@@ -61,9 +100,30 @@ impl DaemonOrders {
 }
 
 impl OrderSink for DaemonOrders {
+    /// The daemon's reply as its verdict ([`order_result`]), with the hook's own `detail` of a
+    /// verdict the step record holds ([`hook_detail`]) when the reply gives none.
     fn execute(&self, order: &Order, target: &Version) -> OrderResult {
-        order_result(order, target, &self.daemon.order(&wire_order(order)))
+        let reply = self.daemon.order(&wire_order(order));
+        let mut result = order_result(order, target, &reply);
+        if matches!(reply, Reply::Finished { .. }) & result.detail.is_none() {
+            result.detail = hook_detail(self.daemon.ctx(), order, target);
+        }
+        result
     }
+}
+
+/// The hook's `detail` of how `order` ended at `target` ([`Record::finished_detail`]), cut to
+/// [`MAX_DETAIL`] bytes: from the service's step record when it is finished and is the record of
+/// that try at that version. `None` when the record holds none, is of another order or version
+/// (a verdict answered without a step record, such as a refused entry), or cannot be read.
+fn hook_detail(ctx: &Ctx, order: &Order, target: &Version) -> Option<String> {
+    let Ok(Loaded::Current(record)) = ctx.store(order.service()).load() else {
+        return None;
+    };
+    let same =
+        (record.order_try == Some(order.order_try)) & (record.target_version == target.as_str());
+    same.then(|| record.finished_detail().map(bounded))
+        .flatten()
 }
 
 /// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try, and
@@ -242,25 +302,44 @@ impl DaemonHalts {
 }
 
 impl HeldHalts for DaemonHalts {
-    /// The generation the store holds. A store that cannot be read holds every generation: the
-    /// loop raises a generation only above the one held, so a halt is never lifted on a file
-    /// that cannot be read, and the executor refuses the service's orders (`halt_unreadable`)
-    /// until it can.
-    fn held(&self, service: &ServiceName) -> u64 {
-        self.daemon.ctx().halts.get(service).unwrap_or(u64::MAX)
+    /// Judges the generation as [`Daemon::heard_halt`] does: a halt held under no generation is
+    /// held under `before` (or lifted by a greater generation), one held under a smaller one is
+    /// lifted (the service's `Halt` record cleared
+    /// first, then its file removed), and a file of a service that holds no halt is removed. A
+    /// service whose lock is held, and a record or file that cannot be read, change nothing and
+    /// are not an error: the next reply judges them again, and the executor refuses the service's
+    /// orders (`record_unreadable`, `halt_unreadable`) until they read. A file or record that
+    /// cannot be written is the error, which the loop logs.
+    fn heard(&self, service: &ServiceName, before: Option<u64>, generation: u64) -> io::Result<()> {
+        self.daemon
+            .heard_halt(service, before, generation)
+            .map(drop)
+            .map_err(|refused| io::Error::other(refused.detail))
     }
 
-    /// Lifts the halt for a greater generation as `clear_halt` does ([`Daemon::clear_halt`]):
-    /// the service's `Halt` record cleared first, then the store's generation raised. A
-    /// generation not above the one held changes nothing and is not an error; a service whose
-    /// lock is held, and a store or record that cannot be read or written, are, and the loop
-    /// tries again at its next heartbeat.
-    fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()> {
-        match self.daemon.clear_halt(service, generation) {
-            Ok(_) => Ok(()),
-            Err(refused) if refused.refusal == Refusal::StaleHaltGeneration => Ok(()),
-            Err(refused) => Err(io::Error::other(refused.detail)),
-        }
+    /// The halt the service's step record ended in, under the generation the store holds, and
+    /// when that generation was written. `None` while the record holds no halt, and while the
+    /// record or the store cannot be read: the executor then refuses the service's orders under
+    /// that name (`record_unreadable`, `halt_unreadable`), which the verdict reports.
+    fn holding(&self, service: &ServiceName) -> Option<HeldHalt> {
+        let ctx = self.daemon.ctx();
+        let Ok(Loaded::Current(record)) = ctx.store(service).load() else {
+            return None;
+        };
+        let State::Finished {
+            verdict: Verdict::Halt,
+            reason,
+        } = record.state
+        else {
+            return None;
+        };
+        Some(HeldHalt {
+            reason: reason
+                .as_deref()
+                .and_then(|reason| Reason::new(reason).ok()),
+            generation: ctx.halts.get(service).ok()?,
+            written_unix: ctx.halts.written_unix(service),
+        })
     }
 }
 
@@ -357,7 +436,8 @@ fn recorded_installer(ctx: &Ctx, service: &ServiceName) -> Option<String> {
 
 /// The verdict a finished record of an update of hostkeeper itself keeps to report: under the
 /// order id the settlement kept (`Progress::report_order_id`) and the record's try, at its
-/// target, as an order that ended with the record's verdict ([`finished`]); `None` for a record
+/// target, as an order that ended with the record's verdict ([`finished`]), with the hook's
+/// `detail` the record holds of it ([`Record::finished_detail`]); `None` for a record
 /// that keeps none, is unfinished, names no try, or whose id or target the loop cannot send.
 pub fn settled_result(record: &Record) -> Option<OrderResult> {
     let State::Finished { verdict, reason } = &record.state else {
@@ -376,7 +456,11 @@ pub fn settled_result(record: &Record) -> Option<OrderResult> {
         forced: false,
         detail: None,
     };
-    Some(finished(base, verdict, reason.as_deref()))
+    let result = finished(base, verdict, reason.as_deref());
+    Some(OrderResult {
+        detail: result.detail.or(record.finished_detail().map(bounded)),
+        ..result
+    })
 }
 
 /// The service-observer port over the daemon's observer.
@@ -496,7 +580,11 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
     let health = match beat_health(seen).0 {
         wire::Health::Healthy => Health::Healthy,
         wire::Health::Absent => Health::Absent,
-        wire::Health::Unhealthy | wire::Health::Unspecified => Health::Unhealthy,
+        // `Silent` is the coordinator's word, which a local read never yields; like a health the
+        // daemon cannot tell, it counts as unhealthy.
+        wire::Health::Unhealthy | wire::Health::Unspecified | wire::Health::Silent => {
+            Health::Unhealthy
+        }
     };
     Observation {
         liveness,

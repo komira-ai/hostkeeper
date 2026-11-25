@@ -193,6 +193,7 @@ pub fn native(fleet: &Fleet, wants: &BTreeMap<String, Desired>) -> Fleet {
             last_renew_error: None,
             trusted_root: crate::trusted_root::TrustedRootSaid::default(),
             skewed_beats: 0,
+            maintenance: None,
         });
         node.features.retain(|f| f != TARGET_FEATURE);
         node.features.push(TARGET_FEATURE.to_owned());
@@ -241,6 +242,7 @@ pub fn secs(n: u64) -> Duration {
 /// A healthy heartbeat of a host running `running`, not updating, with no update behind it.
 pub fn beat(running: &str) -> Heartbeat {
     Heartbeat {
+        local_halt: None,
         platform: Platform::LinuxX86_64,
         version: version(running),
         health: Health::Healthy,
@@ -258,6 +260,7 @@ pub fn beat(running: &str) -> Heartbeat {
         cert_not_after_unix: None,
         last_renew_error: None,
         record_try: None,
+        maintenance: None,
     }
 }
 

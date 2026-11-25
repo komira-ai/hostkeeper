@@ -120,6 +120,13 @@ impl Coordinator {
                         let mut host = report::host(&id, node, &status, now, unix_now);
                         crate::picks::show(&fleet, &id, &mut host, &self.services, &desired);
                         self.show_repositories(&fleet, &id, &mut host);
+                        crate::remote_login_probe::show(&fleet, &id, &mut host);
+                        crate::full_disk_access::show(&fleet, &id, &mut host);
+                        self.show_operator_keys(&fleet, &id, &mut host);
+                        self.show_ssh_report(&fleet, &id, &mut host);
+                        self.show_serial_console_report(&id, &mut host);
+                        self.show_prerequisites(&fleet, &id, &mut host);
+                        crate::maintenance::show_maintenance(&fleet, &id, &mut host, unix_now);
                         host
                     });
                     (id, heard)
@@ -139,6 +146,7 @@ impl Coordinator {
         let (mut hosts, shown) = self.page_hosts(page, enrolled);
         self.show_inventory_with(&mut hosts, &shown);
         self.show_groups(&mut hosts);
+        self.show_xcode_due(&mut hosts);
         Ok(proto::ListHostsResponse {
             hosts,
             next_page_token,
@@ -170,6 +178,13 @@ impl Coordinator {
             let mut host = report::host(&id, node, &status, now, unix_now);
             crate::picks::show(&fleet, &id, &mut host, &self.services, &self.desired.all());
             self.show_repositories(&fleet, &id, &mut host);
+            crate::remote_login_probe::show(&fleet, &id, &mut host);
+            crate::full_disk_access::show(&fleet, &id, &mut host);
+            self.show_operator_keys(&fleet, &id, &mut host);
+            self.show_ssh_report(&fleet, &id, &mut host);
+            self.show_serial_console_report(&id, &mut host);
+            self.show_prerequisites(&fleet, &id, &mut host);
+            crate::maintenance::show_maintenance(&fleet, &id, &mut host, unix_now);
             // The verdict of a `clear_record` the host reported, which no rule reads.
             for one in &mut host.services {
                 if let Some(cleared) = fleet.clear_records.shown(&id, &one.service) {
@@ -185,6 +200,7 @@ impl Coordinator {
         self.show_running(&mut hosts[0], &id, enrolled.as_ref());
         self.show_inventory_with(&mut hosts, &[enrolled]);
         self.show_groups(&mut hosts);
+        self.show_xcode_due(&mut hosts);
         let [host] = hosts;
         Ok(proto::GetHostResponse { host: Some(host) })
     }
@@ -272,6 +288,10 @@ impl Coordinator {
         drop(fleet);
         if !update_in_flight {
             self.running.forget(&id);
+            self.operator_keys.forget(&id);
+            self.ssh_reports.forget(&id);
+            self.serial_console_reports.forget(&id);
+            self.prerequisites.forget(&id);
             tracing::info!(host_id = %id, "a retired host held no update: slot freed");
             enrollment.retire(&id);
         }

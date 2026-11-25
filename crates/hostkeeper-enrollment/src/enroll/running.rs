@@ -43,6 +43,7 @@ impl HostRunning {
                 })
                 .collect(),
             at_unix,
+            bmc: None,
         }
     }
 
@@ -92,9 +93,9 @@ impl EnrollmentStore {
     /// A service whose installer in `running` is empty (not known) keeps the installer the record
     /// holds for the same service, else it stays empty.
     ///
-    /// Decided under the store's lock, as [`Self::note_heartbeat`] is. A host whose record is
-    /// known to hold `running` already (this store wrote or read it) is answered from memory,
-    /// without the lock or a read; an approval of the host forgets it.
+    /// Decided as [`Self::note_heartbeat`] is. A host whose record is known to hold `running`
+    /// already (this store wrote or read it) is answered from memory, without the lock or a
+    /// read; an approval of the host by this store forgets it.
     ///
     /// # Errors
     /// [`StoreError`] when the host record cannot be read or written.
@@ -108,16 +109,22 @@ impl EnrollmentStore {
         if known().get(host) == Some(running) {
             return Ok(());
         }
-        let _held = self.lock()?;
-        let Some(row) = self.load_host(host)? else {
-            return Ok(());
-        };
-        let kept = row.pb.running.as_ref().map(HostRunning::of_pb);
-        let said = running.keeping_installers_of(kept.as_ref());
-        if kept.as_ref() != Some(&said) {
-            self.records().set_running(&row.pb, said.to_pb(now))?;
-        }
-        known().insert(host.clone(), running.clone());
-        Ok(())
+        self.decided(|| {
+            let Some(row) = self.load_host(host)? else {
+                return Ok(());
+            };
+            let kept = row.pb.running.as_ref().map(HostRunning::of_pb);
+            let said = running.keeping_installers_of(kept.as_ref());
+            if kept.as_ref() != Some(&said) {
+                // The BMC its daemon reported is kept: it is not what the host runs.
+                let record = pb::Running {
+                    bmc: row.pb.running.as_ref().and_then(|r| r.bmc.clone()),
+                    ..said.to_pb(now)
+                };
+                self.records().set_running(&row.pb, record)?;
+            }
+            known().insert(host.clone(), running.clone());
+            Ok(())
+        })
     }
 }

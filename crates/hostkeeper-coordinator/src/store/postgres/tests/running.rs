@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use hostkeeper_enrollment::enroll::records::pb;
+use hostkeeper_enrollment::enroll::records::{Records, pb};
 use hostkeeper_enrollment::enroll::{EnrollmentStore, HostRunning, RunningService, StoreError};
 use prost::Message as _;
 
@@ -14,7 +14,7 @@ use super::coordinator::approved;
 use super::with_session;
 use super::{SPENT_NOW, TestDatabase};
 use crate::enrollment::tests::support::NOW;
-use crate::store::postgres::{PgRecords, load_all, migrate, records};
+use crate::store::postgres::{PgRecords, migrate, parts, records};
 
 fn runs(version: &str) -> HostRunning {
     HostRunning {
@@ -81,12 +81,12 @@ fn what_a_host_runs_is_a_row_of_its_own_table_written_on_change_and_deleted_by_a
         .map(|column| vec![Some(column.to_owned())])
     );
 
-    let statements = store.statements();
+    let commits = database.commits();
     let never = hostkeeper_enrollment::names::HostId::parse("web-9").expect("a host id");
     enrollment
         .note_running(&never, &runs("1.0"), NOW + 30)
         .expect("noted");
-    assert_eq!(store.statements(), statements, "a host never approved");
+    assert_eq!(database.commits(), commits, "a host never approved");
     assert_eq!(held(&database), Vec::<pb::Running>::new());
 
     enrollment
@@ -112,18 +112,18 @@ fn what_a_host_runs_is_a_row_of_its_own_table_written_on_change_and_deleted_by_a
         (NOW + 120, "1.1")
     );
 
-    let again = EnrollmentStore::new(Arc::new(PgRecords::over(&store).expect("records")));
+    let again = EnrollmentStore::new(Arc::new(PgRecords::over(&store)));
     let read = again.enrolled_host(&id).expect("read").expect("enrolled");
     assert_eq!(
         (read.running, read.running_unix),
         (Some(runs("1.1")), Some(NOW + 120))
     );
-    let loaded = store.statements();
+    let loaded = database.commits();
     again
         .note_running(&id, &runs("1.1"), NOW + 200)
         .expect("noted");
     assert_eq!(
-        store.statements(),
+        database.commits(),
         loaded,
         "a store made again writes nothing"
     );
@@ -137,13 +137,15 @@ fn what_a_host_runs_is_a_row_of_its_own_table_written_on_change_and_deleted_by_a
 }
 
 /// Proves: a running record that does not decode is refused loudly, never read as a host that
-/// ran nothing: the records of a store made over the tables are refused with an error that names
-/// the host's row of the table, and an export's read of the tables is refused the same way.
+/// ran nothing: a read of the host, and a write whose decision saw the host (which reads it again
+/// before it writes), are refused with an error that names the host's row of the table, and
+/// nothing is written; an export's read of the tables is refused the same way.
 ///
 /// Catches: a record dropped when it does not decode, which the next heartbeat would write over
-/// without a trace, and an export that writes the hosts back without it.
+/// without a trace, a write that lands over it, and an export that writes the hosts back without
+/// it.
 #[test]
-fn a_running_record_that_does_not_decode_is_refused_at_start_and_by_an_export() {
+fn a_running_record_that_does_not_decode_is_refused_at_a_read_a_write_and_an_export() {
     let database = TestDatabase::new();
     let (store, _) = database.open("records").expect("the store opens");
     let (enrollment, id) = approved(&store, "web-1");
@@ -153,13 +155,30 @@ fn a_running_record_that_does_not_decode_is_refused_at_start_and_by_an_export() 
     database
         .run("UPDATE enrollment_host_running SET running = '\\xff'::bytea")
         .expect("the row is damaged");
-    let refused = PgRecords::over(&store).expect_err("refused");
+    let records = PgRecords::over(&store);
+    let undecoded = "enrollment_host_running/web-1 is not a store file this release reads: the \
+                     running record does not decode";
+    let refused = records.host(&id).expect_err("refused");
     assert!(matches!(refused, StoreError::Corrupt { .. }), "{refused}");
-    assert!(
-        refused
-            .to_string()
-            .contains("enrollment_host_running/web-1 is not a store file this release reads: the running record does not decode"),
-        "{refused}"
+    assert!(refused.to_string().contains(undecoded), "{refused}");
+    let seen = pb::Host {
+        host_id: id.to_string(),
+        ..pb::Host::default()
+    };
+    let commits = database.commits();
+    let refused = records
+        .set_duplicate(&seen)
+        .expect_err("a write over it is refused");
+    assert!(matches!(refused, StoreError::Corrupt { .. }), "{refused}");
+    assert!(refused.to_string().contains(undecoded), "{refused}");
+    assert_eq!(
+        database.rows("SELECT duplicate FROM enrollment_hosts"),
+        [[Some("f".to_owned())]]
+    );
+    assert_eq!(
+        database.commits(),
+        commits + 1,
+        "the refused write's own row"
     );
     let read = with_session(&database, |session| {
         records::read_all(session).expect("reads")
@@ -194,7 +213,7 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
             migrate::apply(session, &before)
                 .expect_err("the release before is refused")
                 .to_string(),
-            load_all(session, SPENT_NOW).expect("the state reads"),
+            parts::load(session, SPENT_NOW).expect("the state reads").0,
         )
     });
     assert_eq!(
@@ -237,7 +256,7 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=18)
+        (1..=31)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

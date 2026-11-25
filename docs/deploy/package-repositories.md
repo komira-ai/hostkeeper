@@ -440,7 +440,7 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   coordinator's user, mode 0600 or 0400. `Repositories.Put` refuses the entry `credential_unusable` when the file is
   not so, and the coordinator reads it again at every read from the origin, so a new credential
   takes effect without a restart. A public entry names no credential file. The credential is never
-  sent to a host, logged or answered; `hkctl repositories get` shows the file's path.
+  sent to a host, logged or answered; `hk repositories get` shows the file's path.
 - **One suite and one pool per host group**: the suite `dists/<group>/` lists that group's packages
   alone, from the pool `pool/<group>/`, so a host learns nothing of another group's configuration.
   The entry's `suites` are the groups it serves; a release's repository entry names the channel
@@ -465,7 +465,7 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   the suite's `InRelease` from the coordinator, then each index file it lists for the host's
   architecture (`binary-<arch>`, `binary-all`, `i18n`), each checked against the size and SHA-256
   that `InRelease` lists, into a new directory that it renames over the mirror whole (directories
-  0755, files 0644, which apt's fetch user reads). apt then reads the mirror and checks it as it
+  0700, files 0600, root's alone; apt runs as root and reads them). apt then reads the mirror and checks it as it
   checks any repository: `InRelease` signed by the pinned key, the index's digest, the `.deb`'s
   digest, and the order's pin. The daemon fetches the pinned package's pool file into the mirror
   and checks it against the pin before apt copies it. apt is given no client certificate. A fetch
@@ -484,8 +484,9 @@ the coordinator. A private repository is an entry of the coordinator's registry 
   entry, and an entry of a private repository (or of the store `coordinator`) is `no_target` for
   it; it runs every other package as before.
 
-No package carries a secret, private or not: a private repository is a place for configuration
-that is not public, never for credentials (docs/design/hostgroups.md section 6.5).
+A private repository is a place for configuration that is not public. A package of it may carry a
+credential every host of its group may hold: on a host, what hostkeeper keeps of a package is
+root's alone (docs/design/hostgroups.md section 6.5).
 
 ## Packaging a service
 
@@ -533,7 +534,10 @@ not in the package, at `cutover` and at every daemon start.
 
 All of these run for the newest release of a run only: when one run releases several versions, the
 package channels take the last, since a repository serves the newest version and it carries the
-changes of the older ones. Each job is a green no-op until the settings below exist.
+changes of the older ones. They start once every `verify` of the run passed (job `newest`), beside
+`publish` and the image push: they read the files `verify` checked, never the GitHub release. A
+failure of a check, `promote-check` or a stable job opens the release's `RELEASE-RED` issue
+([github-actions.md](github-actions.md#when-it-fails)) and holds no deploy. Each job is a green no-op until the settings below exist.
 
 1. **Testing.** Every job that signs or puts the release's files first checks them against the
    release's `SHA256SUMS` and checks each asset's attestation by this repository's workflow at the
@@ -565,7 +569,11 @@ changes of the older ones. Each job is a green no-op until the settings below ex
    and every check succeeded or had nothing to check.
 4. **Stable.** `stable-apt-*` and `stable-rpm-*` list the entries of the release that `testing` holds
    in the index of `stable` (held to the digests of the release's `SHA256SUMS`; nothing is uploaded, the
-   packages are in the pool already). `promote-pkg` reads the directory of the installers back
+   packages are in the pool already), with the same read, index and write jobs and the same lost-race
+   rule as testing. The apt promotion has up to five attempts (`stable-apt-write` to `stable-apt-write-5`;
+   the fifth fails instead of asking for a sixth), the rpm one up to three: every product of the
+   repository promotes into the one apt index of `stable`, and one attempt of ours holds it for several
+   minutes, so another product's promotion often lands in between. No job waits for these writes. `promote-pkg` reads the directory of the installers back
    against `SHA256SUMS` and moves `stable.json` to the release, with `If-Match` on the ETag it read and
    only to a higher version, then invalidates the path in the CDN. **Promotion copies no bytes:** the
    same pool files and the same installer files that were installed and checked are the ones the

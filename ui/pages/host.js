@@ -12,19 +12,42 @@
 // the "Host group" dropdown offers, and HostGroups.Move, after a confirm, moves the host into the
 // group chosen, or into none when the blank is chosen; a host in no group is Unassigned and is ordered no package. Retire is offered when Hosts.Get fails too,
 // for an enrolled host the coordinator has not heard from since it started (a dead one).
+// The "Power and boot" tab makes no call when the page is drawn; on a button, after a confirm,
+// Console.Power (status, on, soft shutdown, off, cycle or reset of the host's BMC) or
+// Console.SetBootDevice (disk, network or BIOS setup, for the next boot or every boot), each with
+// a required reason and with no refresh: the host's state changes slowly.
+// The Remote SSH tab is `sshpanel.js`: Ssh.HostKeys is called when the page is read, and on a button
+// Ssh.PinHostKeys (after a confirm); its terminal is a socket from `ctx.openSocket`.
+// Alerts.List is called last when the page is read, for the alerts that name the host; when it
+// fails, the page says so and shows the reasons the host's own report gives. On a button of a
+// reason, after a confirm, Releases.ClearHalt (with the reason typed) or Hosts.Retry.
+// On the Updates tab, for a host with a maintenance report, Maintenance.Schedule on the Update, Check and Schedule
+// buttons (the Check sends no confirm; the other two ask first).
 //
 // The page is a status header (name, status LED and word, role, group, what it runs, the last
-// heartbeat, and a small elevation of the rack it stands in), then tabs (Overview, Services,
-// Certificate, Labels, Placement, Host group; every panel is in the page, the stylesheet shows the
+// heartbeat, what its maintenance report lists as due, and a small elevation of the rack it stands
+// in), then, when the host is not healthy,
+// why: every reason (`health.js`) in plain words, with when it began and the one action that fixes
+// it (Clear halt, Retry update), and for a js-agent taint what hostkeeper holds of it; then tabs (Overview, Services,
+// Updates (`updates.js`: the facts of the maintenance report Hosts.Get answers, each due item, the Xcodes, the last
+// look and how old it is; for a host with a report, an Update button and the Schedule form of `schedule.js`,
+// which call Maintenance.Schedule), Certificate, Labels, Placement, Host group, Remote SSH, Power and boot; every panel is in the page, the stylesheet shows the
 // chosen one, and the choice is kept across a refresh of the same host), then the danger zone,
-// which holds Retire. The status says "degraded" for a live host whose service is unhealthy or whose
-// last update failed; the lab's state alone would call it healthy.
+// which holds Retire. The status says "degraded" for a live host with any reason: a service of it
+// unhealthy, halted or whose last update failed, or an alert that names it; the lab's state alone
+// would call it healthy.
 
 import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
+import { accessRows, accessWarning } from "../fulldisk.js";
+import { baselineNotice, baselineRows } from "../serialbaseline.js";
+import { isDegraded, reasonsOf } from "../health.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
+import { loadSsh, sshPanel } from "../sshpanel.js";
+import { dueNotice, isDue, isStale, updatesPanel } from "../updates.js";
+import { newScheduleState, scheduleForm, updateControls } from "../schedule.js";
 
 // Rows of a facts table: a name and its value, no heading strip.
 function kv(rows, extra) {
@@ -37,12 +60,13 @@ function plain(text) {
   return typeof text === "string" ? text.replace(/_/g, " ") : text;
 }
 
-// The status a host header shows: the lab's state, but a host whose service reports unhealthy or
-// whose last update failed is `degraded`, never `healthy`. `[word, tone]`.
-export function statusOf(host) {
+// The status a host header shows: the lab's state, but a live host with a reason (`reasons`, of
+// `health.js`) or whose service reports unhealthy in its last heartbeat is `degraded`, never
+// `healthy` or `updating`. `[word, tone]`.
+export function statusOf(host, reasons = []) {
   const state = hostState(host);
   const heart = host.heartbeat && list(host.heartbeat, "services").some((s) => s.health === "HEALTH_UNHEALTHY");
-  if (state === "failed" || (state === "healthy" && heart)) {
+  if (state === "failed" || (state === "healthy" && heart) || isDegraded(host, reasons)) {
     return ["degraded", "bad"];
   }
   return [state, { healthy: "ok", updating: "info", offline: "bad", pending: "muted" }[state]];
@@ -81,6 +105,20 @@ export function parseLabels(text) {
 
 // The reason sent with every move: the form asks for none.
 const DEFAULT_MOVE_REASON = "moved in the console";
+
+// The Updates tab's controls, for a host with a maintenance report: the Update button with its reason
+// and the Schedule form. `scheduling` holds the typed reason and the form's state across repaints.
+function maintenanceActions(ctx, host, scope, scheduling, repaint) {
+  if (host.maintenance === undefined) {
+    return [];
+  }
+  const env = {
+    ctx, state: scheduling, form: scheduling.form, repaint,
+    schedule: (request) => ctx.api.maintenance.schedule(request),
+    after: () => ctx.refresh(),
+  };
+  return [updateControls(env, { hostIds: [scope.hostId] }), scheduleForm(env, scope)];
+}
 
 // The Host group form: a dropdown of the groups held, the host's own selected (the
 // blank, "Unassigned", for a host in no group), and Move. `groups` is the
@@ -259,7 +297,9 @@ function serviceSection(ctx, nodeId, view) {
   };
   const reason = () => trimmed(form.reason);
   const healthWord = enumLabel(view["health"], "HEALTH_");
-  const tone = view.health === "HEALTH_UNHEALTHY" ? "bad" : view.health === "HEALTH_HEALTHY" ? "ok" : "muted";
+  // A silent host's service (the coordinator's word, not the host's) is as bad as an unhealthy one.
+  const bad = view.health === "HEALTH_UNHEALTHY" || view.health === "HEALTH_SILENT";
+  const tone = bad ? "bad" : view.health === "HEALTH_HEALTHY" ? "ok" : "muted";
   return h("section", { class: "service card" },
     h("div", { class: "card-head" },
       h("h3", {}, service),
@@ -318,6 +358,96 @@ function serviceSection(ctx, nodeId, view) {
           ctx.refresh();
           return `Released the hold of ${service} on ${nodeId}.`;
         })))));
+}
+
+// The power buttons: the proto's action, the button's name and label, the words of what was sent,
+// and what the confirm says. `cuts` buttons stop the host's running system and are shown as danger.
+const POWER_BUTTONS = [
+  ["POWER_ACTION_STATUS", "power-status", "Status", "status", null],
+  ["POWER_ACTION_ON", "power-on", "On", "on", null],
+  ["POWER_ACTION_SOFT", "power-soft", "Soft shutdown", "soft shutdown",
+    "Soft shutdown asks the host's system to shut itself down; it does so in its own time, and this answer does not say when it is off."],
+  ["POWER_ACTION_OFF", "power-off", "Off", "off",
+    "Off cuts the power: the running system is stopped at once, and a soft shutdown still running is cut."],
+  ["POWER_ACTION_CYCLE", "power-cycle", "Cycle", "cycle",
+    "Cycle cuts the power and turns it on: the running system is stopped at once, and a soft shutdown still running is cut."],
+  ["POWER_ACTION_RESET", "power-reset", "Reset", "reset",
+    "Reset restarts the host at once: the running system is stopped, and a soft shutdown still running is cut."],
+];
+
+// The words of a power action, as the answer names it (`POWER_ACTION_SOFT` is `soft shutdown`).
+function powerWord(value) {
+  const found = POWER_BUTTONS.find(([id]) => id === value);
+  return found === undefined ? plain(enumLabel(value, "POWER_ACTION_")) : found[3];
+}
+
+// What a Console.Power answer says: the state the BMC reported before the command, and the command
+// sent (the coordinator sends `on` for a cycle of a host that is off).
+export function powerReport(nodeId, action, reply) {
+  const was = reply.state === "POWER_STATE_ON" ? "on" : reply.state === "POWER_STATE_OFF" ? "off" : "in a state the BMC did not say";
+  const sent = typeof reply.sent === "string" ? reply.sent : "";
+  if (action === "POWER_ACTION_STATUS" || sent === "" || sent === "POWER_ACTION_STATUS") {
+    return `${nodeId} is ${was}.`;
+  }
+  const tail = sent === "POWER_ACTION_SOFT" ? " The host shuts down in its own time." : "";
+  return sent === action
+    ? `${nodeId} was ${was}; ${powerWord(sent)} sent.${tail}`
+    : `${nodeId} was ${was}; ${powerWord(sent)} sent instead of ${powerWord(action)}.${tail}`;
+}
+
+// Boot flags in words: `disk, every boot, UEFI`.
+function bootFlags(device, persistent, efi) {
+  const name = { BOOT_DEVICE_DISK: "disk", BOOT_DEVICE_PXE: "the network (PXE)", BOOT_DEVICE_BIOS: "BIOS setup" }[device]
+    || plain(enumLabel(device, "BOOT_DEVICE_"));
+  return `${name}, ${persistent === true ? "every boot" : "next boot only"}, ${efi === true ? "UEFI" : "legacy BIOS"}`;
+}
+
+// The flags of a Console.SetBootDevice answer, as the BMC reads them back.
+export function bootReport(nodeId, reply) {
+  if (typeof reply.device !== "string" || reply.device === "BOOT_DEVICE_UNSPECIFIED") {
+    return `The BMC of ${nodeId} holds no boot device override.`;
+  }
+  return `The BMC of ${nodeId} now boots ${bootFlags(reply.device, reply.persistent, reply.efi)}.`;
+}
+
+// Power and boot: the host's BMC, reached by the coordinator, never by the browser. Every button
+// needs a reason, asks first (the confirm is a courtesy; the coordinator decides) and is audited.
+// No refresh follows: the host's state changes slowly, and the answer says what the BMC reported.
+// The Console page (`serialconsole.js`) shows the same section beside its terminal.
+export function powerSection(ctx, nodeId) {
+  const form = { reason: "", device: "BOOT_DEVICE_DISK", persistent: false, efi: false };
+  const needReason = (run) => async () => {
+    if (trimmed(form.reason) === "") {
+      return "Give a reason first.";
+    }
+    return reasonProblem(trimmed(form.reason)) || run(trimmed(form.reason));
+  };
+  const power = ([id, name, label, , warning]) => action(ctx, label, name, needReason(async (reason) => {
+    const question = warning === null ? `Send ${label.toLowerCase()} to ${nodeId}?` : `Send ${label.toLowerCase()} to ${nodeId}? ${warning}`;
+    if (!ctx.confirm(question)) {
+      return "Not sent.";
+    }
+    return powerReport(nodeId, id, await ctx.api.console.power({ hostId: nodeId, action: id, reason }));
+  }), warning !== null && id !== "POWER_ACTION_SOFT" ? { class: "danger" } : {});
+  return h("fieldset", { class: "act power card" },
+    h("legend", {}, "Power and boot"),
+    h("p", { class: "note" },
+      "This is the BMC of a Linux server, reached by the coordinator. Every press is audited with the reason. "
+      + "To fix a host that boots the wrong thing: set the boot device to disk, every boot, then cycle."),
+    field("Reason", "power-reason", form, "reason", { maxlength: 256 }),
+    h("div", { class: "buttons" }, POWER_BUTTONS.map(power)),
+    select("Boot device", "boot-device", form, "device", [
+      ["BOOT_DEVICE_DISK", "Disk"], ["BOOT_DEVICE_PXE", "Network (PXE)"], ["BOOT_DEVICE_BIOS", "BIOS setup"]]),
+    checkbox("Every boot from now on", "boot-persistent", form, "persistent"),
+    checkbox("UEFI", "boot-efi", form, "efi"),
+    action(ctx, "Set boot device", "set-boot-device", needReason(async (reason) => {
+      const { device, persistent, efi } = form;
+      if (!ctx.confirm(`Set the boot device of ${nodeId} to ${bootFlags(device, persistent, efi)}?`)) {
+        return "Not sent.";
+      }
+      return bootReport(nodeId, await ctx.api.console.setBootDevice(
+        { hostId: nodeId, device, persistent: persistent === true, efi: efi === true, reason }));
+    })));
 }
 
 // The audit actions that end an uninstall: the host reported the service gone, or the service
@@ -441,6 +571,104 @@ function inventoryFacts(ctx, host) {
   ];
 }
 
+// When a reason began, in words: the time and whose clock it is, or that it was not reported.
+function sinceWords(reason) {
+  const when = fmtUnix(reason.since);
+  return when === "-" ? "Since: not reported." : `Since ${when} (${reason.sinceIs}).`;
+}
+
+// What hostkeeper holds of a js-agent's taint: the hook's halt reason, what the agent said and the
+// hook's last log lines. The hook tells hostkeeper no check and no run id, so they are said to be
+// not reported rather than left out. No action of hostkeeper clears a taint yet: it is cleared on
+// the host, and then the halt (or the failed update) is cleared here.
+function taintFacts(reason) {
+  const then = reason.fix === "clear-halt" ? "Clear halt" : "Retry update";
+  return h("div", { class: "taint", name: "taint" },
+    kv([
+      ["Taint", "the agent is tainted (its update hook reports the reason tainted)"],
+      ["Finding", reason.taint.said || "-"],
+      ["Check", "not reported to hostkeeper"],
+      ["Run id", "not reported to hostkeeper"],
+    ]),
+    reason.taint.log.length === 0 ? null : h("pre", { class: "log" }, reason.taint.log.map((line) => `${line}\n`)),
+    h("p", { class: "note" },
+      `Clear taint: hostkeeper has no action that clears a taint yet. Clear it on the host, then press ${then} here.`));
+}
+
+// The words under a reason no button fixes.
+const NO_BUTTON = {
+  unhealthy: "Nothing to press here: the service itself says it is unhealthy. Its Services tab has its last update and the actions on it.",
+  prerequisite: "Nothing to press here: the host's daemon tries again by itself, at the next try the message names.",
+  alert: "Nothing to press here: the coordinator's words above say what to do.",
+};
+
+// The one action that fixes `reason`: Clear halt (Releases.ClearHalt of its service, with the
+// reason typed in `form`, after a confirm, since it lifts the service's halt on every host), Retry
+// update (Hosts.Retry of the host and its service, after a confirm), or the words of why there is
+// no button.
+function fixOf(ctx, nodeId, reason, form) {
+  const service = reason.service;
+  if (reason.fix === "clear-halt") {
+    return action(ctx, `Clear halt of ${service}`, `clear-halt-${service}`, async () => {
+      const typed = trimmed(form.reason);
+      if (typed === "") {
+        return "Give a reason first.";
+      }
+      const problem = reasonProblem(typed);
+      if (problem) {
+        return problem;
+      }
+      const taint = reason.taint === null ? ""
+        : ` The agent on ${nodeId} is still tainted: its update hook may halt again until the taint is cleared on the host.`;
+      if (!ctx.confirm(`Clear the halt of ${service}? It lifts the halt on every host of ${service}, not only ${nodeId}; they are ordered again as its update plan and holds let them.${taint}`)) {
+        return "Not cleared.";
+      }
+      await ctx.api.releases.clearHalt({ service, reason: typed });
+      ctx.refresh();
+      return `Cleared the halt of ${service}.`;
+    }, { class: "primary" });
+  }
+  if (reason.fix === "retry") {
+    return action(ctx, `Retry update of ${service}`, `retry-${service}`, async () => {
+      if (!ctx.confirm(`Retry the update of ${service} on ${nodeId}? Its failed report is set aside, and it is ordered the desired version again when its update plan and holds let it.`)) {
+        return "Not retried.";
+      }
+      const reply = await ctx.api.hosts.retry({ nodeId, service });
+      ctx.refresh();
+      const failedAt = reply.setAside && typeof reply.setAside["target"] === "string" ? ` to ${reply.setAside["target"]}` : "";
+      return reply.entry
+        ? `Set aside the failed update of ${service}${failedAt}: ${nodeId} may be ordered it again from its next heartbeat; its Services tab says what its gate waits for.`
+        : `The failed update of ${service}${failedAt} was set aside already: its Services tab says what ${nodeId}'s gate waits for.`;
+    }, { class: "primary" });
+  }
+  return h("p", { class: "note" }, NO_BUTTON[reason.kind]);
+}
+
+// Why the host is not healthy: each reason in plain words, when it began, what was said of it, a
+// taint's facts, and its action; one Reason field (`form.reason`, kept across a change of tab)
+// serves every Clear halt. Nothing when there is no reason and the alerts were read.
+// `alertsFailure` is the error of Alerts.List, or null.
+function healthSection(ctx, nodeId, reasons, alertsFailure, form) {
+  if (reasons.length === 0 && alertsFailure === null) {
+    return null;
+  }
+  return h("section", { class: "health card", name: "health" },
+    h("h3", {}, reasons.length === 0 ? "Alerts" : `Why ${nodeId} is not healthy`),
+    alertsFailure === null ? null : h("p", { class: "warning", role: "alert" },
+      `The alerts were not read (${describeError(alertsFailure)}): only what the host itself reported is shown.`),
+    reasons.some((reason) => reason.fix === "clear-halt")
+      ? field("Reason (for Clear halt)", "health-reason", form, "reason", { maxlength: 256 })
+      : null,
+    reasons.length === 0 ? null : h("ul", { class: "reasons" }, reasons.map((reason) => h("li", {
+      class: `reason ${reason.tone}`, name: "reason",
+    },
+    h("strong", {}, reason.title),
+    reason.said === null ? null : h("p", { class: "said" }, reason.said),
+    h("p", { class: "since" }, sinceWords(reason)),
+    reason.taint === null ? null : taintFacts(reason),
+    fixOf(ctx, nodeId, reason, form)))));
+}
+
 function chooser(ctx) {
   const form = { nodeId: "" };
   return h("section", { class: "page" },
@@ -481,29 +709,43 @@ export async function render(ctx) {
       retireSection(ctx, nodeId));
   }
   let groups = null;
+  let groupStates = [];
   let groupsFailure = null;
   try {
-    groups = (await allPages((token) => ctx.api.hostGroups.list(token === "" ? {} : { pageToken: token }), "hostGroups"))
-      .map((one) => ((one || {}).group || {}).name);
+    groupStates = await allPages((token) => ctx.api.hostGroups.list(token === "" ? {} : { pageToken: token }), "hostGroups");
+    groups = groupStates.map((one) => ((one || {}).group || {}).name);
   } catch (error) {
     groupsFailure = error;
   }
+  const ssh = await loadSsh(host, () => ctx.api.ssh.hostKeys({ hostId: nodeId }));
   const now = ctx.now();
   const agent = host.heartbeat && host.heartbeat.agent;
   const where = await placementSection(ctx, host, nodeId, () => repaint());
+  let alerts = [];
+  let alertsFailure = null;
+  try {
+    alerts = list(await ctx.api.alerts.list({}), "alerts");
+  } catch (error) {
+    alertsFailure = error;
+  }
+  const reasons = reasonsOf(host, alerts);
+  const healthForm = { reason: "" };
   const labelsForm = {
     labels: Object.entries(host.labels || {}).map(([k, v]) => `${k}=${v}`).join(", "),
   };
-  const [stateWord, stateTone] = statusOf(host);
+  const [stateWord, stateTone] = statusOf(host, reasons);
   const services = list(host, "services");
   const certWord = certState(host.certNotAfterUnix, now);
   const rootWord = rootState(host.trustedRootReason);
-  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY"
+  const servicesAttention = services.some((s) => s.health === "HEALTH_UNHEALTHY" || s.health === "HEALTH_SILENT"
     || (s.lastUpdate && /FAIL/.test(String(s.lastUpdate.outcome))));
   const trustAttention = certWord === "expired" || certWord === "soon"
     || (typeof host.lastRenewError === "string" && host.lastRenewError !== "")
     || ["stale", "missing", "unparseable"].includes(rootWord);
   const group = typeof host.hostGroup === "string" && host.hostGroup !== "" ? host.hostGroup : "";
+  const policy = ((groupStates.find((one) => ((one || {}).group || {}).name === group) || {}).group || {}).policy || {};
+  const scope = { hosts: [host], group, policy: policy.maintenance || null, hostId: nodeId };
+  const scheduling = { reason: "", form: newScheduleState(scope) };
   const version = services.length > 0 && typeof services[0].installedVersion === "string"
     ? `${services[0].service} ${services[0].installedVersion}` : "";
   const labelCount = Object.keys(host.labels || {}).length;
@@ -517,12 +759,17 @@ export async function render(ctx) {
         ["Labels", labelsForm.labels || "-"],
         ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
         ...inventoryFacts(ctx, host),
+        ...accessRows(host),
+        ...baselineRows(host),
       ], "cols card"),
+      accessWarning(host),
+      baselineNotice(host),
       assignedSection(listing, nodeId, ends),
     ],
     services: services.length === 0
       ? [h("p", { class: "quiet" }, "The host reports no service.")]
       : services.map((view) => serviceSection(ctx, nodeId, view)),
+    updates: updatesPanel(host),
     trust: [h("div", { class: "pair" }, certificate(host, now), trustedRoot(host))],
     labels: [h("fieldset", { class: "card" },
       h("legend", {}, "Labels"),
@@ -545,14 +792,19 @@ export async function render(ctx) {
       }, { class: "primary" }))],
     placement: [where.section],
     group: [hostGroupSection(ctx, nodeId, host, groups, groupsFailure)],
+    ssh: sshPanel(ctx, nodeId, ssh, (fingerprints) => ctx.api.ssh.pinHostKeys({ hostId: nodeId, fingerprints })),
+    power: [powerSection(ctx, nodeId)],
   };
   const tabs = [
     ["overview", "Overview", ""],
     ["services", "Services", servicesAttention ? "bad" : ""],
+    ["updates", "Updates", isDue(host) || isStale(host) ? "warn" : ""],
     ["trust", "Certificate", trustAttention ? "warn" : ""],
     ["labels", "Labels", ""],
     ["placement", "Placement", where.held ? "" : "muted"],
     ["group", "Host group", ""],
+    ["ssh", "Remote SSH", ""],
+    ["power", "Power and boot", ""],
   ];
   if (!tabs.some(([id]) => id === chosen.tab) || chosen.node !== nodeId) {
     chosen.node = nodeId;
@@ -575,15 +827,18 @@ export async function render(ctx) {
               ["Last heartbeat", fmtUnix(host.lastHeartbeatUnix)],
               ["Labels", labelCount === 0 ? "" : `${labelCount}`]]
               .filter(([, v]) => typeof v === "string" && v !== "")
-              .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v)))),
+              .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v))),
+          dueNotice(host)),
         where.mini),
+      healthSection(ctx, nodeId, reasons, alertsFailure, healthForm),
       h("nav", { class: "tabs", "aria-label": "host sections" },
         tabs.map(([id, label, tone]) => h("button", {
           type: "button", name: `tab-${id}`, class: `tab${chosen.tab === id ? " on" : ""}`,
           "aria-pressed": String(chosen.tab === id),
           on: { click: () => { chosen.tab = id; repaint(); } },
         }, label, tone === "" ? null : h("span", { class: `dot ${tone}`, "aria-hidden": "true" })))),
-      tabs.map(([id]) => h("div", { class: `panel${chosen.tab === id ? "" : " off"}` }, panels[id])),
+      tabs.map(([id]) => h("div", { class: `panel${chosen.tab === id ? "" : " off"}` },
+        id === "updates" ? [...panels[id], ...maintenanceActions(ctx, host, scope, scheduling, repaint)] : panels[id])),
       retireSection(ctx, nodeId));
     return root;
   };

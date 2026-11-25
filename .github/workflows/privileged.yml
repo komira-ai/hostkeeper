@@ -14,7 +14,8 @@
 # real coordinator in process update a tierstore-shaped package, a .deb the daemon stages from a
 # signed apt repository the test builds on disk (the entry's pin and the repository's signature
 # checked, the tree extracted and sealed), installs with apt, switches and runs by its hook in
-# step units, roll it back on a failed verify, and force it back to the previous version with the
+# step units, roll it back on a failed verify, force it back past a halt its verify raised and a
+# bad mark (past a hold only with include_held), and force it back to the previous version with the
 # repository removed; in self_update_across_releases.rs, hostkeeper's update of itself from the
 # published release crates/hostkeeper-privileged/previous-release.toml pins to this build, with
 # the same coordinator, through its .deb from a loopback apt repository: the released daemon as
@@ -48,8 +49,9 @@
 # crates/hostkeeper-privileged/previous-release.toml, and gives it no write scope; it refuses root
 # in every other workflow but net-install.yml, and macOS and linux-arm64 in every workflow that
 # runs for a pull request. pr-device.yml's jobs privileged and openrc-device are copies of this
-# file's, step for step, and run on a pull request. A release waits for a successful push run of
-# this workflow on its commit (release.yml); pr-device.yml is no part of a release.
+# file's, step for step, and run on a pull request. No release waits for this workflow: a red run
+# of it on main opens the issue `RELEASE-RED: hostkeeper privileged: ...` (release-red.yml), and
+# releases go on; pr-device.yml is no part of a release.
 #
 # In the job privileged, linux_packages.rs also installs the deb and the rpm,
 # which the job builds from the static programs (musl) into target/linux-packages, in a
@@ -71,7 +73,7 @@
 # or of target/ is owned by root, and a test writes only its scratch directory under target/ (and,
 # for the failed end-to-end tests, what it keeps for the job's
 # artifact under target/privileged-artifacts/; but
-# the self-update tests, whose scratch directory is under /run/hostkeeper-ci, because the release
+# the self-update tests, whose scratch directory is under /var/lib/hostkeeper-ci (on disk: a runner may mount /run noexec), because the release
 # trees the daemon checks must have root's directories all the way up, and whose drop-in is in
 # /run/systemd/system; on the Mac, what the daemon's fixed paths name: the step jobs' directory
 # under /var/run, and the pki directory its enrollment loop opens, and for the package check's
@@ -112,7 +114,7 @@ on:
 permissions: {}
 
 # A group per commit, never cancelled: a run of one commit never replaces or cancels the run of
-# another (a release needs a successful run on each commit), and a second run of the same commit
+# another (each commit's run is reported, red or green), and a second run of the same commit
 # (a re-run, a dispatch) waits for the first.
 concurrency:
   group: privileged-${{ github.sha }}
@@ -277,9 +279,9 @@ jobs:
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt --test operator_keys_root --test ssh_root
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test install_apt --test operator_keys_root --test ssh_root -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager

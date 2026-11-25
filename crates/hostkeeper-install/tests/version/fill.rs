@@ -96,10 +96,12 @@ fn published(_rig: &Rig) -> [String; 2] {
     [VERSION.to_owned(), format!("{VERSION}.seal")]
 }
 
-/// Catches a fill published without its seal, or not read-only: the version is
-/// `fresh`, its directory is the real path of `packages/<service>/<version>` at mode 0555, the
-/// seal records the given package digest and the digest of the tree as walked, the step runner's
-/// check of the version passes, and the stage is gone.
+/// Catches a fill published without its seal, open to other users, or in a service directory
+/// its service's user cannot pass through: the version is `fresh`, its directory is the real path
+/// of `packages/<service>/<version>` at mode 0700 in a service directory at mode 0711, the seal
+/// (mode 0400) records the given package digest and the
+/// digest of the tree as walked, the step runner's check of the version passes, and the stage is
+/// gone.
 #[test]
 fn a_fill_is_published_sealed_with_the_given_package_digest_and_the_walked_tree_digest() {
     let rig = Rig::new("fill-publish");
@@ -110,13 +112,14 @@ fn a_fill_is_published_sealed_with_the_given_package_digest_and_the_walked_tree_
     assert!(filled.fresh);
     let dir = rig.service().join(VERSION);
     assert_eq!(filled.dir, dir);
-    assert_eq!(mode(&dir), 0o555);
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&rig.service()), 0o711);
     assert_eq!(rig.listing(), published(&rig));
     let layout = Layout::package(&rig.service());
     let seal = Seal::parse(&read_seal(&layout.seal_path(VERSION)).unwrap()).unwrap();
     assert_eq!(seal.package_digest(), digest().as_str());
     assert_eq!(seal.tree_digest(), tree_digest(&dir).unwrap());
-    assert_eq!(mode(&rig.service().join(format!("{VERSION}.seal"))), 0o444);
+    assert_eq!(mode(&rig.service().join(format!("{VERSION}.seal"))), 0o400);
     layout.check_tree(VERSION).unwrap();
     assert!(dir.join("tree/usr/bin/tool").is_file() && dir.join("target.json").is_file());
 }
@@ -177,7 +180,7 @@ fn a_same_check_that_refuses_is_the_callers_error_and_changes_nothing() {
         other => panic!("{other:?}"),
     }
     assert_eq!(tree_digest(&dir).unwrap(), before);
-    assert_eq!(mode(&dir), 0o555);
+    assert_eq!(mode(&dir), 0o700);
     assert_eq!(rig.listing(), published(&rig));
 }
 
@@ -376,12 +379,12 @@ fn a_failure_at_each_step_of_the_publish_leaves_the_service_as_it_was() {
     }
 }
 
-/// Catches a version published by a failed call being removed, or left 0700 for good: a failed
-/// mode or fsync of the version after its rename leaves the version and its seal (the error is
-/// `io_error`), and the next call finds it sealed, makes it 0555 and returns `fresh: false`
+/// Catches a version published by a failed call being removed: a failed mode or fsync of the
+/// version after its rename leaves the version and its seal, closed (0700, as the stage was
+/// made; the error is `io_error`), and the next call finds it sealed and returns `fresh: false`
 /// after `same`, without filling.
 #[test]
-fn a_version_left_writable_by_a_crash_is_made_read_only_by_the_next_call() {
+fn a_version_whose_last_publish_step_failed_is_kept_closed_and_taken_by_the_next_call() {
     for what in ["mode", "fsync"] {
         let rig = Rig::new("fill-settle");
         let matcher: Matcher = if what == "mode" {
@@ -394,19 +397,42 @@ fn a_version_left_writable_by_a_crash_is_made_read_only_by_the_next_call() {
         assert_eq!(err.reason(), "io_error", "{what}");
         assert_eq!(rig.listing(), published(&rig), "{what}");
         let dir = rig.service().join(VERSION);
-        assert_eq!(mode(&dir), if what == "mode" { 0o700 } else { 0o555 });
+        assert_eq!(mode(&dir), 0o700, "{what}");
 
         let run = call(&rig.host(), VERSION, &digest());
         assert_eq!((run.same, run.fill), (1, 0), "{what}");
         assert!(!run.result.unwrap().fresh);
-        assert_eq!(mode(&dir), 0o555, "{what}");
+        assert_eq!(mode(&dir), 0o700, "{what}");
         Layout::package(&rig.service()).check_tree(VERSION).unwrap();
     }
 }
 
+/// Catches a version an earlier release published open to every user (its directory 0555, the
+/// service directory 0755) staying open when it is reused: the next call of the same order finds
+/// it sealed, closes the version to 0700 and gives the service directory 0711 (passed through,
+/// not listed) without filling, and the version's seal still holds (the mode of the version
+/// directory is not part of the tree digest).
+#[test]
+fn a_version_an_earlier_release_left_open_is_closed_by_the_next_call() {
+    let rig = Rig::new("fill-close-open");
+    call(&rig.host(), VERSION, &digest()).result.unwrap();
+    let dir = rig.service().join(VERSION);
+    let sealed = tree_digest(&dir).unwrap();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(rig.service(), fs::Permissions::from_mode(0o755)).unwrap();
+
+    let run = call(&rig.host(), VERSION, &digest());
+    assert_eq!((run.same, run.fill), (1, 0));
+    assert!(!run.result.unwrap().fresh);
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&rig.service()), 0o711);
+    assert_eq!(tree_digest(&dir).unwrap(), sealed);
+    Layout::package(&rig.service()).check_tree(VERSION).unwrap();
+}
+
 /// Catches a crash that leaves a state the next call cannot finish: a crash at every call of
 /// the port, in turn, leaves nothing but orphans or a whole sealed version, and the next call on
-/// a healthy port ends with the version sealed, 0555, and passing the step runner's check.
+/// a healthy port ends with the version sealed, 0700, and passing the step runner's check.
 #[test]
 fn a_crash_at_any_call_is_finished_by_the_next_call() {
     let probe = Rig::new("fill-crash-probe");
@@ -422,7 +448,7 @@ fn a_crash_at_any_call_is_finished_by_the_next_call() {
         let next = call(&rig.host(), VERSION, &digest()).result.unwrap();
         assert_eq!(next.dir, rig.service().join(VERSION), "call {at}");
         assert_eq!(rig.listing(), published(&rig), "call {at}");
-        assert_eq!(mode(&next.dir), 0o555, "call {at}");
+        assert_eq!(mode(&next.dir), 0o700, "call {at}");
         Layout::package(&rig.service()).check_tree(VERSION).unwrap();
     }
 }

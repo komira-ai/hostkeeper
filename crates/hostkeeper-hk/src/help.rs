@@ -1,0 +1,222 @@
+//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `xcode-push` and of `tailnet-wait`. All of it is
+//! written from the command table and says `hk`, whatever name the program is called by.
+
+use std::fmt::Write as _;
+
+use hostkeeper_proto::ctl::{Command, Input};
+
+use crate::PROGRAM;
+use crate::table::{GLOBALS, MEANINGS, field_flags, line, shape};
+
+/// How `hk` turns a request field into input, said once in `--help` and `docs/cli.md`.
+pub(crate) const RULES: &str = "\
+Every command is one method: `hk <service> <method>`, both in kebab case as the protos name \
+them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the \
+coordinator's gateway over HTTPS. hk is one program: it needs no bash, no curl and no jq, and \
+runs no other program for a gateway call. It puts `hk:` before its diagnostics, whatever file \
+name it is run as.
+
+A request field is a flag named after it (`node_id` is `--node-id`): a scalar takes one value; a \
+bool takes `true` or `false`, so that an absent flag and `false` differ; an enum takes a value's \
+name without its prefix, in lower case, never `unspecified`; a repeated field repeats its flag; a \
+`map<string, string>` repeats `--<field> key=value`. A flag takes its value as `--flag value` or \
+`--flag=value`; a value that starts with `--` only as `--flag=value`.
+
+A message, a oneof, `bytes` and any other map come only through `--request <file|->`: a JSON \
+object, `-` for stdin, which the flags add to. A field named both by a flag and by the request \
+file is a usage error.
+
+A secret field (`(hostkeeper.secret)`) is never a flag: it is read with `--<field>-file <path>` \
+(one trailing newline dropped) or `--<field>-stdin`, and never printed. At most one input reads \
+stdin. No token or secret is ever written to a file or put in an argument list or in the \
+environment of a program hk runs: it is read into memory and sent in the request.
+
+The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnostics go to \
+stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`. \
+A call refused `invalid_request` makes one more call, with no token, to the coordinator's \
+`GET /v1/version?at_least=<this hk's release>`: when that says the coordinator is older (`409`, \
+or `404` from a coordinator before the route), hk says so on stderr, with the coordinator's \
+version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or \
+none, leaves `invalid_request`.
+
+Four commands are not gateway calls: the SSH tunnel is built into hk. `hk ssh <host-id> \
+[--identity FILE] [--reason TEXT] [-- ssh args]` gets a one-host SSH certificate and runs ssh to \
+the host through the coordinator's tunnel (a word after `ssh` that is not a method of the \
+service `ssh` is a host id). `hk ssh-proxy <host-id>` is the byte stream for `ProxyCommand hk \
+--endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h` in `~/.ssh/config`. `hk \
+ssh-revoke --operator NAME | --serial N | --host <host-id>` revokes certificates. `hk \
+ssh-status <host-id>` shows the host keys pinned for a host and the certificate held. They need \
+--endpoint, --ca-file and --token-file, take no other credential, keep the key, the \
+certificates and the pins in `$HOME/.hostkeeper/ssh`, and read the token from its file. `hk \
+ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.
+
+`hk xcode-push <version> | <archive.xip>` is not a gateway call either: on macOS only, it brings \
+an Xcode release into the coordinator's Xcode store. Given a version, it downloads the archive \
+with `xcodes download <version>` in the operator's own session (a two-factor prompt is answered \
+at the terminal); given a file, it takes the file. Apple's signature must be on it \
+(`pkgutil --check-signature`: exit 0, `signed Apple Software`, a chain ending at Apple Root CA), \
+its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified \
+and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails \
+uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other \
+credential; `hk xcode-push --help` says each step.
+
+`hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI \
+job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no \
+token, up to N times (6 by default) with S seconds between two tries (10 by default), until \
+any HTTP answer comes; when none does, it runs `tailscale down`, then `tailscale up`, and asks \
+as many times again. It ends 0 at the first answer, with one line saying which try it was, and \
+1 when neither round had one, saying how each ended. It needs --endpoint and --ca-file, takes \
+--timeout-secs for each try, and takes no token; `hk tailnet-wait --help` says each step.";
+
+/// The top-level help; `stamp` is the version, `<version>+<12 hex of the commit>` for a release.
+pub(crate) fn top_help(commands: &[&Command], stamp: &str) -> String {
+    let mut text = format!(
+        "{PROGRAM} {stamp}: call one method of hostkeeper's coordinator through its JSON gateway.\n\n\
+         Usage: {PROGRAM} [global flags] <service> <method> [flags]\n\n{RULES}\n\nGlobal flags:\n"
+    );
+    for g in &GLOBALS {
+        let flag = format!("--{} {}", g.flag, g.value);
+        let _ = writeln!(text, "  {}\n      {}", flag.trim_end(), line(g.help));
+    }
+    text.push_str("\nExit codes:\n");
+    for (code, meaning) in MEANINGS {
+        let _ = writeln!(text, "  {code}  {}", line(meaning));
+    }
+    text.push_str("\nServices:\n");
+    let mut last = "";
+    for c in commands {
+        if c.service_command != last {
+            last = c.service_command;
+            let _ = writeln!(
+                text,
+                "  {}\n      {}",
+                c.service_command,
+                line(c.service_doc)
+            );
+        }
+    }
+    let _ = write!(
+        text,
+        "\nRun '{PROGRAM} <service> --help' for its methods, and '{PROGRAM} <service> <method> \
+         --help' for a method's flags."
+    );
+    text
+}
+
+/// The help of the service of `first`, whose methods are `methods` (`first` is the first).
+pub(crate) fn service_help(first: &Command, methods: &[&Command]) -> String {
+    let mut text = format!(
+        "{PROGRAM} {}: the service `{}` of the package `{}`. {}\n\n\
+         Usage: {PROGRAM} [global flags] {} <method> [flags]\n\nMethods:\n",
+        first.service_command,
+        first.service,
+        first.package,
+        line(first.service_doc),
+        first.service_command
+    );
+    for m in methods {
+        let _ = writeln!(text, "  {}\n      {}", m.method_command, line(m.doc));
+    }
+    text.pop();
+    text
+}
+
+/// The help of one method.
+pub(crate) fn command_help(command: &Command) -> String {
+    let mut text = format!(
+        "{PROGRAM} {} {}: {}\n\n{}\n\nUsage: {PROGRAM} [global flags] {} {} [flags]\n\nFlags:\n  \
+         --request FILE|-\n      The request as a JSON object, from a file or `-` for stdin; \
+         flags add to it.\n",
+        command.service_command,
+        command.method_command,
+        command.path,
+        line(command.doc),
+        command.service_command,
+        command.method_command
+    );
+    for field in command.fields {
+        for (flag, help) in field_flags(field) {
+            let _ = writeln!(text, "  {flag}\n      {help}");
+        }
+    }
+    let file_only: Vec<String> = command
+        .fields
+        .iter()
+        .filter(|f| f.input == Input::RequestFile)
+        .map(|f| format!("{} ({})", f.name, shape(f)))
+        .collect();
+    if !file_only.is_empty() {
+        let _ = writeln!(text, "\nThrough --request only: {}.", file_only.join(", "));
+    }
+    let _ = write!(
+        text,
+        "\nRun '{PROGRAM} --help' for the global flags and the exit codes."
+    );
+    text
+}
+
+/// The help of the commands the SSH tunnel is built into.
+pub(crate) const SSH_HELP: &str = "\
+hk ssh <host-id> [flags] [-- ssh args]
+    Gets a one-host SSH certificate from the coordinator, for the key of --identity, the ssh
+    agent's first key, or a key kept in $HOME/.hostkeeper/ssh, and runs ssh to the host through
+    the coordinator's tunnel. Flags of ssh: --identity FILE, --reason TEXT.
+hk ssh-proxy <host-id>
+    The byte stream to the host's port 22, for ssh's ProxyCommand:
+    ProxyCommand hk --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h
+hk ssh-revoke --operator NAME | --serial N | --host <host-id>
+    Revokes certificates: an operator's, one by serial, or the one held for a host.
+hk ssh-status <host-id>
+    The host keys pinned for the host, and the certificate held for it.
+hk ssh-known-host <pins-file> %H %t %K %f
+    Run by ssh itself, as the KnownHostsCommand of hk ssh: says whether a host key is pinned.
+
+These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
+last required, and are built into hk. The token is read from the file; --token-stdin,
+--github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk tailnet-wait`.
+pub(crate) const TAILNET_WAIT_HELP: &str = "\
+hk tailnet-wait [--attempts N] [--interval-secs S]
+    Waits, right after a CI runner joined the tailnet, until the coordinator answers at
+    --endpoint, and rejoins the tailnet once when it does not. In order:
+    1. Round 1: up to N requests GET <endpoint>/v1/version, with no token, trusting --ca-file
+       alone, each limited by --timeout-secs, S seconds apart. Any HTTP status is an answer. A
+       request with none prints one line on stderr saying why.
+    2. When round 1 had no answer: tailscale down, then tailscale up with no flag (the settings
+       of the join), each stopped after 120 seconds. The join must have made this user the
+       node's operator (tailscale up --operator=<user>), so neither needs root.
+    3. Round 2: as round 1.
+    It exits 0 at the first answer, printing one line on stdout that says which attempt of
+    which round it was; and 1 when neither round had one, or the rejoin failed, with one line
+    that says how each ended.
+
+--attempts N is 1 to 100, 6 by default; --interval-secs S is 0 to 600, 10 by default. It takes
+the global flags --endpoint and --ca-file, both required, and --timeout-secs. It takes no token:
+--token-file, --token-stdin, --github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk xcode-push`.
+pub(crate) const XCODE_PUSH_HELP: &str = "\
+hk xcode-push <version> | <archive.xip>
+    Brings an Xcode release into the coordinator's Xcode store, from the operator's own Mac
+    signed in to the Apple developer account; macOS only. In order, and nothing is uploaded when
+    a step fails:
+    1. Given a version (27.2): xcodes download <version> --directory
+       $HOME/Downloads/hk-xcode-push/<version>, in the operator's own session, with this
+       terminal (a two-factor prompt is answered here); the directory must then hold one .xip.
+       Given a path: that file.
+    2. pkgutil --check-signature <archive> must exit 0, with the status signed Apple Software
+       and a chain ending at Apple Root CA (by its SHA-256 fingerprint).
+    3. The archive's SHA-256 and size; then its version (CFBundleShortVersionString) and
+       build (ProductBuildVersion), read with plutil from the app that xip --expand makes in
+       .hk-xcode-push-expansion beside the archive, which is removed before and afterwards.
+       Given a version, the archive's must be it.
+    4. PUT /v1/xcode/<sha256>?version=<version>&build=<build>: the archive unmodified and
+       streamed. The answer, the archive stored, is printed; a refusal prints
+       refused: <code> and exits 3 (401, 403), 2 (other 4xx) or 1. The answer is waited for
+       30 minutes at least once the archive is sent.
+
+It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
+last required. The token is read from its file into memory and sent only as the request's
+bearer: never in an argument, the environment of a program it runs, or an output line.
+--token-stdin, --github-oidc-audience and --response-file are not taken.";

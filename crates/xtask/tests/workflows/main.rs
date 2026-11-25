@@ -7,8 +7,15 @@
 //! `openrc_tests.rs`; those of `pr-device.yml`, the one workflow with jobs as root on a pull request, and of
 //! no secret and no macOS job on a pull request, in `pr_device_tests.rs`; those of the Mac's
 //! tests, the macOS stage of `release.yml` (no macOS job runs for a pull request), in
-//! `release_macos_tests.rs`; those of `advisories.yml`, the advisory
-//! monitor, in `advisories.rs`.
+//! `release_macos_tests.rs`; those of `farm.yml`, the farm lane and the one pull-request workflow
+//! whose job holds `id-token: write`, in `farm_tests.rs`, and of the tests that lane leaves to the
+//! Mac (the build files of the members with macOS-only code say so), in `farm_macos_tests.rs`;
+//! those of the merge queue (`ci.yml` and
+//! `pr-device.yml` run and report every check `main` requires for a merge group as for a pull
+//! request, and CONTRIBUTING.md's ruleset requires exactly those checks), in
+//! `merge_queue_tests.rs`; those of `advisories.yml`, the advisory
+//! monitor, in `advisories.rs`; those of `release-red.yml`, the alert of a red run of a suite that
+//! holds no release, in `release_red.rs`.
 
 mod advisories;
 mod callers;
@@ -16,6 +23,8 @@ mod callers_tests;
 
 mod ci;
 mod ci_tests;
+mod code_signing;
+mod code_signing_tests;
 mod coordinator_update_release_tests;
 mod coordinator_wait;
 mod coordinator_wait_run_tests;
@@ -30,7 +39,12 @@ mod desired_tests;
 mod downloads;
 mod downloads_tests;
 mod expr;
+mod farm;
+mod farm_macos;
+mod farm_macos_tests;
+mod farm_tests;
 mod hello_run_tests;
+mod hk_release_tests;
 mod image_push_tests;
 #[path = "../jq/run.rs"]
 mod jq;
@@ -38,6 +52,11 @@ mod lint;
 mod linux_packages_tests;
 mod linux_releases;
 mod linux_releases_tests;
+mod mac_farm;
+mod mac_farm_skip_tests;
+mod mac_farm_tests;
+mod merge_queue;
+mod merge_queue_tests;
 mod net_install;
 mod net_install_tests;
 mod no_downgrade;
@@ -47,6 +66,7 @@ mod one_command_tests;
 mod openrc;
 mod openrc_tests;
 mod packages;
+mod packages_stable_tests;
 mod packages_tests;
 mod pinned_cache;
 mod pinned_cache_tests;
@@ -65,6 +85,7 @@ mod release_macos;
 mod release_macos_tests;
 mod release_native_tests;
 mod release_pxe_tests;
+mod release_red;
 mod release_ref;
 mod release_ref_tests;
 mod release_tests;
@@ -72,10 +93,15 @@ mod services_tests;
 mod set_desired;
 mod set_desired_calls;
 mod set_desired_calls_tests;
+mod set_desired_install_tests;
 mod set_desired_outputs_tests;
+mod set_desired_reach_tests;
 mod set_desired_tag;
 mod set_desired_tag_tests;
 mod set_desired_tests;
+mod sign_code_run_tests;
+mod signing_run;
+mod signing_run_tests;
 mod tailnet_join_tests;
 mod targets_run_tests;
 mod template_doc;
@@ -174,7 +200,8 @@ fn every_workflow_of_the_repository_passes_the_lint() {
     // macOS job on pull_request outside pr-device.yml's jobs that may be, a copy in pr-device.yml
     // that drifted from privileged.yml's job, a release workflow out of its shape, or a workflow
     // that tags or publishes on pull_request or outside the release group, in any workflow file
-    // of this repository; and ci.yml's test shards or coverage gate out of their shape.
+    // of this repository; ci.yml's test shards or coverage gate out of their shape; and a check
+    // main requires that no job, or more than one, reports for a merge group.
     let all = workflows();
     let text_of = |required: &str| {
         all.iter()
@@ -189,6 +216,7 @@ fn every_workflow_of_the_repository_passes_the_lint() {
             .into_iter()
             .map(|p| format!("{}: {p}", ci::FILE)),
     );
+    found.extend(merge_queue::checks_problems(&all));
     for (file, text) in all {
         let publish = release::publish_problems(&file, &text);
         for p in lint(&file, &text).into_iter().chain(publish) {

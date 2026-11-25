@@ -264,6 +264,8 @@ pub fn host(
             &files,
             PERIOD,
             PlatformKind::Linux,
+            hostkeeper_daemon::maintenance_collect::LinuxScope::default(),
+            hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::default(),
             Box::new(hostkeeper_daemon::NoWatchdog),
         )
     };

@@ -1,56 +1,78 @@
-//! The writing session (sections 4.4 and 5): the one session that holds the coordinator's
-//! advisory lock of the database, on its own thread, through which every write goes, in the
-//! order the coordinator makes them.
+//! The writing sessions (sections 4.4 and 5): the pool of sessions of an instance through which
+//! every write goes (`--database-pool`, `docs/design/coordinator-multi-instance.md`, section 4,
+//! "Sessions"), each on its own thread, so a write waits for a free session, not for every write
+//! before it. Each session holds the coordinator's advisory lock of the database in **shared**
+//! mode: any number of coordinators hold it together, and a release before this one, which takes
+//! it exclusively, is refused while any of them runs (section 4).
 //!
-//! Every transaction moves `lease.commits` on by one, on the condition that `lease.epoch` is
-//! still the coordinator's own, before anything else it writes; the database refuses that update
-//! on a session that does not hold the lock (the trigger `lease_fenced` of `0001`). So the
-//! number of a transaction is known before its `COMMIT`, and a session lost while its `COMMIT`
-//! was in flight is settled at the reconnect by reading the counter: equal to the number, it
-//! landed; one less, it did not.
+//! Every transaction inserts a row of `tx_ledger` as its first statement and so has an id before
+//! its `COMMIT`. A session lost while its `COMMIT` was in flight is settled at the reconnect by
+//! inserting the same id again, doing nothing when it exists: the insert waits for the first
+//! transaction while it is in progress, so the database says whether it landed (no row inserted:
+//! it did; one inserted: it did not, and now never will).
 //!
-//! A session that a write finds gone, or whose bounded wait ran out, is **lost**: the writer drops
-//! it, and from then on every call is answered at once that it is lost ([`Link`]), until a
-//! revival ([`Writer::revive`], asked for at each heartbeat and run on the writer's thread, never
-//! under the caller's locks) opens a new session and takes the lock again. With the lock it reads
-//! the lease: the same epoch, and the coordinator goes on; another, and another coordinator led
-//! meanwhile: the store is **deposed**, and the coordinator exits.
+//! Every transaction also deletes a batch of the ledger's rows older than [`LEDGER_KEEP_SECS`],
+//! skipping each row another transaction holds (`FOR UPDATE SKIP LOCKED`): every transaction
+//! purges the same oldest rows, and a purge that waited for another transaction's purge to
+//! commit would wait for whatever that transaction waits for (a heartbeat's decision holds its
+//! transaction open while it decides). A row skipped is deleted by a later transaction.
+//!
+//! A statement whose bounded wait ran out (a lock another transaction held past `lock_timeout`,
+//! or a run past `statement_timeout`) is refused: its transaction is rolled back, the refusal says
+//! what it waited for, and the session stays, so the caller's next write runs on it again.
+//!
+//! A session that a write finds gone is **lost**: its writer drops
+//! it, and from then on every call is answered at once that the store is lost ([`Link`]), whichever
+//! session it would have taken, until a revival ([`Writer::revive`], asked for at each heartbeat
+//! and run on every writer's thread, never under the caller's locks) opens each session that is
+//! gone, or found gone, again and takes the lock again. The store is up again once no session is
+//! lost. Another coordinator having started meanwhile is normal: there is no leader and nothing
+//! to be deposed by.
 //!
 //! A writer that ends (the store stopped or dropped) frees the lock before its session closes,
-//! so a successor takes it at once.
+//! so an exclusive taker succeeds at once.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::Owned;
-use super::session::{Fail, Params, Session, describe, ends_session};
+use super::session::{Fail, Params, Session, describe, ends_session, waited_out};
 
 /// The key of the coordinator's advisory lock: a constant that never changes, which the trigger
 /// `lease_fenced` of `0001` names by its two halves.
 pub(crate) const LOCK_KEY: i64 = 0x686b_6370_6731;
 
-/// The state of the writing session, as every caller sees it.
+/// How long a row of `tx_ledger` is kept at least. A revival that finds a commit older than this,
+/// and its row gone, refuses to answer that it did not land.
+const LEDGER_KEEP_SECS: i64 = 3600;
+
+/// The most rows of `tx_ledger` one transaction deletes: more than one transaction inserts, so
+/// the purge keeps up, and few, so no transaction is made long by a backlog.
+const LEDGER_PURGE_BATCH: i64 = 100;
+
+/// What a statement whose bounded wait ran out ([`waited_out`]) is refused with, before the
+/// server's text, which names the lock or the statement.
+pub(crate) const WAITED: &str = "a statement of this write ran out its bounded wait (for a lock \
+     another transaction held, or for its own run): nothing of it is written, and the session stays";
+
+/// The state of the writing sessions, as every caller sees it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
-    /// The session holds the lock and takes writes.
+    /// Every session holds the lock and takes writes.
     Up,
-    /// The session is lost; nothing is written until it is revived.
+    /// A session is lost; nothing is written until it is revived.
     Lost,
-    /// A new session is being opened, on the writer's thread.
+    /// The lost sessions are being opened, on their writers' threads.
     Reviving,
-    /// Another coordinator raised the epoch while the session was lost: this one's memory is
-    /// stale, and it exits.
-    Deposed {
-        /// The epoch found.
-        found: u64,
-    },
+    /// A writer's thread is gone: nothing is written again.
+    Stopped,
 }
 
 /// What a commit of unknown outcome turned out to be, once the session is back.
 #[derive(Clone, Debug)]
 pub(crate) struct Settled {
-    /// The number of the transaction (`lease.commits`).
-    pub(crate) number: u64,
+    /// The id of the transaction (its row of `tx_ledger`).
+    pub(crate) id: String,
     /// Whether it landed.
     pub(crate) landed: bool,
     /// The change it was, when its caller handed one over.
@@ -59,66 +81,92 @@ pub(crate) struct Settled {
 
 #[derive(Debug)]
 struct Shared {
-    state: State,
-    /// The transaction whose `COMMIT` was in flight when the session was lost, and its change:
-    /// recorded in the same step as the loss, so no revival can settle it without its change.
-    unknown: Option<(u64, Option<Owned>)>,
+    /// How many writers the pool has.
+    writers: usize,
+    /// How many of them hold no session.
+    lost: usize,
+    /// How many writers have yet to run the revival last asked for.
+    reviving: usize,
+    /// How many commits of unknown outcome wait for their writer's revival.
+    unsettled: usize,
+    /// Whether a writer's thread is gone: the store is lost for good.
+    stopped: bool,
     /// What the revivals found, in their order, until they are taken.
     settled: Vec<Settled>,
 }
 
-/// The state of the writing session, shared by the writer and its callers.
+/// The state of the writing sessions, shared by the writers and their callers.
 #[derive(Debug)]
 pub(crate) struct Link {
     shared: Mutex<Shared>,
 }
 
-impl Default for Link {
-    fn default() -> Self {
+impl Link {
+    /// The link of a pool of `writers` writers, each with its session.
+    pub(crate) fn new(writers: usize) -> Link {
         Link {
             shared: Mutex::new(Shared {
-                state: State::Up,
-                unknown: None,
+                writers,
+                lost: 0,
+                reviving: 0,
+                unsettled: 0,
+                stopped: false,
                 settled: Vec::new(),
             }),
         }
     }
-}
 
-impl Link {
     fn lock(&self) -> MutexGuard<'_, Shared> {
         self.shared.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The session's state now.
+    /// The sessions' state now: up while no session is lost.
     pub(crate) fn state(&self) -> State {
-        self.lock().state
+        let shared = self.lock();
+        match (shared.stopped, shared.lost, shared.reviving) {
+            (true, _, _) => State::Stopped,
+            (false, 0, _) => State::Up,
+            (false, _, 1..) => State::Reviving,
+            (false, _, 0) => State::Lost,
+        }
     }
 
-    fn set(&self, state: State) {
-        self.lock().state = state;
-    }
-
-    /// Marks the session lost, unless the store is deposed already.
-    pub(crate) fn lose(&self, unknown: Option<(u64, Option<Owned>)>) {
+    /// Records that a writer's session is lost when `held` (it had one until now), with a commit
+    /// of unknown outcome when `unknown`.
+    fn lose(&self, held: bool, unknown: bool) {
         let mut shared = self.lock();
-        if !matches!(shared.state, State::Deposed { .. }) {
-            shared.state = State::Lost;
-        }
-        if unknown.is_some() {
-            shared.unknown = unknown;
-        }
+        shared.lost += usize::from(held);
+        shared.unsettled += usize::from(unknown);
     }
 
-    /// Marks a lost session as being revived: true when it was lost, so the caller hands the
-    /// revival to the writer; false when it is up, deposed or being revived already.
+    /// Records that a writer's thread is gone: the store is lost for good.
+    pub(crate) fn stop(&self) {
+        self.lock().stopped = true;
+    }
+
+    /// Marks a store with a lost session as being revived: true when it was lost and no revival
+    /// is under way, so the caller hands the revival to every writer; false otherwise.
     pub(crate) fn start_revival(&self) -> bool {
         let mut shared = self.lock();
-        if shared.state == State::Lost {
-            shared.state = State::Reviving;
+        if shared.lost > 0 && shared.reviving == 0 && !shared.stopped {
+            shared.reviving = shared.writers;
             return true;
         }
         false
+    }
+
+    /// Records that a writer ran the revival: with its session back when `back`, and the commit
+    /// of unknown outcome it settled, if it had one.
+    fn revived(&self, back: bool, settled: Option<Settled>) {
+        let mut shared = self.lock();
+        shared.reviving = shared.reviving.saturating_sub(1);
+        if back {
+            shared.lost = shared.lost.saturating_sub(1);
+        }
+        if let Some(settled) = settled {
+            shared.unsettled = shared.unsettled.saturating_sub(1);
+            shared.settled.push(settled);
+        }
     }
 
     /// The outcomes of the commits of unknown outcome known since the last take, in their order.
@@ -127,9 +175,20 @@ impl Link {
     }
 
     /// Whether a commit's outcome is not yet known.
+    #[cfg(test)]
     pub(crate) fn unsettled(&self) -> bool {
-        self.lock().unknown.is_some()
+        self.lock().unsettled > 0
     }
+}
+
+/// A commit whose `COMMIT` was in flight when its writer's session was lost: its id, its change,
+/// and when it began by the database's clock (its row's `at_unix`). The ledger purges rows older
+/// than [`LEDGER_KEEP_SECS`], so a missing row of an older one says nothing.
+#[derive(Debug)]
+struct Unknown {
+    id: String,
+    change: Option<Owned>,
+    begun: i64,
 }
 
 /// Why a write did not commit.
@@ -140,11 +199,11 @@ pub(crate) enum WriteFail {
     Refused(String),
     /// The session is lost, or was before the transaction's `COMMIT`: nothing of it is written.
     Lost(String),
-    /// The session was lost while the `COMMIT` of transaction `number` was in flight: it may or
+    /// The session was lost while the `COMMIT` of transaction `id` was in flight: it may or
     /// may not have landed, which the revival settles.
     Unknown {
-        /// The transaction's number.
-        number: u64,
+        /// The transaction's id.
+        id: String,
         /// What the client said.
         why: String,
     },
@@ -166,19 +225,26 @@ pub(crate) enum Fault {
     /// The `COMMIT` lands, and the session ends before its answer is read: a commit of unknown
     /// outcome that landed.
     LoseAfterCommit,
+    /// In place of the `COMMIT`, a statement the server cancels: the answer a `COMMIT` cancelled
+    /// or out of time is, whose outcome is not known; here the transaction did not land.
+    CancelAtCommit,
 }
 
-/// The writing session and what it keeps: the epoch it holds, the count of transactions it
-/// knows committed.
+/// The fault the next commit of any writer of one pool meets, which a test sets.
+#[cfg(test)]
+pub(crate) type FaultSlot = Arc<Mutex<Option<Fault>>>;
+
+/// One writing session of the pool, owned by its thread.
 pub(crate) struct Writer {
     config: postgres::Config,
     statements: Arc<AtomicU64>,
     session: Option<Session>,
-    epoch: i64,
-    commits: i64,
+    /// The commit of unknown outcome this writer lost its session with, until its revival
+    /// settles it.
+    unknown: Option<Unknown>,
     link: Arc<Link>,
     #[cfg(test)]
-    pub(crate) fault: Option<Fault>,
+    pub(crate) fault: FaultSlot,
 }
 
 /// The writing session within one transaction.
@@ -210,10 +276,75 @@ impl Tx<'_> {
     ) -> Result<postgres::Row, postgres::Error> {
         self.session.query_one(sql, params)
     }
+
+    /// Runs a statement that returns at most one row.
+    ///
+    /// # Errors
+    /// The client's error, and when it returns more than one row.
+    pub(crate) fn query_opt(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Option<postgres::Row>, postgres::Error> {
+        self.session.query_opt(sql, params)
+    }
+
+    /// Runs a statement; its rows, as many as there are.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn query(
+        &mut self,
+        sql: &str,
+        params: Params<'_>,
+    ) -> Result<Vec<postgres::Row>, postgres::Error> {
+        self.session.query(sql, params)
+    }
+
+    /// Runs statements that take no parameters and return nothing.
+    ///
+    /// # Errors
+    /// The client's error.
+    pub(crate) fn batch(&mut self, sql: &str) -> Result<(), postgres::Error> {
+        self.session.batch(sql)
+    }
+
+    /// The session itself, for a reader of a part's rows inside the transaction.
+    pub(crate) fn session(&mut self) -> &mut Session {
+        self.session
+    }
 }
 
-/// Takes the coordinator's advisory lock on `session`, without waiting: false when another
-/// session holds it.
+/// Why the body of a transaction stopped before its commit.
+#[derive(Debug)]
+pub(crate) enum Halt {
+    /// A statement failed: the session stays for a refusal, and is lost otherwise.
+    Pg(postgres::Error),
+    /// The body refused, for the reason given, after a statement the server refused or before
+    /// any: the transaction is rolled back and the session stays.
+    Refuse(String),
+}
+
+impl From<postgres::Error> for Halt {
+    fn from(e: postgres::Error) -> Halt {
+        Halt::Pg(e)
+    }
+}
+
+/// Takes the coordinator's advisory lock on `session` shared, without waiting: false when a
+/// session holds it exclusively (a release before this one, an import or an export).
+///
+/// # Errors
+/// The client's error.
+pub(crate) fn try_lock_shared(session: &mut Session) -> Result<bool, postgres::Error> {
+    Ok(session
+        .query_one("SELECT pg_try_advisory_lock_shared($1)", &[&LOCK_KEY])?
+        .get(0))
+}
+
+/// Takes the coordinator's advisory lock on `session` exclusively, without waiting: false when
+/// any session holds it, shared or not. What an import or an export takes, so none runs beside a
+/// coordinator.
 ///
 /// # Errors
 /// The client's error.
@@ -240,25 +371,35 @@ impl Drop for Writer {
 }
 
 impl Writer {
-    /// A writer over `session`, which holds the lock, at `epoch` with `commits` transactions
-    /// committed, reporting its state to `link`.
+    /// A writer over `session`, which holds the lock, reporting its state to `link`.
     pub(crate) fn new(
         config: postgres::Config,
         statements: Arc<AtomicU64>,
         session: Session,
-        (epoch, commits): (i64, i64),
         link: Arc<Link>,
     ) -> Writer {
         Writer {
             config,
             statements,
             session: Some(session),
-            epoch,
-            commits,
+            unknown: None,
             link,
             #[cfg(test)]
-            fault: None,
+            fault: FaultSlot::default(),
         }
+    }
+
+    /// Drops the session as lost while the `COMMIT` of transaction `id`, begun at `begun` by the
+    /// database's clock, was in flight: what a test makes a commit of unknown outcome of an id of
+    /// its own with.
+    #[cfg(test)]
+    pub(crate) fn lose_unknown(&mut self, id: &str, begun: i64) {
+        let unknown = Unknown {
+            id: id.to_owned(),
+            change: None,
+            begun,
+        };
+        self.lose("a test lost the session", Some(unknown));
     }
 
     /// The session, while it is up.
@@ -267,25 +408,31 @@ impl Writer {
     }
 
     /// Drops the session: lost, with the transaction `unknown` in flight if one was.
-    fn lose(&mut self, why: &str, unknown: Option<(u64, Option<Owned>)>) {
+    fn lose(&mut self, why: &str, unknown: Option<Unknown>) {
         tracing::error!(
             alert = "store_unreachable",
             %why,
             "the database session is lost: nothing is written until it is back"
         );
-        self.session = None;
-        self.link.lose(unknown);
+        let held = self.session.take().is_some();
+        self.link.lose(held, unknown.is_some());
+        self.unknown = unknown;
     }
 
     /// The failure of a statement of a transaction: the session stays for a refusal (after a
-    /// `ROLLBACK`), and is lost otherwise.
+    /// `ROLLBACK`), a wait that ran out among them ([`WAITED`]), and is lost otherwise.
     fn failed(&mut self, e: &postgres::Error) -> WriteFail {
         let why = describe(e);
         if ends_session(e) {
             self.lose(&why, None);
             return WriteFail::Lost(why);
         }
-        // The session is there: a statement of it failed.
+        self.refused(refusal(e, why))
+    }
+
+    /// A transaction refused for `why`, its session still there: rolled back, and the session
+    /// lost when even that fails.
+    fn refused(&mut self, why: String) -> WriteFail {
         let rolled_back = self
             .session
             .as_mut()
@@ -298,8 +445,35 @@ impl Writer {
         WriteFail::Refused(why)
     }
 
-    /// Runs `body` in one transaction, after moving `lease.commits` on by one on the condition
-    /// that the epoch is still this coordinator's, and commits it.
+    /// Runs `statement`, one statement that commits on its own, outside a transaction and with no
+    /// row of `tx_ledger`: for a write that the next call makes again whatever became of this one
+    /// (a heartbeat's row, [`super::fleet_rows`]), so an outcome lost with the session is never
+    /// asked after. A failure that ends the session loses it, as a transaction's does.
+    ///
+    /// # Errors
+    /// [`WriteFail::Lost`]: the session is lost, or was lost by it; [`WriteFail::Refused`]: the
+    /// server refused it, or its bounded wait ran out ([`WAITED`]), and the session stays.
+    pub(crate) fn once<R>(
+        &mut self,
+        statement: impl FnOnce(&mut Session) -> Result<R, postgres::Error>,
+    ) -> Result<R, WriteFail> {
+        let Some(session) = self.session.as_mut() else {
+            return Err(WriteFail::Lost("the database session is lost".to_owned()));
+        };
+        statement(session).map_err(|e| {
+            let why = describe(&e);
+            if ends_session(&e) {
+                self.lose(&why, None);
+                WriteFail::Lost(why)
+            } else {
+                WriteFail::Refused(refusal(&e, why))
+            }
+        })
+    }
+
+    /// Runs `body` in one transaction, after inserting the transaction's row of `tx_ledger` (and
+    /// deleting at most [`LEDGER_PURGE_BATCH`] rows older than [`LEDGER_KEEP_SECS`] that no other
+    /// transaction holds), and commits it.
     ///
     /// # Errors
     /// [`WriteFail`]: nothing of it is written, or ([`WriteFail::Unknown`]) its outcome is
@@ -309,38 +483,66 @@ impl Writer {
         change: Option<Owned>,
         body: impl FnOnce(&mut Tx<'_>) -> Result<R, postgres::Error>,
     ) -> Result<R, WriteFail> {
-        let epoch = self.epoch;
+        self.transact_naming(|tx| Ok((body(tx)?, change)))
+    }
+
+    /// [`Writer::transact`] of a body that says what change it made, for a revival to hand back
+    /// when the commit's outcome is not known, and that may refuse ([`Halt::Refuse`]) without
+    /// losing the session.
+    ///
+    /// # Errors
+    /// [`WriteFail`], as [`Writer::transact`]; a body's refusal is [`WriteFail::Refused`].
+    pub(crate) fn transact_naming<R>(
+        &mut self,
+        body: impl FnOnce(&mut Tx<'_>) -> Result<(R, Option<Owned>), Halt>,
+    ) -> Result<R, WriteFail> {
         let Some(session) = self.session.as_mut() else {
             return Err(WriteFail::Lost("the database session is lost".to_owned()));
         };
         let begun = session.batch("BEGIN").and_then(|()| {
-            session.query_opt(
-                "UPDATE lease SET commits = commits + 1 WHERE epoch = $1 RETURNING commits",
-                &[&epoch],
-            )
+            let row = session.query_one(
+                "INSERT INTO tx_ledger (at_unix) VALUES (extract(epoch FROM now())::bigint) \
+                 RETURNING id::text, at_unix",
+                &[],
+            )?;
+            let id: String = row.get(0);
+            let begun: i64 = row.get(1);
+            session.execute(
+                "DELETE FROM tx_ledger WHERE id IN (SELECT id FROM tx_ledger \
+                 WHERE at_unix < extract(epoch FROM now())::bigint - $1 \
+                 ORDER BY at_unix LIMIT $2 FOR UPDATE SKIP LOCKED)",
+                &[&LEDGER_KEEP_SECS, &LEDGER_PURGE_BATCH],
+            )?;
+            Ok((id, begun))
         });
-        let number = match begun {
-            Ok(Some(row)) => row.get::<_, i64>(0),
-            Ok(None) => {
-                // Another coordinator raised the epoch: only possible after this one lost the
-                // lock, which a session that holds it has not.
-                let why = "the lease's epoch is no longer this coordinator's".to_owned();
-                let _ = session.batch("ROLLBACK");
-                self.lose(&why, None);
-                return Err(WriteFail::Lost(why));
-            }
+        let (id, begun) = match begun {
+            Ok(begun) => begun,
             Err(e) => return Err(self.failed(&e)),
         };
         let mut tx = Tx {
             session: &mut *session,
         };
-        let answer = match body(&mut tx) {
-            Ok(answer) => answer,
-            Err(e) => return Err(self.failed(&e)),
+        let (answer, change) = match body(&mut tx) {
+            Ok(answered) => answered,
+            Err(Halt::Pg(e)) => return Err(self.failed(&e)),
+            Err(Halt::Refuse(why)) => return Err(self.refused(why)),
         };
         #[cfg(test)]
-        let fault = self.fault.take();
-        let committed = session.batch("COMMIT");
+        let fault = self
+            .fault
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let commit = "COMMIT";
+        #[cfg(test)]
+        let commit = match fault {
+            Some(Fault::CancelAtCommit) => {
+                "SELECT pg_cancel_backend(pg_backend_pid()), count(*) \
+                 FROM generate_series(1, 1000000)"
+            }
+            _ => commit,
+        };
+        let committed = session.batch(commit);
         #[cfg(test)]
         let committed = match (committed, fault) {
             (Ok(()), Some(Fault::LoseAfterCommit)) => {
@@ -350,63 +552,60 @@ impl Writer {
             (committed, _) => committed,
         };
         match committed {
-            Ok(()) => {
-                self.commits = number;
-                Ok(answer)
-            }
-            Err(e) if ends_session(&e) => {
+            Ok(()) => Ok(answer),
+            // A `COMMIT` cancelled or out of time may have landed all the same: its outcome is
+            // not known, and the session is dropped for the revival to settle it.
+            Err(e) if ends_session(&e) || waited_out(&e) => {
                 let why = describe(&e);
-                let number = u64::try_from(number).unwrap_or_default();
-                self.lose(&why, Some((number, change)));
-                Err(WriteFail::Unknown { number, why })
+                let unknown = Unknown {
+                    id: id.clone(),
+                    change,
+                    begun,
+                };
+                self.lose(&why, Some(unknown));
+                Err(WriteFail::Unknown { id, why })
             }
             // A deferred check refused the commit: the server rolled it back.
             Err(e) => Err(WriteFail::Refused(describe(&e))),
         }
     }
 
-    /// Opens a new session, takes the lock again and reads the lease (section 5): with the same
-    /// epoch the session is up again, and a commit of unknown outcome is settled; with another,
-    /// the store is deposed. A session that cannot be opened or locked leaves the store lost,
-    /// for the next heartbeat to try again.
+    /// Runs the revival on this writer (section 4): a session that is up is asked one statement,
+    /// and kept when it answers; a session that is gone, or found gone so, is opened again, the
+    /// lock taken again, and the commit of unknown outcome this writer lost it with settled, if it
+    /// has one. A session that cannot be opened or locked leaves the store lost, for the next
+    /// heartbeat to try again.
     pub(crate) fn revive(&mut self) {
-        match self.reopen() {
-            Ok(Revived::Up(session, commits)) => {
-                let session = *session;
-                {
-                    let mut shared = self.link.lock();
-                    if let Some((number, change)) = shared.unknown.take() {
-                        let landed = u64::try_from(commits).ok() == Some(number);
-                        shared.settled.push(Settled {
-                            number,
-                            landed,
-                            change,
-                        });
-                    }
-                    shared.state = State::Up;
+        if let Some(session) = self.session.as_mut() {
+            match session.batch("SELECT 1") {
+                Ok(()) => {
+                    self.link.revived(false, None);
+                    return;
                 }
-                self.session = Some(session);
-                self.commits = commits;
-                tracing::warn!(
-                    alert = "store_unreachable",
-                    "the database session is back, on the same epoch"
-                );
+                Err(e) => self.lose(&describe(&e), None),
             }
-            Ok(Revived::Deposed(found)) => {
-                tracing::error!(
-                    alert = "store_unreachable",
-                    epoch = self.epoch,
-                    found,
-                    "another coordinator led the database while this one's session was lost"
-                );
-                self.link.set(State::Deposed { found });
+        }
+        let unknown = self
+            .unknown
+            .as_ref()
+            .map(|unknown| (unknown.id.clone(), unknown.begun));
+        match self.reopen(unknown.as_ref().map(|(id, begun)| (id.as_str(), *begun))) {
+            Ok(Revived::Up(session, landed)) => {
+                let settled = self.unknown.take().map(|unknown| Settled {
+                    id: unknown.id,
+                    landed: landed == Some(true),
+                    change: unknown.change,
+                });
+                self.session = Some(*session);
+                self.link.revived(true, settled);
+                tracing::warn!(alert = "store_unreachable", "the database session is back");
             }
             Ok(Revived::Held) => {
                 tracing::error!(
                     alert = "store_unreachable",
-                    "another session holds the coordinator's lock of the database"
+                    "another session holds the coordinator's lock of the database exclusively"
                 );
-                self.link.set(State::Lost);
+                self.link.revived(false, None);
             }
             Err(why) => {
                 tracing::error!(
@@ -414,45 +613,125 @@ impl Writer {
                     %why,
                     "the database session could not be opened again"
                 );
-                self.link.set(State::Lost);
+                self.link.revived(false, None);
             }
         }
     }
 
-    fn reopen(&mut self) -> Result<Revived, String> {
+    /// A new session holding the lock, and whether the transaction `unknown` landed: `None` when
+    /// there is none to settle. The settle inserts the id again: no row inserted means the first
+    /// insert committed (the insert waited for it while it was in progress), a row inserted means
+    /// the transaction never committed and now cannot.
+    fn reopen(&mut self, unknown: Option<(&str, i64)>) -> Result<Revived, String> {
         let mut session = Session::connect(&self.config, Arc::clone(&self.statements), false)
             .map_err(|fail| match fail {
                 Fail::Pg(e) => describe(&e),
                 Fail::Refused(why) => why,
             })?;
-        if !try_lock(&mut session).map_err(|e| describe(&e))? {
+        if !try_lock_shared(&mut session).map_err(|e| describe(&e))? {
             return Ok(Revived::Held);
         }
-        let row = session
-            .query_one("SELECT epoch, commits FROM lease", &[])
-            .map_err(|e| describe(&e))?;
-        let (epoch, commits): (i64, i64) = (row.get(0), row.get(1));
-        if epoch != self.epoch {
-            return Ok(Revived::Deposed(u64::try_from(epoch).unwrap_or_default()));
-        }
-        Ok(Revived::Up(Box::new(session), commits))
-    }
-
-    /// The epoch this coordinator holds.
-    #[cfg(test)]
-    pub(crate) fn epoch(&self) -> i64 {
-        self.epoch
-    }
-
-    /// The transactions known committed.
-    #[cfg(test)]
-    pub(crate) fn commits(&self) -> i64 {
-        self.commits
+        let landed = match unknown {
+            None => None,
+            Some((id, begun)) if too_old(&mut session, begun)? => {
+                // The ledger may have purged the row of a commit that landed, so a missing row
+                // proves nothing: only a row that is there is an answer.
+                let found: i64 = session
+                    .query_one(
+                        "SELECT count(*) FROM tx_ledger WHERE id = $1::text::uuid",
+                        &[&id],
+                    )
+                    .map_err(|e| describe(&e))?
+                    .get(0);
+                if found == 0 {
+                    return Err(format!(
+                        "the commit {id} began over {LEDGER_KEEP_SECS} seconds ago and its row \
+                         of the ledger is gone: whether it landed cannot be told; restart this \
+                         coordinator to read the database afresh"
+                    ));
+                }
+                Some(true)
+            }
+            Some((id, _)) => {
+                let inserted = session
+                    .execute(
+                        "INSERT INTO tx_ledger (id, at_unix) \
+                         VALUES ($1::text::uuid, extract(epoch FROM now())::bigint) \
+                         ON CONFLICT (id) DO NOTHING",
+                        &[&id],
+                    )
+                    .map_err(|e| describe(&e))?;
+                Some(inserted == 0)
+            }
+        };
+        Ok(Revived::Up(Box::new(session), landed))
     }
 }
 
+/// The text of a statement the server refused for `why`: led by [`WAITED`] when its bounded wait
+/// ran out.
+fn refusal(e: &postgres::Error, why: String) -> String {
+    if waited_out(e) {
+        format!("{WAITED}: {why}")
+    } else {
+        why
+    }
+}
+
+/// Whether a transaction that began at `begun` is as old as the ledger's retention, by the
+/// database's clock.
+fn too_old(session: &mut Session, begun: i64) -> Result<bool, String> {
+    let now: i64 = session
+        .query_one("SELECT extract(epoch FROM now())::bigint", &[])
+        .map_err(|e| describe(&e))?
+        .get(0);
+    Ok(now - begun >= LEDGER_KEEP_SECS)
+}
+
 enum Revived {
-    Up(Box<Session>, i64),
-    Deposed(u64),
+    /// The session is back; whether the transaction waiting to be settled landed.
+    Up(Box<Session>, Option<bool>),
     Held,
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    /// Proves: a link of two writers is up until a session is lost; a revival is asked for once
+    /// and not again while a writer has yet to run it; the store is up as soon as no session is
+    /// lost, though a writer has yet to report; a revival that brought nothing back leaves it
+    /// lost for the next one; and once a writer's thread is gone the store is stopped for good,
+    /// asking for no revival, lost sessions or not.
+    ///
+    /// Catches: a second revival posted over one under way (two reopens of one session), a store
+    /// that waits for every writer before it is up, and a stopped store that keeps reviving.
+    #[test]
+    fn the_link_counts_lost_sessions_and_revivals_of_the_pool() {
+        let link = Link::new(2);
+        assert_eq!(link.state(), State::Up);
+        assert!(!link.start_revival(), "nothing is lost");
+        link.lose(true, false);
+        assert_eq!(link.state(), State::Lost);
+        assert!(link.start_revival());
+        assert_eq!(link.state(), State::Reviving);
+        assert!(!link.start_revival(), "one revival at a time");
+        link.revived(false, None);
+        link.revived(false, None);
+        assert_eq!(link.state(), State::Lost, "nothing came back");
+        assert!(link.start_revival());
+        link.revived(true, None);
+        assert_eq!(
+            link.state(),
+            State::Up,
+            "up before the other writer reports"
+        );
+        link.revived(false, None);
+
+        link.lose(true, true);
+        assert!(link.unsettled());
+        link.stop();
+        assert_eq!(link.state(), State::Stopped);
+        assert!(!link.start_revival(), "a stopped store is not revived");
+    }
 }

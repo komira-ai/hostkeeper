@@ -110,6 +110,22 @@
   color: #e6eef5;
 }
 
+/* What the host's maintenance report lists as due (updates.js): a pill per item. */
+.hb-due {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.hb-due small {
+  color: #8da1b4;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .meta small {
   color: #8da1b4;
   font-size: 10px;
@@ -286,8 +302,9 @@
 
 /* Facts: a two-column grid of name over value, no empty heading strip. */
 
+/* A table wider than a phone's screen scrolls sideways inside its box, not the page. */
 .hostpage .table-wrap {
-  overflow: visible;
+  overflow-x: auto;
   border: 0;
   background: transparent;
 }
@@ -473,4 +490,42 @@
     width: 110px;
   }
 
+}
+
+/* Why the host is not healthy: one card under the header, a line per reason with a bar of its tone. */
+
+.hostpage .health {
+  margin: 0 0 14px;
+  border-left: 3px solid var(--bad);
+}
+
+.health .reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health .reason {
+  padding: 8px 12px;
+  border-left: 3px solid var(--bad);
+}
+
+.health .reason.warn {
+  border-left-color: var(--warn);
+}
+
+.health .reason p {
+  margin: 4px 0;
+}
+
+.health .since {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.health .taint {
+  margin: 8px 0;
 }

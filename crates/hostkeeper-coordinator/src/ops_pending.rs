@@ -19,6 +19,7 @@
 //! state holds is removed; any other refuses the start, and so does a marker that lists nothing
 //! this build reads (the empty marker of the release before, which marked a halt only).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -30,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use super::{OpsError, OpsState, OpsStore, UNWRITTEN_LOG_EVERY};
 use crate::audit_file::AuditLine;
 use crate::desired::{StoreError, write_whole};
-use crate::store::{Commit, Health, Landing, Shared};
+use crate::store::{Commit, Edit, Health, Landing, Scope, Shared};
 
 /// The changes in memory and not yet committed.
 #[derive(Debug, Default)]
@@ -145,14 +146,37 @@ impl OpsStore {
         pending.marked = true;
     }
 
-    /// Commits what is pending, if anything is, and removes the marker once nothing is. Called
-    /// under the writers' lock.
+    /// Whether a change is in memory and not yet committed.
+    pub(super) fn pending_changes(&self) -> bool {
+        let pending = self.pending_lock();
+        pending.base.is_some() || !pending.lines.is_empty()
+    }
+
+    /// Commits what is pending, if anything is, in an edit of its own, and removes the marker once
+    /// nothing is. Called under the writers' lock.
     ///
     /// # Errors
     /// [`OpsError`]: the commit failed; the changes stay pending.
     pub(super) fn flush(&self) -> Result<(), OpsError> {
+        if !self.pending_changes() {
+            self.unmark(&mut self.pending_lock());
+            return Ok(());
+        }
+        let edit = self.backend.begin(Scope::OPS)?;
+        self.commit_pending(edit)
+    }
+
+    /// Commits what is pending through `edit`, the lines numbered from its first number when it
+    /// has one, and removes the marker once nothing is. Memory keeps its copy: when the edit
+    /// found the rows changed by another coordinator, only the rows the pending changes made
+    /// differ are written, and memory is read again once nothing is pending.
+    ///
+    /// # Errors
+    /// [`OpsError`]: the commit failed; the changes stay pending.
+    pub(super) fn commit_pending(&self, edit: Edit) -> Result<(), OpsError> {
         let mut pending = self.pending_lock();
         if pending.base.is_some() || !pending.lines.is_empty() {
+            self.renumber(&mut pending, edit.next_seq());
             let current = self.state();
             let base = pending.base.clone().unwrap_or_else(|| current.clone());
             let commit = Commit {
@@ -160,7 +184,10 @@ impl OpsStore {
                 audit: &pending.lines,
                 ..Commit::default()
             };
-            match self.backend.commit(&commit).map_err(OpsError::from) {
+            match edit
+                .commit_or(&commit, |commit| self.backend.commit(commit))
+                .map_err(OpsError::from)
+            {
                 Ok(()) => {
                     *pending = Pending {
                         marked: pending.marked,
@@ -184,6 +211,36 @@ impl OpsStore {
         }
         self.unmark(&mut pending);
         Ok(())
+    }
+
+    /// Numbers the pending lines on from `first`, the audit counter's number, when they were
+    /// numbered otherwise (made while no edit could be begun, after a commit whose numbers turned
+    /// out free, or another coordinator took them meanwhile), and the entries of the ring that are
+    /// theirs with them, so the numbers stay dense and in the order of the commits. The caller of
+    /// the change and its log line had the number it was made under; the move is logged with both.
+    fn renumber(&self, pending: &mut Pending, first: Option<u64>) {
+        let Some(first) =
+            first.filter(|first| pending.lines.first().is_some_and(|line| line.seq != *first))
+        else {
+            return;
+        };
+        tracing::warn!(
+            alert = "halt",
+            made = ?pending.lines.iter().map(|line| line.seq).collect::<Vec<_>>(),
+            first,
+            "changes made while no edit could be begun are written under the audit counter's numbers"
+        );
+        let moved: BTreeMap<u64, u64> = pending
+            .lines
+            .iter_mut()
+            .zip(first..)
+            .map(|(line, seq)| (std::mem::replace(&mut line.seq, seq), seq))
+            .collect();
+        for entry in &mut self.lock().audit {
+            if let Some(seq) = moved.get(&entry.seq) {
+                entry.seq = *seq;
+            }
+        }
     }
 
     /// Removes the marker, when it is on disk. One that cannot be removed is logged and stays
@@ -218,7 +275,7 @@ impl OpsStore {
         if !self.halt_unwritten() {
             return;
         }
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         {
             // The marker is written again before each try: one removed by hand, or not made,
             // is there while the change is not committed.
@@ -267,7 +324,7 @@ impl OpsStore {
     /// row by row; its audit lines are no longer pending. A commit that did not land leaves both
     /// as they are (section 4.4).
     pub(crate) fn take_landed(&self, landing: &Landing) {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = self.writing.lock();
         let Some(taken) = landing.ops_over(&self.state()) else {
             return;
         };
@@ -280,32 +337,47 @@ impl OpsStore {
         drop(pending);
         *self.lock() = taken;
     }
+}
 
-    /// Drops what is pending, because another coordinator led the database while this one's
-    /// link was lost (at epoch `found`) and its state now governs: each change dropped is logged
-    /// by its audit number, the marker is removed (they are dropped knowingly), and the
-    /// coordinator is told to stop ([`OpsStore::deposed`]).
-    pub(crate) fn depose(&self, found: u64) {
-        let mut pending = self.pending_lock();
-        let dropped: Vec<u64> = pending.lines.iter().map(|line| line.seq).collect();
-        tracing::error!(
-            alert = "store_unreachable",
-            found,
-            ?dropped,
-            "another coordinator led the database while this one's session was lost: the changes numbered here are dropped, and the coordinator stops"
-        );
-        pending.base = None;
-        pending.lines.clear();
-        pending.marked = true;
-        self.unmark(&mut pending);
-        drop(pending);
-        let _ = self.deposed_by.set(found);
-        self.deposed.notify_one();
+/// The operations state and facts generations before a heartbeat's decision, which a decision
+/// that does not land puts back.
+pub(crate) struct Checkpoint {
+    state: OpsState,
+    facts: crate::store::Facts,
+}
+
+impl OpsStore {
+    /// Takes the writers' lock for a heartbeat's decision, before the decision asks for the gate:
+    /// the store's changes inside the decision take it again on the same thread.
+    pub(crate) fn hold_writers(&self) -> crate::store::Writing<'_> {
+        self.writing.lock()
     }
 
-    /// Waits until the store is deposed ([`OpsStore::depose`]); the epoch found.
-    pub(crate) async fn deposed(&self) -> u64 {
-        self.deposed.notified().await;
-        self.deposed_by.get().copied().unwrap_or_default()
+    /// Takes the operations state and facts generations a heartbeat's decision read afresh under
+    /// the gate into memory.
+    pub(crate) fn take_decided(&self, state: OpsState, facts: crate::store::Facts) {
+        *self.lock() = state;
+        self.generations.replace(facts);
+    }
+
+    /// The state in memory before a heartbeat's decision, which [`Self::rewind`] puts back.
+    pub(crate) fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            state: self.state(),
+            facts: self.generations.copied(),
+        }
+    }
+
+    /// Puts back the state of `checkpoint`, taken before a heartbeat's decision that did not land:
+    /// none of its changes is in the rows, so none stays in memory or pending, and the marker of
+    /// a change the decision held pending is removed. A decision is made only while nothing is
+    /// pending.
+    pub(crate) fn rewind(&self, checkpoint: Checkpoint) {
+        *self.lock() = checkpoint.state;
+        self.generations.replace(checkpoint.facts);
+        let mut pending = self.pending_lock();
+        pending.base = None;
+        pending.lines.clear();
+        self.unmark(&mut pending);
     }
 }

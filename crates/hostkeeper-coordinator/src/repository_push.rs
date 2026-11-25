@@ -104,7 +104,7 @@ impl Report {
 }
 
 /// `text` cut to at most `max` bytes, at a character boundary.
-fn cut(text: &str, max: usize) -> &str {
+pub(crate) fn cut(text: &str, max: usize) -> &str {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
         end -= 1;

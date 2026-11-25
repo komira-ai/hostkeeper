@@ -1,0 +1,87 @@
+# The macOS programs of a release compiled on a Mac of the build farm (docs/design/mac-farm.md):
+# hostkeeper, hk, hello and the bootstrap, the four programs artifacts.yml's compile-macos builds on
+# a GitHub-hosted Mac, built by one Remote Execution action on the farm's Mac platform from a hosted
+# Linux runner, and uploaded as the same artifact, `macho-unsigned-macos-arm64`, which sign-code
+# signs. artifacts.yml's job compile-macos-farm is its one caller (the workflow lint,
+# crates/xtask/tests/workflows/mac_farm.rs, holds that, this file's trigger, its one job and its
+# steps exactly), and calls it where the farm is configured: the organisation's variable
+# FARM_ADDRESS is set and the file runs in this repository.
+#
+# `cargo xtask mac-farm` sends the Cargo build to the farm with the checkout (after set-version),
+# the crates of Cargo.lock for aarch64-apple-darwin and the pinned Rust toolchain as the action's
+# inputs (a farm Mac has no Rust, and an action no network), prints the build's output, and writes
+# the four programs it names with --output into target/release, where the upload reads them, as
+# compile-macos leaves them. What the run sent and how it ended are in the job's summary. A farm
+# that cannot be reached, or a build that fails there, fails the job as a failed build on a hosted
+# Mac fails compile-macos: re-run it once the farm answers.
+#
+# The farm is reachable only on its tailnet, which the job joins after xtask is built (no build
+# script runs on that network) as an ephemeral node, tag:ci, with the run's OIDC token (workload
+# identity federation: nothing is stored). That is the one use of the job's `id-token: write`. It
+# is a separate file so that the token is this file's: Sigstore names the workflow a token was
+# minted in as the signer of what it signs, so a token of this job, which runs repository code
+# (xtask, and the build scripts of its dependencies), can sign nothing that names artifacts.yml as
+# its signer, the one signer hosts and docs/deploy/verify-a-release.md accept. The farm's address,
+# instance, TLS and Mac platform are the organisation's variables FARM_*; the verb masks the address
+# in the log before it prints anything.
+name: mac-farm
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The release version the workspace takes before the build (X.Y.Z)
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  compile:
+    if: ${{ vars.FARM_ADDRESS != '' && github.repository == 'komira-ai/hostkeeper' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # For the tailnet join alone: the OIDC token the farm's network trusts.
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: The workspace takes the version of the release
+        run: cargo xtask release set-version --version "$RELEASE_VERSION"
+      # `cargo xtask` builds xtask; with --help it runs nothing.
+      - name: Build xtask before the tailnet join
+        run: cargo xtask --help
+      - name: Join the farm's tailnet
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ vars.TS_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci
+          version: 1.94.2
+          sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
+          use-cache: false
+      - name: Build hostkeeper, hk, hello and the bootstrap on a farm Mac
+        timeout-minutes: 50
+        env:
+          FARM_ADDRESS: ${{ vars.FARM_ADDRESS }}
+          FARM_INSTANCE: ${{ vars.FARM_INSTANCE }}
+          FARM_TLS: ${{ vars.FARM_TLS || 'false' }}
+          FARM_PROPERTIES: ${{ vars.FARM_DARWIN_ARM64_PROPERTIES }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo xtask mac-farm --address "$FARM_ADDRESS" --instance "$FARM_INSTANCE" --tls "$FARM_TLS" --properties "$FARM_PROPERTIES" --scratch "$RUNNER_TEMP/mac-farm" --summary "$GITHUB_STEP_SUMMARY" --env "RELEASE_COMMIT=$RELEASE_COMMIT" --output target/release/hostkeeper --output target/release/hk --output target/release/hello --output target/release/hostkeeper-bootstrap -- build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-hk --bin hk -p hello --bin hello -p hostkeeper-bootstrap --bin hostkeeper-bootstrap
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macho-unsigned-macos-arm64
+          path: |
+            target/release/hostkeeper
+            target/release/hk
+            target/release/hello
+            target/release/hostkeeper-bootstrap
+          retention-days: 90
+          if-no-files-found: error

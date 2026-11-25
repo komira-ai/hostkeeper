@@ -81,9 +81,9 @@ fn published() -> [String; 2] {
     [VERSION.to_owned(), format!("{VERSION}.seal")]
 }
 
-/// Whether `c` is the mode 0555 given to the published version directory itself.
+/// Whether `c` is the mode 0700 given to the published version directory itself.
 fn version_mode(c: &Call) -> bool {
-    matches!(c, Call::SetMode(p, 0o555) if p == &Path::new(SERVICE).join(VERSION))
+    matches!(c, Call::SetMode(p, 0o700) if p == &Path::new(SERVICE).join(VERSION))
 }
 
 /// Whether `c` is the fsync of the service directory itself.
@@ -182,7 +182,7 @@ fn a_crash_during_a_publish_leaves_no_version_directory() {
         let again = publish(&rig.host(), VERSION).unwrap();
         assert_eq!(again.dir, dir, "crash at {crash}");
         assert_eq!(rig.listing(), published(), "crash at {crash}");
-        assert_eq!(mode(&dir), 0o555, "crash at {crash}");
+        assert_eq!(mode(&dir), 0o700, "crash at {crash}");
     }
     // Only a crash at the last three calls, after the rename (the fsync of the service
     // directory, the mode of the version directory, its fsync), finds the version in place.
@@ -192,7 +192,7 @@ fn a_crash_during_a_publish_leaves_no_version_directory() {
 /// Catches a publish that works only where a directory that is not writable can be renamed: on a
 /// port that renames as macOS does for a caller that is not root (a directory its owner cannot
 /// write is refused with `EACCES`, even within one parent), a stage is renamed while its owner
-/// can still write it, and the published version is whole, sealed and 0555. The port is shown to
+/// can still write it, and the published version is whole, sealed and 0700. The port is shown to
 /// refuse such a rename first, so the test cannot pass on a port that renames everything.
 #[test]
 fn the_stage_is_renamed_where_a_read_only_directory_cannot_be_renamed() {
@@ -213,16 +213,15 @@ fn the_stage_is_renamed_where_a_read_only_directory_cannot_be_renamed() {
     assert_eq!(rig.listing(), published());
     let layout = Layout::package(&rig.service());
     layout.check_tree(VERSION).unwrap();
-    assert_eq!(mode(&layout.version_path(VERSION)), 0o555);
+    assert_eq!(mode(&layout.version_path(VERSION)), 0o700);
 }
 
-/// Catches a version left writable by its owner staying so, or being lost: when the mode 0555
-/// of the version directory after its rename fails, or its fsync does, the publish is an
-/// `io_error` that leaves the version whole and sealed (0700 when the mode failed); the next
-/// publish of the order takes it as it is and makes it 0555; and when that publish's own mode
-/// fails too, it is an `io_error` that leaves the version as it was.
+/// Catches a version lost, or written again, when the last step of its publish fails: when the
+/// mode 0700 of the version directory after its rename fails, or its fsync does, the publish is
+/// an `io_error` that leaves the version whole, sealed and 0700 (as the stage was made); the next
+/// publish of the order takes it as it is and sets no mode, so a failing mode cannot fail it.
 #[test]
-fn a_version_left_writable_after_its_rename_is_made_read_only_by_the_next_publish() {
+fn a_version_whose_mode_or_fsync_failed_after_its_rename_is_taken_by_the_next_publish() {
     for what in ["the mode of the version", "the fsync of the version"] {
         let rig = Rig::new("f-settle");
         let matcher: Matcher = if what == "the mode of the version" {
@@ -233,7 +232,7 @@ fn a_version_left_writable_after_its_rename_is_made_read_only_by_the_next_publis
         let fake = Faulty::new(rig.host()).fail(matcher, 0, EIO);
         let err = publish(&fake, VERSION).unwrap_err();
         assert!(
-            matches!(&err, UnpackError::Io { what, .. } if *what == "cannot make the version read-only"),
+            matches!(&err, UnpackError::Io { what, .. } if *what == "cannot close the version to other users"),
             "{what}: {err:?}"
         );
         assert_eq!(err.reason(), "io_error", "{what}");
@@ -241,28 +240,43 @@ fn a_version_left_writable_after_its_rename_is_made_read_only_by_the_next_publis
         let layout = Layout::package(&rig.service());
         layout.check_tree(VERSION).unwrap();
         let dir = layout.version_path(VERSION);
-        let left = if what == "the mode of the version" {
-            0o700
-        } else {
-            0o555
-        };
-        assert_eq!(mode(&dir), left, "{what}");
+        assert_eq!(mode(&dir), 0o700, "{what}");
 
-        if left == 0o700 {
-            let failing = Faulty::new(rig.host()).fail(Box::new(version_mode), 0, EIO);
-            let err = publish(&failing, VERSION).unwrap_err();
-            assert!(
-                matches!(&err, UnpackError::Io { what, .. } if *what == "cannot make the version read-only"),
-                "{err:?}"
-            );
-            assert_eq!(mode(&dir), 0o700);
-            layout.check_tree(VERSION).unwrap();
-        }
-        let again = publish(&rig.host(), VERSION).unwrap();
+        let failing = Faulty::new(rig.host()).fail(Box::new(version_mode), 0, EIO);
+        let again = publish(&failing, VERSION).unwrap();
         assert!(!again.fresh, "{what}");
-        assert_eq!(mode(&dir), 0o555, "{what}");
+        assert!(!failing.calls().iter().any(version_mode), "{what}");
+        assert_eq!(mode(&dir), 0o700, "{what}");
         layout.check_tree(VERSION).unwrap();
     }
+}
+
+/// Catches a version an earlier release left open (0555) staying open, or being lost, when it
+/// cannot be closed: the next publish of the order sets it 0700; when that mode fails, the
+/// publish is an `io_error` that leaves the version whole, sealed and as it was, and the publish
+/// after it closes it.
+#[test]
+fn a_version_left_open_by_an_earlier_release_is_closed_by_the_next_publish() {
+    let rig = Rig::new("f-close-open");
+    publish(&rig.host(), VERSION).unwrap();
+    let layout = Layout::package(&rig.service());
+    let dir = layout.version_path(VERSION);
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let failing = Faulty::new(rig.host()).fail(Box::new(version_mode), 0, EIO);
+    let err = publish(&failing, VERSION).unwrap_err();
+    assert!(
+        matches!(&err, UnpackError::Io { what, .. } if *what == "cannot close the version to other users"),
+        "{err:?}"
+    );
+    assert_eq!(mode(&dir), 0o555);
+    layout.check_tree(VERSION).unwrap();
+    assert_eq!(rig.listing(), published());
+
+    let again = publish(&rig.host(), VERSION).unwrap();
+    assert!(!again.fresh);
+    assert_eq!(mode(&dir), 0o700);
+    layout.check_tree(VERSION).unwrap();
 }
 
 /// Catches orphans left behind, or more than orphans removed: `remove_orphans` removes every
@@ -492,32 +506,35 @@ fn a_service_directory_that_cannot_be_made_or_looked_at_stops_the_work() {
     assert!(!rig.host().exists(Path::new("absent/x")).unwrap());
 }
 
-/// Catches a service directory whose first making stopped half-way staying so: a directory a
-/// crash left between its `mkdir` and its mode (0700) is made 0755 by the next publish, which
-/// publishes into it; a call on a ready directory changes nothing; and a link in the place of
-/// the service directory is refused, not followed, and its target is left as it was.
+/// Catches a service directory an earlier release left otherwise staying so: a directory left
+/// 0755 (listed by every user), or 0700 (passed through by no service user), or half-made by a
+/// crash, is given 0711 by the next publish, which publishes into it; a call on a directory
+/// already 0711 changes nothing; and a link in the place of the service directory is refused, not
+/// followed, and its target (0755) is left as it was.
 #[test]
-fn a_service_directory_left_half_made_is_finished_by_the_next_publish() {
-    let rig = Rig::new("f-half-made");
-    fs::create_dir(rig.service()).unwrap();
-    fs::set_permissions(rig.service(), fs::Permissions::from_mode(0o700)).unwrap();
-    publish(&rig.host(), VERSION).unwrap();
-    assert_eq!(mode(&rig.service()), 0o755);
-    rig.host().create_service(Path::new(SERVICE)).unwrap();
-    assert_eq!(mode(&rig.service()), 0o755);
-    assert_eq!(rig.listing(), published());
+fn a_service_directory_left_open_or_closed_is_given_its_mode_by_the_next_publish() {
+    for (name, left) in [("f-half-made", 0o755), ("f-left-closed", 0o700)] {
+        let rig = Rig::new(name);
+        fs::create_dir(rig.service()).unwrap();
+        fs::set_permissions(rig.service(), fs::Permissions::from_mode(left)).unwrap();
+        publish(&rig.host(), VERSION).unwrap();
+        assert_eq!(mode(&rig.service()), 0o711, "{left:o}");
+        rig.host().create_service(Path::new(SERVICE)).unwrap();
+        assert_eq!(mode(&rig.service()), 0o711, "{left:o}");
+        assert_eq!(rig.listing(), published(), "{left:o}");
+    }
 
     let rig = Rig::new("f-service-link");
     let elsewhere = rig.scratch.path().join("elsewhere");
     fs::create_dir(&elsewhere).unwrap();
-    fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o755)).unwrap();
     symlink(&elsewhere, rig.service()).unwrap();
     let err = publish(&rig.host(), VERSION).unwrap_err();
     assert!(
         matches!(&err, UnpackError::Io { what, .. } if *what == "cannot create the service directory"),
         "{err:?}"
     );
-    assert_eq!(mode(&elsewhere), 0o700);
+    assert_eq!(mode(&elsewhere), 0o755);
     assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
 }
 

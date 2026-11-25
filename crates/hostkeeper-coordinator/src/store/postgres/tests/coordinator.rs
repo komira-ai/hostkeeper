@@ -1,13 +1,12 @@
 //! A coordinator over the Postgres store, end to end in process (`docs/design/coordinator-storage.md`,
 //! sections 4.3 to 5 and 8): the desired state, the ops store and the verdicts over one store, a
 //! session that is lost and made again, the epoch another coordinator raised meanwhile, a commit
-//! whose outcome was not known, the alerts, and the enrollment records' copy.
+//! whose outcome was not known, the alerts, and the enrollment records read fresh.
 //!
 //! Every wait is a deterministic event: a revival is posted to the writer's thread, and a job
 //! queued after it runs after it; a server session that must not be taken is one a test client
 //! holds. Nothing sleeps and no time is measured.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -25,7 +24,7 @@ use hostkeeper_wire::wire::{Heartbeat, ServiceReply};
 use super::{AT, TestDatabase, admin};
 use crate::desired::DesiredStore;
 use crate::enrollment::tests::support::{Files, FixedClock, HostKey, NOW};
-use crate::enrollment::{Enrollment, StoreAt, os_random, setup};
+use crate::enrollment::{Admission, Enrollment, StoreAt, os_random, setup};
 use crate::marks_support::{
     DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, force_request, operator, runs, services_with,
     set, update,
@@ -35,7 +34,7 @@ use crate::orders::Order;
 use crate::store::postgres::dsn::Timeouts;
 use crate::store::postgres::writer::{Fault, LOCK_KEY};
 use crate::store::{Backend, Health, Postgres, Shared};
-use crate::testutil::{Log, Rig};
+use crate::testutil::Rig;
 use crate::verdict_file::VerdictFile;
 
 /// The role of every host of these tests.
@@ -70,20 +69,7 @@ impl Holding {
         Holding { release, thread }
     }
 
-    /// Holds the coordinator's advisory lock, then raises the lease's epoch: what a second
-    /// coordinator that started on the database did, if it had not yet gone.
-    pub(super) fn another_led(database: &TestDatabase) -> Holding {
-        Holding::start(
-            database,
-            &format!(
-                "SELECT pg_advisory_lock({LOCK_KEY}); \
-                 UPDATE \"hostkeeper\".lease SET epoch = epoch + 1"
-            ),
-            &format!("SELECT pg_advisory_unlock({LOCK_KEY})"),
-        )
-    }
-
-    /// Holds only the advisory lock: the session a revival finds taken.
+    /// Holds the advisory lock exclusively: the session a revival finds taken.
     fn the_lock(database: &TestDatabase) -> Holding {
         Holding::start(
             database,
@@ -103,18 +89,17 @@ impl Holding {
 pub(super) struct Farm {
     pub(super) rig: Rig,
     pub(super) store: Postgres,
-    marker: PathBuf,
-    enrollment: Option<Arc<Enrollment>>,
+    pub(super) enrollment: Option<Arc<Enrollment>>,
     pub(super) database: TestDatabase,
 }
 
 /// The waits of the store's sessions that a test that does not tune them opens it with.
-fn waits() -> Timeouts {
+pub(super) fn waits() -> Timeouts {
     crate::store::postgres::TIMEOUTS
 }
 
-/// A coordinator running `web` and `db` over the three stores of one Postgres backend, as
-/// `serve` has them, and the marker `marker`: what [`crate::marks_support::start_on`] makes over
+/// A coordinator running `web` and `db` over the stores of one Postgres backend, as `serve` has
+/// them, and the marker `marker`: what [`crate::marks_support::start_on`] makes over
 /// a fake.
 pub(super) fn start_on_postgres(
     rig: &Rig,
@@ -127,8 +112,26 @@ pub(super) fn start_on_postgres(
         hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
     );
     let backend: Shared = Arc::new(store.clone());
+    // The repository the tests' sets name, in the rows as an operator's add leaves it: a desired
+    // state read again from the rows (a heartbeat's decision reads it afresh) still holds it.
+    let mut seeded = loaded.desired.clone();
+    if seeded.repositories == crate::repositories::Registry::default() {
+        let kept = crate::repositories::Kept {
+            repository: crate::repositories_support::komira_added(1),
+            generation: 0,
+        };
+        seeded
+            .repositories
+            .entries
+            .insert(kept.repository.name.clone(), kept);
+        let change = crate::store::Commit {
+            desired: Some((&loaded.desired, &seeded)),
+            ..crate::store::Commit::default()
+        };
+        backend.commit(&change).expect("the repository is added");
+    }
     Rig::start_over(
-        DesiredStore::over(Arc::clone(&backend), loaded.desired),
+        DesiredStore::over(Arc::clone(&backend), seeded),
         &rig.clock,
         &list,
     )
@@ -141,27 +144,41 @@ pub(super) fn start_on_postgres(
     )
     .with_verdicts(VerdictFile::over(Arc::clone(&backend), loaded.verdicts))
     .with_accounts(crate::accounts::AccountStore::over(
-        backend,
+        Arc::clone(&backend),
         loaded.accounts,
     ))
+    .with_layout(crate::layout::LayoutStore::over(backend, loaded.layout))
 }
 
 impl Farm {
     /// A coordinator on a database of its own, its clock at 2000 (past the quiet start), over the
-    /// store opened with `timeouts`; with `enrolled`, the enrollment store's records on the same
-    /// store.
+    /// store opened with `timeouts` and a pool of one writing session (beside the session of
+    /// heartbeats' decisions; the pool has tests of its own); with `enrolled`, the enrollment
+    /// store's records on the same store.
     fn start(test: &str, timeouts: Timeouts, enrolled: bool) -> Farm {
+        Farm::start_over(test, timeouts, |store| {
+            enrolled.then(|| {
+                Arc::new(crate::store::postgres::PgRecords::over(store)) as Arc<dyn Records>
+            })
+        })
+    }
+
+    /// [`Farm::start`] with the enrollment store's records `records` makes over the store, when
+    /// it makes any.
+    pub(super) fn start_over(
+        test: &str,
+        timeouts: Timeouts,
+        records: impl FnOnce(&Postgres) -> Option<Arc<dyn Records>>,
+    ) -> Farm {
         let database = TestDatabase::new();
         let (store, loaded) = database
-            .open_with(timeouts, "coordinator")
+            .open_tuned(timeouts, &super::pooled(1), "coordinator")
             .expect("the store opens");
         let mut rig = Rig::new(test);
         let marker = rig.dir.path().join("halt.marker");
         let mut coordinator = start_on_postgres(&rig, &store, loaded, &marker);
         let mut enrollment = None;
-        if enrolled {
-            let records =
-                Arc::new(crate::store::postgres::PgRecords::over(&store).expect("records"));
+        if let Some(records) = records(&store) {
             let files = Files::in_dir(&rig.dir);
             let started = setup(
                 Arc::new(RealFs),
@@ -182,7 +199,6 @@ impl Farm {
         Farm {
             rig,
             store,
-            marker,
             enrollment,
             database,
         }
@@ -196,6 +212,11 @@ impl Farm {
     /// `web` and `db` desired at 2.0 (1.0 registered before), and `d1` heard at 1.0 at 2100.
     pub(super) async fn seeded(self) -> Farm {
         ask(&self.rig, "d1", DAEMON, daemon("1.0"));
+        // The first beat found the fleet's rows empty, a gap: its quiet time ends, as time
+        // passing would end it.
+        self.database
+            .run("UPDATE cluster_quiet SET until_unix = 0")
+            .expect("the quiet time ends");
         for service in [WEB, DB] {
             set(&self.rig, service, "1.0", 1).await;
             set(&self.rig, service, "2.0", 2).await;
@@ -229,14 +250,17 @@ impl Farm {
         if self.store.health() == Health::Up {
             return;
         }
+        // The sessions a loss left up (the decisions' one, which the test did not use) are ended
+        // too, so the lock is free once every backend is gone; the revival opens each again.
+        self.database.end_sessions();
         self.lock_is_free();
         self.store.revive();
-        self.store.on_writer(|_| ()).expect("the writer runs");
+        self.store.settle().expect("the writers run");
     }
 
     /// Waits until a revival the last heartbeat posted has run.
     fn revival_ran(&self) {
-        self.store.on_writer(|_| ()).expect("the writer runs");
+        self.store.settle().expect("the writers run");
     }
 
     fn lease(&self) -> (String, String) {
@@ -272,14 +296,6 @@ pub(super) fn exclude(node: &str) -> proto::ExcludeRequest {
         node_id: node.to_owned(),
         reason: "bad disk".to_owned(),
         abandon: false,
-    }
-}
-
-fn pause() -> proto::PauseRequest {
-    proto::PauseRequest {
-        service: WEB.to_owned(),
-        reason: "look first".to_owned(),
-        host_group: String::new(),
     }
 }
 
@@ -356,86 +372,6 @@ async fn a_lost_session_holds_orders_and_resumes_on_the_same_epoch() {
     assert_eq!(ask(rig, "d1", DAEMON, daemon("1.0")), update(WEB, "2.0"));
 }
 
-/// Proves: a coordinator whose session was lost exits when another coordinator led the database
-/// meanwhile: the revival finds a different epoch (`Health::Deposed`), the next heartbeat deposes
-/// the stores, and `Coordinator::deposed` answers the epoch held and the epoch found.
-///
-/// Catches: a coordinator that goes on with a stale memory over a database another one led, or
-/// whose exit does not say which epochs it saw.
-#[tokio::test]
-async fn a_lost_session_exits_when_another_coordinator_led_meanwhile() {
-    let farm = Farm::plain("pg-lost-deposed").seeded().await;
-    let held = farm.store.epoch().expect("an epoch");
-    farm.database.end_sessions();
-    let another = Holding::another_led(&farm.database);
-    assert_eq!(
-        farm.rig.coordinator.exclude(&operator(), exclude("d1")),
-        Err(proto::HostsRefusal::StoreFailed)
-    );
-
-    another.release();
-    farm.revive();
-    assert_eq!(
-        farm.store.health(),
-        Health::Deposed { found: held + 1 },
-        "the revival found the other coordinator's epoch"
-    );
-    ask(&farm.rig, "d1", DAEMON, daemon("1.0"));
-    assert_eq!(farm.rig.coordinator.deposed().await, (held, held + 1));
-}
-
-/// Proves: the exit on a different epoch drops what stood in memory and says so: a pause raised
-/// while the session was lost is listed in the marker file with the epoch held; once deposed the
-/// marker is removed and the log names the audit number dropped, exactly.
-///
-/// Catches: a marker left to refuse the next start after the operator was told the changes are
-/// dropped, or a log that does not name which changes were lost.
-#[tokio::test]
-async fn the_different_epoch_exit_removes_the_marker_and_names_what_it_dropped() {
-    let farm = Farm::plain("pg-deposed-marker").seeded().await;
-    let log = Log::default();
-    let _guard = log.install();
-    let held = farm.store.epoch().expect("an epoch");
-    farm.database.end_sessions();
-    let another = Holding::another_led(&farm.database);
-
-    assert_eq!(
-        farm.rig
-            .coordinator
-            .rollout_pause(&operator(), pause())
-            .map(drop),
-        Err(proto::RolloutsRefusal::StoreFailed)
-    );
-    let number = farm
-        .rig
-        .coordinator
-        .ops()
-        .state()
-        .audit
-        .last()
-        .expect("the pause is audited")
-        .seq;
-    let listed: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&farm.marker).expect("the marker is written"))
-            .expect("the marker is JSON");
-    assert_eq!(
-        listed,
-        serde_json::json!({"unwritten": [number], "epoch": held})
-    );
-
-    another.release();
-    farm.revive();
-    assert_eq!(farm.store.health(), Health::Deposed { found: held + 1 });
-    ask(&farm.rig, "d1", DAEMON, daemon("1.0"));
-    assert!(!farm.marker.exists(), "the marker is removed");
-    let text = log.text();
-    assert!(
-        text.contains(&format!("dropped=[{number}]")),
-        "the log names the number dropped: {text}"
-    );
-    assert!(!farm.rig.coordinator.ops().halt_unwritten());
-}
-
 /// Proves: a commit whose session was lost after the server committed it is taken into memory
 /// once the session is back: the exclusion is refused `store_failed` and memory does not hold it
 /// while the table does; at the next heartbeat after the revival memory holds the exclusion and
@@ -447,9 +383,7 @@ async fn the_different_epoch_exit_removes_the_marker_and_names_what_it_dropped()
 async fn a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory() {
     let farm = Farm::plain("pg-landed").seeded().await;
     let before = farm.rig.coordinator.ops().state();
-    farm.store
-        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
-        .expect("the writer runs");
+    farm.store.fault(Fault::LoseAfterCommit);
 
     assert_eq!(
         farm.rig.coordinator.exclude(&operator(), exclude("d1")),
@@ -489,9 +423,7 @@ async fn a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory()
 async fn an_accounts_change_that_landed_before_its_session_was_lost_is_taken_into_memory() {
     let farm = Farm::plain("pg-accounts-landed").seeded().await;
     let held = crate::store::conformance_tests::rich_accounts();
-    farm.store
-        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
-        .expect("the writer runs");
+    farm.store.fault(Fault::LoseAfterCommit);
 
     let refused = farm.rig.coordinator.accounts().change(|_| Ok(held.clone()));
     assert!(refused.is_err(), "{refused:?}");
@@ -509,11 +441,12 @@ async fn an_accounts_change_that_landed_before_its_session_was_lost_is_taken_int
 
 /// Proves: a commit whose session was lost before the server committed it is not taken: the
 /// exclusion is refused, memory and the table both lack it after the revival, and the next
-/// change skips the number of the lost commit (it is numbered two past the newest row held), so
-/// no audit number is used twice.
+/// change takes the number the lost commit took (one past the newest row held): the audit
+/// counter, which the lost commit's rolled-back transaction never moved on, numbers the lines
+/// with no gap, and no audit number is used twice.
 ///
-/// Catches: a change taken into memory that the database never held, or an audit number of a
-/// lost commit used again for another change.
+/// Catches: a change taken into memory that the database never held, an audit number used twice,
+/// and a gap a lost commit leaves in the numbers.
 #[tokio::test]
 async fn a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken() {
     let farm = Farm::plain("pg-not-landed").seeded().await;
@@ -563,7 +496,11 @@ async fn a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken() {
         .expect("the next change lands")
         .entry
         .expect("an entry");
-    assert_eq!(done.seq, newest + 2, "the lost commit's number is skipped");
+    assert_eq!(
+        done.seq,
+        newest + 1,
+        "the counter's number the lost commit took is free again"
+    );
     let held = numbers(&farm);
     let mut unique = held.clone();
     unique.dedup();
@@ -571,14 +508,17 @@ async fn a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken() {
     assert_eq!(held.last().cloned(), Some(done.seq.to_string()));
 }
 
-/// Proves: a statement that stalls is a lost session: with the table of the exclusions locked by
-/// another session, a commit that writes it is ended by the store's own bounded wait, the store
-/// is lost and the change refused; once the lock is released a revival makes the store `Up`.
+/// Proves: a statement whose wait for a lock runs out is refused and keeps the session: with the
+/// table of the exclusions locked by another session, an operator's exclusion that writes it is
+/// ended by the store's own bounded wait and refused `store_failed`, writing nothing, and the
+/// store stays `Up`; once the lock is released the same exclusion is written at once, on the
+/// same sessions, with no revival. (The reason the refusal is logged with is in
+/// `waits::a_write_whose_lock_wait_runs_out_is_refused_with_what_it_waited_for`.)
 ///
-/// Catches: a stalled database that freezes the coordinator behind a write that never returns, or
-/// one whose timeout leaves the session believed up.
+/// Catches: a stalled database that freezes the coordinator behind a write that never returns, and
+/// a lock timeout that drops the session, so every write and heartbeat is refused until a revival.
 #[tokio::test]
-async fn a_stalled_statement_is_a_lost_session() {
+async fn a_statement_whose_lock_wait_runs_out_is_refused_and_keeps_the_session() {
     let short = Timeouts {
         statement: Duration::from_secs(2),
         lock: Duration::from_secs(1),
@@ -595,10 +535,19 @@ async fn a_stalled_statement_is_a_lost_session() {
         farm.rig.coordinator.exclude(&operator(), exclude("d1")),
         Err(proto::HostsRefusal::StoreFailed)
     );
-    assert_eq!(farm.store.health(), Health::Lost);
+    assert_eq!(farm.store.health(), Health::Up);
 
     locked.release();
-    farm.revive();
+    assert_eq!(
+        farm.count("exclusions"),
+        0,
+        "the refused exclusion wrote nothing"
+    );
+    farm.rig
+        .coordinator
+        .exclude(&operator(), exclude("d1"))
+        .expect("written once the lock is free");
+    assert_eq!(farm.count("exclusions"), 1);
     assert_eq!(farm.store.health(), Health::Up);
 }
 
@@ -693,21 +642,25 @@ fn host_record(host: &str, role: &str) -> pb::Host {
     }
 }
 
-/// Proves: the enrollment records' copy of the hosts is read from the tables again after a commit
-/// of unknown outcome, and not otherwise: a host row changed by hand is not seen by the copy
-/// while every commit is known, and is seen after a commit that landed with its session lost,
-/// which is also seen.
+/// Proves: the enrollment records read a host as the table holds it at every read: a host row
+/// changed by hand (as another coordinator would) is read changed at once, a commit of unknown
+/// outcome does not stop a read while the writing session is lost, and the host that commit
+/// wrote is read once it landed.
 ///
-/// Catches: a copy that goes on answering what it held when a commit may have changed the tables
-/// under it, or one that is read from the tables at every call (a heartbeat that runs a query).
+/// Catches: a host or deny row served from memory, which a write by another coordinator, or a
+/// commit of unknown outcome, would leave behind the table (a denied host still admitted, an
+/// approved one still refused).
 #[test]
-fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
+fn the_enrollment_records_read_each_host_as_the_table_holds_it() {
     let database = TestDatabase::new();
-    let (store, _) = database.open("records").expect("the store opens");
-    let records = crate::store::postgres::PgRecords::over(&store).expect("the records");
+    // A pool of one writing session, the one the fault ends, beside the decisions' own.
+    let (store, _) = database
+        .open_options(&super::pooled(1), "records")
+        .expect("the store opens");
+    let records = crate::store::postgres::PgRecords::over(&store);
     let key = |host: &str| HostId::parse(host).expect("a host id");
     records
-        .commit(&[Record::Host(host_record("web-1", "web"))])
+        .commit(&[], &[Record::Host(host_record("web-1", "web"))])
         .expect("committed");
     database
         .run("UPDATE enrollment_hosts SET role = 'by-hand' WHERE host_id = 'web-1'")
@@ -720,46 +673,41 @@ fn the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome() {
     };
     assert_eq!(
         role(&records, "web-1").as_deref(),
-        Some("web"),
-        "the copy is not read again while every commit is known"
-    );
-
-    store
-        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
-        .expect("the writer runs");
-    let lost = records.commit(&[Record::Host(host_record("web-2", "storage"))]);
-    assert!(lost.is_err(), "the commit's outcome is not known");
-    let before = store.statements();
-    assert_eq!(
-        role(&records, "web-1").as_deref(),
-        Some("web"),
-        "while the outcome is not known the copy is served as it is"
-    );
-    assert_eq!(
-        store.statements(),
-        before,
-        "and a heartbeat's read does not wait on the lost session"
-    );
-    Holding::the_lock(&database).release();
-    store.revive();
-    store.on_writer(|_| ()).expect("the writer runs");
-    assert_eq!(store.health(), Health::Up);
-
-    assert_eq!(
-        role(&records, "web-1").as_deref(),
         Some("by-hand"),
-        "the copy is reloaded as the table holds it"
+        "a change by another writer is read at once"
     );
+
+    store.fault(Fault::LoseAfterCommit);
+    let lost = records.commit(&[], &[Record::Host(host_record("web-2", "storage"))]);
+    assert!(lost.is_err(), "the commit's outcome is not known");
     assert_eq!(
         role(&records, "web-2").as_deref(),
         Some("storage"),
-        "the host the lost commit wrote is there"
+        "a read does not wait on the lost session, and reads what landed"
     );
+    // The lost writer's backend is gone once only the decisions' session holds the lock: a
+    // progress event the server shows, not a time.
+    let holders = |database: &TestDatabase| {
+        database
+            .rows(&format!(
+                "SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND objid = {LOCK_KEY}::bigint \
+                 % 4294967296 AND granted AND database = \
+                 (SELECT oid FROM pg_database WHERE datname = current_database())"
+            ))
+            .len()
+    };
+    while holders(&database) > 1 {
+        std::thread::yield_now();
+    }
+    store.revive();
+    store.settle().expect("the writers run");
+    assert_eq!(store.health(), Health::Up);
+    assert_eq!(role(&records, "web-1").as_deref(), Some("by-hand"));
 }
 
 /// An enrollment store over the records of `store`, with `host` approved.
 pub(super) fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId) {
-    let records = Arc::new(crate::store::postgres::PgRecords::over(store).expect("records"));
+    let records = Arc::new(crate::store::postgres::PgRecords::over(store));
     let enrollment = EnrollmentStore::new(records);
     let id = HostId::parse(host).expect("a host id");
     let key = HostKey::new();
@@ -796,8 +744,8 @@ pub(super) fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId
 
 /// Proves: the first heartbeat of an approved host is written once and the duplicate mark is
 /// written once: a second heartbeat runs no statement and leaves the time of the first, a store
-/// that knows nothing of the first still writes nothing, a second machine id marks the host
-/// duplicate in the table, and a third report of it runs no statement.
+/// that knows nothing of the first reads it and writes nothing, a second machine id marks the
+/// host duplicate in the table, and a third report of it writes nothing.
 ///
 /// Catches: a heartbeat that rewrites the host's row each time it comes, a first-heartbeat time
 /// replaced by a later one, or a duplicate mark written at every report.
@@ -813,21 +761,19 @@ fn the_first_heartbeat_and_the_duplicate_mark_are_written_once() {
         first(),
         [vec![Some((NOW + 60).to_string()), Some("f".to_owned())]]
     );
-    let other = EnrollmentStore::new(Arc::new(
-        crate::store::postgres::PgRecords::over(&store).expect("records"),
-    ));
+    let other = EnrollmentStore::new(Arc::new(crate::store::postgres::PgRecords::over(&store)));
     let statements = store.statements();
     enrollment.note_heartbeat(&id, NOW + 90).expect("noted");
     assert_eq!(store.statements(), statements, "the second ran nothing");
     assert_eq!(first()[0][0], Some((NOW + 60).to_string()));
 
+    let commits = database.commits();
     other.note_heartbeat(&id, NOW + 120).expect("noted");
-    assert_eq!(store.statements(), statements, "a store that knew nothing");
+    assert_eq!(database.commits(), commits, "a store that knew nothing");
     assert_eq!(first()[0][0], Some((NOW + 60).to_string()));
 
     assert!(!enrollment.report_live(&id, "m-1", NOW + 100).expect("live"));
-    let before_mark = store.statements();
-    assert_eq!(before_mark, statements, "one machine writes nothing");
+    assert_eq!(database.commits(), commits, "one machine writes nothing");
     assert!(enrollment.report_live(&id, "m-2", NOW + 101).expect("live"));
     assert_eq!(first()[0][1], Some("t".to_owned()));
     assert_eq!(
@@ -835,22 +781,23 @@ fn the_first_heartbeat_and_the_duplicate_mark_are_written_once() {
         Some((NOW + 60).to_string()),
         "the mark keeps the first heartbeat"
     );
-    let marked = store.statements();
-    assert!(marked > before_mark, "the mark was written");
+    let marked = database.commits();
+    assert_eq!(marked, commits + 1, "the mark was written");
     assert!(enrollment.report_live(&id, "m-2", NOW + 102).expect("live"));
     assert!(enrollment.report_live(&id, "m-1", NOW + 103).expect("live"));
-    assert_eq!(store.statements(), marked, "written once");
+    assert_eq!(database.commits(), marked, "written once");
 }
 
-/// Proves: a heartbeat in the steady state runs no query: once a host's first heartbeat is
-/// written, a coordinator over the database with enrollment answers a heartbeat of that host,
-/// and the enrollment's reads of it (role, denied, retiring, duplicate),
-/// without the store's sessions running one statement.
+/// Proves: a heartbeat in the steady state writes nothing: once a host's first heartbeat is
+/// written, a coordinator over the database with enrollment answers a heartbeat of that host
+/// with no write; and the host's deny row is read fresh: a deny row written by another
+/// coordinator (here by hand) refuses the host's next heartbeat at once, with no restart and no
+/// write of this one.
 ///
-/// Catches: a heartbeat that reads the database for what the store holds in memory, which would
-/// make every heartbeat of the fleet a query.
+/// Catches: a heartbeat that writes the host's row each time it comes, and a deny row served from
+/// a copy of what this coordinator wrote, which admits a host another coordinator retired.
 #[tokio::test]
-async fn a_heartbeat_in_the_steady_state_runs_no_query() {
+async fn a_heartbeat_in_the_steady_state_writes_nothing_and_reads_the_deny_row_fresh() {
     let farm = Farm::start("pg-steady", waits(), true).seeded().await;
     let enrollment = Arc::clone(farm.enrollment.as_ref().expect("enrollment"));
     let key = HostKey::new();
@@ -904,12 +851,21 @@ async fn a_heartbeat_in_the_steady_state_runs_no_query() {
         "the first heartbeat is written"
     );
 
-    let statements = farm.store.statements();
+    let commits = farm.database.commits();
     beat(&farm);
     assert_eq!(
-        farm.store.statements(),
-        statements,
-        "a heartbeat of a host already heard ran no statement"
+        farm.database.commits(),
+        commits,
+        "a heartbeat of a host already heard wrote nothing"
+    );
+    assert_eq!(farm.rig.coordinator.admission(&who), Admission::Admitted);
+    farm.database
+        .run("INSERT INTO enrollment_deny (host_id, state) VALUES ('d1', 2)")
+        .expect("denied by another coordinator");
+    assert_eq!(
+        farm.rig.coordinator.admission(&who),
+        Admission::Denied,
+        "the deny row is read at the next heartbeat"
     );
     let store = enrollment.store();
     let reads: Result<(bool, bool, bool, bool), EnrollmentError> = (|| {
@@ -920,10 +876,6 @@ async fn a_heartbeat_in_the_steady_state_runs_no_query() {
             store.host_role(&id)?.is_some(),
         ))
     })();
-    assert_eq!(reads.expect("the reads"), (false, false, false, true));
-    assert_eq!(
-        farm.store.statements(),
-        statements,
-        "the reads a heartbeat makes of the host ran no statement"
-    );
+    assert_eq!(reads.expect("the reads"), (true, false, false, true));
+    assert_eq!(farm.database.commits(), commits, "and wrote nothing");
 }

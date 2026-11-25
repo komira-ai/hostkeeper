@@ -1,4 +1,4 @@
-//! The host the end-to-end tests run against: a directory tree under `/run`, the fixed host
+//! The host the end-to-end tests run against: a directory tree under `/var/lib`, the fixed host
 //! paths the real daemon uses, and the systemd units it and the fixture service run in.
 //!
 //! The daemon binary reads some paths from no flag (the repository entries it installs from, the
@@ -136,12 +136,20 @@ fn taken_places() -> [PathBuf; 5] {
     ]
 }
 
+/// The tree of the test `tag` of process `pid`: `/var/lib/hk-e2e-<tag>-<pid>`, on disk and not
+/// under `/run`, which a hosted runner may mount `noexec`: systemd then cannot exec the released
+/// daemon staged there (`status=203/EXEC`), and a unit with no start limit is retried for good, so
+/// the test's `systemctl start` never returns.
+pub fn tree_of(tag: &str, pid: u32) -> PathBuf {
+    PathBuf::from(format!("/var/lib/hk-e2e-{tag}-{pid}"))
+}
+
 impl HostRoot {
     /// Checks that the test runs as root under systemd on a host this rig may use, then makes
     /// its directory tree and the two host directories the daemon reads programs and keeps its
     /// state in.
     ///
-    /// `tag` is 1 to 8 characters of `[a-z0-9]`; it names the tree (`/run/hk-e2e-<tag>-<pid>`)
+    /// `tag` is 1 to 8 characters of `[a-z0-9]`; it names the tree (`/var/lib/hk-e2e-<tag>-<pid>`)
     /// and the directory of the artifacts a failed test leaves.
     ///
     /// # Panics
@@ -174,7 +182,7 @@ impl HostRoot {
                 (place, aside)
             })
             .collect();
-        let base = PathBuf::from(format!("/run/hk-e2e-{tag}-{}", std::process::id()));
+        let base = tree_of(tag, std::process::id());
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
         let host = HostRoot {
@@ -196,7 +204,7 @@ impl HostRoot {
         host
     }
 
-    /// The tree of this test: `/run/hk-e2e-<tag>-<pid>`.
+    /// The tree of this test: `/var/lib/hk-e2e-<tag>-<pid>`.
     pub fn base(&self) -> &Path {
         &self.base
     }

@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::desired::{StoreError, io_at};
 use crate::fleet::Fleet;
-use crate::store::{BackendError, Commit, Fake, Files, Shared};
+use crate::store::{BackendError, Commit, Edit, Fake, Files, Part, Scope, Shared};
 
 /// The feature an agent announces to be acknowledged its verdicts.
 pub const FEATURE: &str = hostkeeper_wire::wire::VERDICT_ACKS_FEATURE;
@@ -197,29 +197,72 @@ impl VerdictFile {
     /// [`VerdictsError::Io`]: the file was not written; nothing changed in memory.
     pub(crate) fn supersede(&self, service: &str, host: &HostId) -> Result<(), VerdictsError> {
         let mut held = self.held();
+        let edit = self.begin(&mut held)?;
         let mut next = held.clone();
         if let Some(kept) = next.services.get_mut(service) {
             kept.standing.remove(host.as_str());
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        self.commit(&held, &next)?;
+        self.commit(edit, &held, &next)?;
         *held = next;
         Ok(())
     }
 
-    /// Commits `next` in place of `held` to the backend.
+    /// Begins the edit of a heartbeat's change of the verdicts ([`Scope::VERDICTS`]: it never
+    /// waits for the gate), and takes into `held` what it read afresh.
+    ///
+    /// # Errors
+    /// [`VerdictsError::Io`]: no edit can be begun now (the gate is held, the store is lost); the
+    /// host's next heartbeat says its verdicts again.
+    fn begin(&self, held: &mut Held) -> Result<Edit, VerdictsError> {
+        let mut edit = self
+            .backend
+            .begin(Scope::VERDICTS)
+            .map_err(verdicts_error)?;
+        if let Some(fresh) = edit.take_verdicts() {
+            *held = fresh;
+        }
+        Ok(edit)
+    }
+
+    /// Commits `next` in place of `held` through `edit`.
     ///
     /// # Errors
     /// [`VerdictsError`]: the backend did not take it.
-    fn commit(&self, held: &Held, next: &Held) -> Result<(), VerdictsError> {
+    fn commit(&self, edit: Edit, held: &Held, next: &Held) -> Result<(), VerdictsError> {
         let commit = Commit {
             verdicts: Some((held, next)),
             ..Commit::default()
         };
-        self.backend.commit(&commit).map_err(|why| match why {
-            BackendError::Verdicts(why) => why,
-            other => VerdictsError::Io(other.into_store()),
-        })
+        edit.commit_or(&commit, |commit| self.backend.commit(commit))
+            .map_err(verdicts_error)
+    }
+
+    /// Takes `held`, the verdicts a heartbeat's decision read afresh under the gate, into memory.
+    pub(crate) fn take_decided(&self, held: Held) {
+        *self.held() = held;
+    }
+
+    /// The verdicts in memory, which a decision that does not land puts back.
+    pub(crate) fn copy(&self) -> Held {
+        self.held().clone()
+    }
+
+    /// Reads the verdicts again when the backend's rows moved on since memory's copy was read
+    /// (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"); not while a
+    /// change holds them, which reads the part afresh itself.
+    pub(crate) fn refresh(&self) {
+        let Ok(mut held) = self.held.try_lock() else {
+            return;
+        };
+        match self.backend.reload(Part::Verdicts) {
+            Ok(fresh) => {
+                if let Some(fresh) = fresh.verdicts {
+                    *held = fresh;
+                }
+            }
+            Err(why) => tracing::warn!(%why, "the verdicts could not be read again"),
+        }
     }
 
     /// Every verdict counted: the service, the host and its report.
@@ -252,6 +295,7 @@ impl VerdictFile {
         if !changes(&held, host, heard, counted) {
             return Ok(());
         }
+        let edit = self.begin(&mut held)?;
         let mut next = held.clone();
         for (service, last) in heard.iter().filter(|(_, last)| !clear_record(last)) {
             let kept = next.services.entry(service.clone()).or_default();
@@ -276,9 +320,17 @@ impl VerdictFile {
                 .collect();
         }
         next.services.retain(|_, kept| !kept.is_empty());
-        self.commit(&held, &next)?;
+        self.commit(edit, &held, &next)?;
         *held = next;
         Ok(())
+    }
+}
+
+/// The backend's error as the verdicts' own.
+fn verdicts_error(why: BackendError) -> VerdictsError {
+    match why {
+        BackendError::Verdicts(why) => why,
+        other => VerdictsError::Io(other.into_store()),
     }
 }
 

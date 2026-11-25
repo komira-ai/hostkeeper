@@ -84,6 +84,10 @@ prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.
 protox = "0.10.0"
+# The SSH client of the coordinator's UI terminal (`hostkeeper-coordinator`, `ssh_client.rs`) and
+# the SSH server its tests play the host with. The `ring` backend alone: never `aws-lc-rs`,
+# which needs a C toolchain and another licence.
+russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
 # Certificates: the CA module of hostkeeper-enrollment signs with it (members add `x509-parser`,
 # which reads a public key back for signing), and the TLS tests of hostkeeper-enroll,
 # hostkeeper-testkit and the coordinator crates make their test certificates with it at run time,
@@ -207,3 +211,16 @@ incremental = false
 [profile.test]
 debug = "line-tables-only"
 incremental = false
+
+# The policy of the Buck2 build through buildrules (docs/farm.md): `//:ci` is every member's
+# rustfmt check (`:fmt`, with rustfmt.toml), its clippy (`:lint`, warnings as errors, as ci.yml's)
+# and its tests (`:test`), but where a member's own `[package.metadata.buildrules]` keeps its tests
+# in ci.yml. Cargo ignores this table.
+[workspace.metadata.buildrules]
+default-action = "ci"
+
+[workspace.metadata.buildrules.actions]
+ci = ["fmt", "lint", "test"]
+
+[workspace.metadata.buildrules.lint]
+deny-warnings = true

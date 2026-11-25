@@ -56,12 +56,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 66 assets of v0.1.5 match SHA256SUMS, and 58 attestations of \
+            "release check: the 73 assets of v0.1.5 match SHA256SUMS, and 62 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 58);
+    assert_eq!(calls.len(), 62);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -224,7 +224,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 58);
+    assert_eq!(everything.len(), 62);
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 58);
+    assert_eq!(lines.len(), 62);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -305,7 +305,7 @@ fn a_release_without_its_macos_assets_is_refused_naming_each() {
         .into_iter()
         .filter(|n| n.contains("macos-arm64"))
         .collect();
-    assert_eq!(mac.len(), 9);
+    assert_eq!(mac.len(), 12);
     for name in &mac {
         std::fs::remove_file(dir.join(name)).expect("remove a macOS asset");
     }
@@ -328,37 +328,61 @@ fn a_release_without_its_macos_assets_is_refused_naming_each() {
 }
 
 #[test]
-fn an_hkctl_asset_that_is_not_the_releases_script_is_listed() {
-    // Catches: `release check` passing a command line of another release or another commit, or a
-    // file that is not the script at all, as `hkctl-<version>`.
-    let (dir, commit) = assets("check-hkctl");
+fn an_hk_tarball_that_is_not_exactly_the_file_hk_is_listed() {
+    // Catches: `release check` passing a command line tarball with no members, with another
+    // member beside `hk` (a link `hkctl`, a file, a directory), with `hk` as a link or a
+    // directory instead of a regular file, or one that is no gzip tar archive; and a tarball
+    // that is absent being read.
+    use crate::release::fakes::{Member, tarball};
+    let (dir, commit) = assets("check-hk-tarball");
     let verifier = FakeVerifier::good(&commit);
-    let name = crate::release::contract::hkctl_name(&version());
-    let wrong = format!(
-        "{name} does not hold exactly one version line `_hk_version='hkctl 0.1.5+{}'`",
-        commit.short()
-    );
-    // Another release's, and this release's at another commit.
-    for line in ["hkctl 0.1.4+000000000000", "hkctl 0.1.5+0123456789ab"] {
-        std::fs::write(
-            dir.join(&name),
-            format!("#!/usr/bin/env bash\n_hk_version='{line}'\n"),
-        )
-        .expect("write");
+    let name = "hk-0.1.5-linux-arm64.tar.gz";
+    let wrong =
+        |holds: &str| format!("{name} does not hold exactly the one file `hk` (it holds {holds})");
+    let cases: [(Vec<Member<'_>>, &str); 7] = [
+        (vec![], ""),
+        (
+            vec![Member::File("hk", "x".into()), Member::Link("hkctl", "hk")],
+            "hk (file), hkctl (link to hk)",
+        ),
+        (
+            vec![
+                Member::File("hk", "x".into()),
+                Member::File("other", "x".into()),
+            ],
+            "hk (file), other (file)",
+        ),
+        (vec![Member::File("hkctl", "x".into())], "hkctl (file)"),
+        (
+            vec![Member::Link("hk", "elsewhere")],
+            "hk (link to elsewhere)",
+        ),
+        (vec![Member::Dir("hk/")], "hk/ (type 5)"),
+        (
+            vec![Member::File("hk", "x".into()), Member::Dir("dir/")],
+            "dir/ (type 5), hk (file)",
+        ),
+    ];
+    for (members, holds) in cases {
+        std::fs::write(dir.join(name), tarball(&members)).expect("write");
         let lines = refused(run(&verifier, &dir, &commit));
-        assert!(lines.contains(&wrong), "{lines:?}");
+        assert!(lines.contains(&wrong(holds)), "{holds}: {lines:?}");
     }
-    std::fs::write(dir.join(&name), "not a script\n").expect("write");
+    std::fs::write(dir.join(name), "not an archive\n").expect("write");
     let lines = refused(run(&verifier, &dir, &commit));
     assert!(
-        lines.contains(&format!("{name} does not start with `#!/usr/bin/env bash`")),
+        lines
+            .iter()
+            .any(|l| l.starts_with(&format!("{name} is not a readable gzip tar archive: "))),
         "{lines:?}"
     );
-    // Absent, it is listed once, as missing, and no later step reads it.
-    std::fs::remove_file(dir.join(&name)).expect("remove");
-    assert_eq!(
-        refused(run(&verifier, &dir, &commit)),
-        [format!("missing {name}")]
+    // Absent, it is listed once, as missing, and the other platforms' stay checked.
+    std::fs::remove_file(dir.join(name)).expect("remove");
+    let lines = refused(run(&verifier, &dir, &commit));
+    assert!(lines.contains(&format!("missing {name}")), "{lines:?}");
+    assert!(
+        !lines.iter().any(|l| l.contains("does not hold exactly")),
+        "{lines:?}"
     );
 }
 
@@ -398,5 +422,36 @@ fn an_image_index_that_is_not_the_one_of_the_two_image_tarballs_is_listed() {
     assert!(
         !lines.iter().any(|l| l.contains("is not the image index")),
         "{lines:?}"
+    );
+}
+
+/// A verifier that answers no batch.
+struct Silent;
+
+impl Verifier for Silent {
+    fn verify(
+        &self,
+        _signer: &Signer,
+        _file: &Path,
+        _bundle: Option<&Path>,
+        _commit: &Commit,
+    ) -> Result<Vec<Attestation>, PortError> {
+        Ok(Vec::new())
+    }
+
+    fn verify_each(&self, _asks: &[Ask<'_>]) -> Vec<Result<Vec<Attestation>, PortError>> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn a_verifier_that_answers_fewer_verifications_than_asked_is_refused() {
+    // Catches: a batch of verifications cut short read as a release whose every attestation
+    // verified, since the answers it lacks are never judged.
+    let (dir, commit) = assets("check-silent");
+    let problems = refused(check(&Silent, &dir, &version(), &commit));
+    assert_eq!(
+        problems,
+        ["the verifier answered 0 of the 62 verifications asked for".to_owned()]
     );
 }

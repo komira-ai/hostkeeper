@@ -103,7 +103,7 @@ async fn the_flag_beside_a_token_flag_keeps_the_tokens_working() {
             .is_some()
     );
     match parts.coordinator.caller(Some(ALICE)).await {
-        Caller::Operator(name) => assert_eq!(name.as_str(), "alice"),
+        Caller::Operator(name) => assert_eq!(name.name(), "alice"),
         other => panic!("not alice: {other:?}"),
     }
 

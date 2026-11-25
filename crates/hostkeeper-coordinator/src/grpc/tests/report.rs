@@ -110,7 +110,7 @@ fn mapped_host(host: ServiceHostStatus, members: Vec<Member>, ops: OpsState) -> 
     out.hosts.remove(0)
 }
 
-fn plain_host(b: Heartbeat) -> proto::ServiceHost {
+pub(super) fn plain_host(b: Heartbeat) -> proto::ServiceHost {
     mapped_host(
         svc_host("d1", "storage", b),
         Vec::new(),
@@ -134,6 +134,7 @@ fn full_update() -> UpdateResult {
         reason: Token::parse("drain_bound"),
         order_id: OrderId::parse("ord-7"),
         order_try: Some(2),
+        detail: Some("the state root is owned by uid 501".to_owned()),
     }
 }
 
@@ -146,6 +147,7 @@ fn full_update_proto() -> agent::UpdateResult {
         reason: "drain_bound".to_owned(),
         order_try: Some(2),
         order_id: Some("ord-7".to_owned()),
+        detail: Some("the state root is owned by uid 501".to_owned()),
         ..Default::default()
     }
 }
@@ -213,6 +215,7 @@ fn status_lists_every_service_in_name_order_with_the_top_level_facts() {
             at_unix: None,
             by_name: Some("alice".to_owned()),
             host_group: None,
+            api_token: None,
         }]
     );
 }
@@ -628,7 +631,8 @@ fn standing_halt_without_a_report_has_none() {
 }
 
 /// A host not named among the members is present; the host's role, liveness, slot and the
-/// service's own health and version pass through.
+/// service's own version pass through. The host is not live, so its service's health is
+/// `Silent` in the view while the raw copy of its last heartbeat keeps the health it reported.
 #[test]
 fn host_not_among_the_members_is_present_with_its_own_facts() {
     let mut h = svc_host("d1", "storage", beat("2.0"));
@@ -656,7 +660,11 @@ fn host_not_among_the_members_is_present_with_its_own_facts() {
     assert_eq!(view.membership, proto::Membership::Present as i32);
     assert!(view.holds.is_empty());
     assert_eq!(view.installed_version, Some("2.0".to_owned()));
-    assert_eq!(view.health, agent::Health::Healthy as i32);
+    assert_eq!(view.health, agent::Health::Silent as i32);
+    assert_eq!(
+        out.beat.expect("beat").health,
+        agent::Health::Healthy as i32
+    );
     assert_eq!(view.last_update, None);
     assert_eq!(view.excluded_reason, None);
 }
@@ -740,6 +748,8 @@ fn every_rollout_hold_maps_to_its_proto_gate_reason() {
     use proto::GateReason as R;
     let cases = [
         (Some(Why::Gate(Gate::Halted)), R::Halted),
+        (Some(Why::Gate(Gate::HaltedHere)), R::HaltedHere),
+        (Some(Why::Gate(Gate::StaleHaltHere)), R::StaleHaltHere),
         (Some(Why::Gate(Gate::Held)), R::Held),
         (Some(Why::Gate(Gate::Bad)), R::Bad),
         (Some(Why::Gate(Gate::BelowMinVersion)), R::Unspecified),
@@ -881,6 +891,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
     assert_eq!(
         out.beat,
         Some(agent::ServiceBeat {
+            local_halt: None,
             installer: None,
             drift: None,
             name: "web".to_owned(),

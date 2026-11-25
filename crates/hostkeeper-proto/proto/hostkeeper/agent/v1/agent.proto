@@ -98,6 +98,7 @@ syntax = "proto3";
 package hostkeeper.agent.v1;
 
 import "hostkeeper/options.proto";
+import "hostkeeper/agent/v1/maintenance.proto";
 import "hostkeeper/release/v1/release.proto";
 
 service Coordinator {
@@ -158,9 +159,18 @@ message HeartbeatRequest {
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
   // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
-  // reports them in `repositories`, and `facts-v1`, which asks for `HeartbeatResponse.facts`,
-  // writes them to the host's facts file and reports `facts_generation`):
-  // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
+  // reports them in `repositories`, `facts-v1`, which asks for `HeartbeatResponse.facts`,
+  // writes them to the host's facts file and reports `facts_generation`, `operator-keys-v1`,
+  // which asks for `HeartbeatResponse.operator_keys`, writes them to the managed block of the
+  // host's login account's `authorized_keys` and reports `operator_keys`,
+  // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
+  // the host and reports `prerequisites`, `ssh-v1`, which asks for `HeartbeatResponse.ssh`,
+  // sets up the host's sshd to trust the certificates it names and reports `ssh`, and
+  // `maintenance-v1`, which reports `maintenance` and takes `Maintain`, announced, like `ssh-v1`,
+  // only once advertised):
+  // at most 32, each 1 to 32 bytes of `[a-z0-9-]`, none twice; at most 16 to a coordinator that
+  // does not advertise `ssh-v1` (a coordinator of a release before it drops a longer list
+  // whole), so an agent announces `ssh-v1` only once the coordinator advertised it. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
   // as missing them.
@@ -202,6 +212,238 @@ message HeartbeatRequest {
   // (`HeartbeatResponse.facts`). Absent when it wrote none, and from an agent that does not
   // announce `facts-v1`.
   optional uint64 facts_generation = 12;
+  // What a Mac's daemon saw when it ran the Remote Login probe once at its start: each command,
+  // in order, with its exit code and output, as run by the daemon itself (as root under
+  // launchd); its steps may turn Remote Login on. The coordinator keeps the last one it read, in
+  // memory, and shows it in the host's heartbeat (`hostkeeper.operator.v1.Host.heartbeat`);
+  // nothing decides on it. Sent in every heartbeat once the probe is done, read only over gRPC;
+  // absent from any other daemon, before the probe is done, from one that predates it, and when
+  // the heartbeat would exceed 16 KiB with it. A probe that breaks a rule of `RemoteLoginProbe`
+  // is dropped and the coordinator keeps the last one it read.
+  optional RemoteLoginProbe remote_login_probe = 14;
+  // What the daemon holds of the operator keys the coordinator sends
+  // (`HeartbeatResponse.operator_keys`). Sent in every heartbeat by a daemon that announces
+  // `operator-keys-v1`, read only over gRPC; absent from one that predates it. A report that
+  // breaks a rule of `OperatorKeysReport` is dropped and the coordinator keeps the last one it
+  // read.
+  optional OperatorKeysReport operator_keys = 15;
+  // What the daemon holds of the host prerequisites the coordinator sends
+  // (`HeartbeatResponse.prerequisites`), and the state of each on the host. Sent in every
+  // heartbeat by a daemon that announces `prerequisites-v1`, read only over gRPC; absent from one
+  // that predates it. A report that breaks a rule of `PrerequisitesReport` is dropped and the
+  // coordinator keeps the last one it read.
+  optional PrerequisitesReport prerequisites = 16;
+  // What the daemon did with the host's sshd access (`HeartbeatResponse.ssh`). Sent by a daemon
+  // that announces `ssh-v1`, read only over gRPC; absent from one that predates it. A report
+  // that breaks a rule of `SshReport` is dropped and the coordinator keeps the last one it read.
+  optional SshReport ssh = 13;
+  // The address and the MAC of the host's BMC, as the daemon reads them from the BMC itself
+  // through the host's IPMI device, in-band and with no BMC credential (a Linux daemon running as
+  // root on a host with a BMC). The coordinator reaches the BMC for the console at this address
+  // and still checks there that the BMC has the host's BMC MAC. Sent in every heartbeat by a
+  // daemon that has read one, read only over gRPC; absent from any other daemon and from one that
+  // predates it. A report that breaks a rule of `BmcReport` is dropped and the coordinator keeps
+  // the last one it read; a heartbeat without one leaves the one kept as it is.
+  optional BmcReport bmc = 17;
+  // What the host runs, what is due on it and the maintenance run it holds (maintenance.proto).
+  // For a daemon that announces `maintenance-v1`; a Linux or Mac daemon sends the facts of its last
+  // look, over gRPC. The coordinator keeps the last report it read (from a gRPC heartbeat, or, as
+  // base64 of the encoding of this message, from the key `maintenance` of a JSON heartbeat); a
+  // report that breaks a bound of `MaintenanceReport` is dropped and the one kept stays, and a
+  // heartbeat without one leaves the one kept as it is.
+  optional MaintenanceReport maintenance = 18;
+  // Whether the Mac's Full Disk Access grant is in force for the daemon, as it found by listing a
+  // directory only the grant allows. UNSPECIFIED: not reported, by an agent that predates the
+  // field; the coordinator reads that as unknown, never as granted. Read only over gRPC.
+  FullDiskAccess full_disk_access = 19;
+  // The serial console baseline the daemon keeps on the host's port: the GRUB file that puts
+  // the kernel's console (and GRUB's terminal, on a `ttyS<n>`) on it, and its getty held at
+  // 115200 baud (docs/design/console-broker.md, section 5.2). Sent in every heartbeat by a
+  // daemon whose config names a `serial_console` (`unsupported` from one not under systemd, an
+  // OpenRC host or a Mac), read only over gRPC; absent from a daemon whose config names none and
+  // from one that predates it. The coordinator keeps the last report it read, in
+  // memory, and shows it with the host; a report that breaks a rule of `SerialConsoleReport` is
+  // dropped and the one kept stays, and a heartbeat without one leaves the one kept as it is.
+  optional SerialConsoleReport serial_console = 20;
+}
+
+// The LAN settings of a host's BMC, as the daemon read them from the BMC (Get LAN Configuration
+// Parameters, parameters 3 and 5 of the first LAN channel that has a MAC).
+message BmcReport {
+  // The BMC's IPv4 address, dotted decimal (`192.0.2.12`); never `0.0.0.0`, a loopback,
+  // link-local, multicast or broadcast address.
+  string ip = 1;
+  // The BMC's MAC address, six pairs of lower-case hex digits split by `:`; never all zeros.
+  string mac = 2;
+}
+
+// What a host's daemon found and did of the serial console baseline on its port.
+message SerialConsoleReport {
+  // The port the daemon config names: `ttyS<n>` or `ttyAMA<n>`, `n` from 0 to 99.
+  string port = 1;
+  // `applied` (the files are in place, the getty is enabled and running, and the running
+  // kernel's command line holds the port's console), `reboot_pending` (the files and the getty
+  // are in place, and the running kernel's command line does not hold the port's console yet:
+  // it does from the host's next boot, and the daemon never reboots the host), `failed` (a step
+  // failed; `detail` names it) or `unsupported` (the host cannot take the baseline; `detail`
+  // says why, and nothing was written): a closed set, at most 32 bytes. A reader counts any
+  // other as `other`.
+  string state = 2;
+  // The step that failed or the reason the host cannot take the baseline (`update_grub`,
+  // `service_manager`), at most 128 bytes; empty for `applied` and `reboot_pending`.
+  string detail = 3;
+}
+
+// What a host's daemon did with the sshd access the coordinator sent (`SshAccess`).
+message SshReport {
+  // The `SshAccess.generation` the daemon last applied or refused; 0 when it has seen none.
+  uint64 applied_generation = 1;
+  // `applied`, `disabled`, `blocked_by_allow_list`, `sshd_missing`, `no_include`,
+  // `config_invalid`, `reload_failed`, `would_lock_out`, `no_login_user`,
+  // `cert_login_not_possible`, `shadowed_by_stock`, `blocked_by_access_group` or `unsupported`:
+  // a closed set, at most 32 bytes. A reader counts any other as `other`.
+  string state = 2;
+  // The fingerprints of the host's sshd host keys, `SHA256:` and 43 base64 characters each, at
+  // most 8. The coordinator compares them with the ones pinned at enrollment and never replaces
+  // the pin by them.
+  repeated string host_key_fingerprints = 3;
+  // The keyword or the class of account that made the state, at most 128 bytes; never a secret
+  // and never an account's name.
+  string detail = 4;
+}
+
+// What a host's daemon holds of the host prerequisites of its group, and the state of each.
+message PrerequisitesReport {
+  // The `digest` of the set the daemon holds: the last set it was sent and took since it
+  // started, which it keeps making sure of (it looks again on its own, and after a macOS update)
+  // until it is sent another. 64 lower-case hex characters; empty while it holds none, so that
+  // the coordinator sends the set again (after every start of the daemon).
+  string digest = 1;
+  // The last set the daemon refused (its digest is not its names', or it breaks a rule of a
+  // set), while that set is the last one it was sent: the daemon keeps the set it held. Absent
+  // when it refused none.
+  optional PrerequisitesRefusal refused = 2;
+  // The state of each prerequisite of the set the daemon holds, in the set's order: at most 16,
+  // each named once. Empty while it holds none.
+  repeated PrerequisiteState states = 3;
+}
+
+// A set of host prerequisites a daemon refused, and why.
+message PrerequisitesRefusal {
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 1;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary).
+  string reason = 2;
+}
+
+// The state of one host prerequisite on the host.
+message PrerequisiteState {
+  // Its name, as the set names it (`xcode-command-line-tools`).
+  string name = 1;
+  // Where it stands.
+  PrerequisiteStatus status = 2;
+  // `PREREQUISITE_STATUS_PRESENT`: the version the host has, as the platform's tool says it (for
+  // the Command Line Tools, the `version` `pkgutil` gives of `com.apple.pkg.CLTools_Executables`),
+  // at most 64 bytes (a reader cuts a longer one at a character boundary); empty otherwise.
+  string version = 3;
+  // `PREREQUISITE_STATUS_FAILED`: why the last try failed, as the daemon words it, at most 256
+  // bytes (a reader cuts a longer one at a character boundary); empty otherwise.
+  string reason = 4;
+  // `PREREQUISITE_STATUS_FAILED`: how many tries in a row failed, 1 or more; 0 otherwise.
+  uint32 failures = 5;
+  // `PREREQUISITE_STATUS_FAILED`: the Unix time from which the daemon tries again (it waits
+  // longer after each failure, and never loops on one); 0 otherwise.
+  uint64 next_try_unix = 6;
+  // The Unix time the daemon last looked at it on the host; 0 before it first did.
+  uint64 seen_unix = 7;
+}
+
+// Where a host prerequisite stands on a host.
+enum PrerequisiteStatus {
+  // Not reported.
+  PREREQUISITE_STATUS_UNSPECIFIED = 0;
+  // The daemon holds it and has not looked at the host for it yet.
+  PREREQUISITE_STATUS_PENDING = 1;
+  // The host has it.
+  PREREQUISITE_STATUS_PRESENT = 2;
+  // The host did not have it, and the daemon is installing it now.
+  PREREQUISITE_STATUS_INSTALLING = 3;
+  // The last try to install it, or to look for it, failed: `reason` says why and
+  // `next_try_unix` when the daemon tries again.
+  PREREQUISITE_STATUS_FAILED = 4;
+  // It is of another platform than the host's (the Command Line Tools on Linux): nothing is done.
+  PREREQUISITE_STATUS_NOT_APPLICABLE = 5;
+  // The daemon does not know the name (a newer coordinator's): nothing is done.
+  PREREQUISITE_STATUS_UNKNOWN = 6;
+}
+
+// What a host's daemon holds of the operator keys: the managed block of its login account's
+// `authorized_keys` (root on Linux; on a Mac the one local administrator account). The report
+// names no account.
+message OperatorKeysReport {
+  // The `digest` of the set in force: the keys the managed block holds as the daemon read it for
+  // this heartbeat, in a file of the login account's ownership and mode `0600`, after the last
+  // set it was sent was put in force whole (on a Mac, Remote Login on and the account allowed
+  // SSH). 64 lower-case hex characters; empty while the daemon holds no set it was sent since
+  // it started, or when the file no longer holds that block, so that the coordinator sends the
+  // set again.
+  string digest = 1;
+  // The last set the daemon refused, while that set is the last one it was sent: the daemon
+  // keeps what is in force and does not try a refused set again until it is sent another or
+  // starts again. Absent when it refused none.
+  optional OperatorKeysRefusal refused = 2;
+  // Why the last try to put the set in force failed (a file that could not be written, Remote
+  // Login that did not start), as the daemon words it: at most 256 bytes (a reader cuts a
+  // longer one at a character boundary). The daemon tries again when it is sent the set again.
+  // Empty when the last try did not fail.
+  string failed = 3;
+}
+
+// A set of operator keys a daemon refused, and why.
+message OperatorKeysRefusal {
+  // The refused set's `digest`, 64 lower-case hex characters.
+  string digest = 1;
+  // Why, as the daemon words it: 1 to 256 bytes (a reader cuts a longer one at a character
+  // boundary), for example the place of a key that breaks a rule (never its text), or that the
+  // Mac has no single local administrator account.
+  string reason = 2;
+}
+
+// One run of the Remote Login probe of a Mac's daemon: the commands that tell whether the
+// daemon, with no Full Disk Access, can turn on Remote Login (`systemsetup`, or `launchctl` on
+// `com.openssh.sshd`), whether sshd answers afterwards, and what the daemon's own signature and
+// privacy state are; and why a Mac may sleep (`pmset`, and what the daemon's own power settings
+// said at its starts).
+message RemoteLoginProbe {
+  // The host's clock when the probe started, in seconds since the epoch.
+  uint64 started_unix = 1;
+  // Each step, in the order it ran: at most 24.
+  repeated ProbeStep steps = 2;
+}
+
+// One step of a probe: a command it ran, or a file or socket it read. Every text is at most
+// 4096 bytes, cut at a character boundary by the daemon (`truncated` says so).
+message ProbeStep {
+  // What the step is, 1 to 64 bytes of `[a-z0-9_]` (`remote_login_set_on`).
+  string name = 1;
+  // The program and its arguments as run, or for a step that runs nothing, what it read
+  // (`connect 127.0.0.1:22`, `read /etc/ssh/sshd_config`). At most 8, each at most
+  // 4096 bytes.
+  repeated string argv = 2;
+  // The exit status of the program; absent when it ran nothing, could not be started, timed out
+  // or was ended by a signal.
+  optional int32 exit_code = 3;
+  // What it wrote to its standard output, as UTF-8 (a byte that is not is replaced); for a step
+  // that runs nothing, what it read.
+  string stdout = 4;
+  // What it wrote to its standard error, as UTF-8.
+  string stderr = 5;
+  // Why the step could not be done (the program could not be started, it timed out, the file
+  // or the socket could not be read); empty when it was done.
+  string error = 6;
+  // Whether `stdout` or `stderr` was cut by the daemon.
+  bool truncated = 7;
 }
 
 // What a host's daemon holds of the repositories the coordinator sends
@@ -246,6 +488,23 @@ enum TrustedRootReason {
   // The file of the root cannot be read, or is not one or more JSON trusted roots; this wins over
   // `TRUSTED_ROOT_REASON_STALE`.
   TRUSTED_ROOT_REASON_UNPARSEABLE = 4;
+}
+
+// Whether a host's daemon holds Full Disk Access, as it found by listing a directory only the
+// grant allows (never by reading the privacy database). The grant is a profile an administrator
+// installs, so the state can change while the daemon runs: the daemon looks again from time to
+// time.
+enum FullDiskAccess {
+  // Not reported: an agent that predates the field, or a heartbeat by the JSON route.
+  FULL_DISK_ACCESS_UNSPECIFIED = 0;
+  // The directory could be listed: the grant is in force.
+  FULL_DISK_ACCESS_GRANTED = 1;
+  // The system refused the listing for want of permission: the grant is not in force.
+  FULL_DISK_ACCESS_NOT_GRANTED = 2;
+  // The host is not a Mac: there is no such grant.
+  FULL_DISK_ACCESS_NOT_APPLICABLE = 3;
+  // The listing failed in some other way, so the grant is neither confirmed nor refused.
+  FULL_DISK_ACCESS_UNDETERMINED = 4;
 }
 
 // The platforms releases are built for.
@@ -309,6 +568,20 @@ message ServiceBeat {
   // again, whose install repairs it (`drift_repaired`). Read only over gRPC; a coordinator that
   // predates it skips it.
   DriftReport drift = 14;
+  // Present while the host holds a halt of the service: its step record ended in a halt, and it
+  // refuses every order of the service (`halted`) until a halt generation above `generation`
+  // comes. Read only over gRPC; a coordinator that predates it skips it.
+  LocalHalt local_halt = 15;
+}
+
+// A halt the host holds of a service, as `ServiceBeat.local_halt` reports it.
+message LocalHalt {
+  // The halt's reason, a token of 1 to 64 bytes of `[a-z0-9_]`; absent when it has none.
+  optional string reason = 1;
+  // The halt generation the host holds (its `held-halt` file); 0 when it holds none.
+  uint64 generation = 2;
+  // Seconds since the host last wrote that generation; absent when it has no such file.
+  optional uint64 age_secs = 3;
 }
 
 // A native package found at a version hostkeeper did not set. Each string is 1 to 128 bytes of
@@ -329,6 +602,11 @@ enum Health {
   HEALTH_UNHEALTHY = 2;
   // It is installed on the host and has never run.
   HEALTH_ABSENT = 3;
+  // The coordinator's word only, never sent by a daemon: the host has sent no heartbeat for 45
+  // seconds or more (it is not live), so its last report is not current. A coordinator answers
+  // it in place of the health the host last reported; a heartbeat that carries it is read as
+  // HEALTH_UNSPECIFIED.
+  HEALTH_SILENT = 4;
 }
 
 // How an update ended.
@@ -470,6 +748,73 @@ message HeartbeatResponse {
   // (`HeartbeatRequest.facts_generation`), and the agent writes them before it acts on this
   // answer's order. Absent otherwise.
   HostFacts facts = 6;
+  // The operator keys of the host's group, whole: sent to an agent that announced
+  // `operator-keys-v1` when the coordinator was given an operator keys file and the host's
+  // report (`HeartbeatRequest.operator_keys`) holds neither this set's digest in force nor
+  // refused. A host in no group, or in a group the file does not list, is sent the empty set.
+  // The daemon replaces the managed block of its login account's `authorized_keys` with these
+  // keys and only these, and keeps every line outside the block; the empty set takes the block
+  // away. Absent: keep what it has.
+  optional OperatorKeys operator_keys = 7;
+  // The host prerequisites of the host's group, whole: sent to an agent that announced
+  // `prerequisites-v1` when the coordinator was given a host prerequisites file and the host's
+  // report (`HeartbeatRequest.prerequisites`) holds neither this set's digest nor refused it. A
+  // host in no group, or in a group the file does not list, is sent the empty set. The daemon
+  // makes sure of each prerequisite that applies to its platform, and keeps doing so until it is
+  // sent another set; it never removes one. Absent: keep what it holds.
+  optional HostPrerequisites prerequisites = 8;
+  // The sshd access the host's daemon sets up, sent to an agent that announced `ssh-v1` in every
+  // answer until a heartbeat reports its generation (`SshReport.applied_generation`). Absent:
+  // keep what it has, and for an agent that never received one, set up nothing.
+  optional SshAccess ssh = 9;
+}
+
+// The host prerequisites of a host group, as the coordinator's host prerequisites file holds
+// them.
+message HostPrerequisites {
+  // The SHA-256 of the names, each followed by one newline, in order, as 64 lower-case hex
+  // characters, by the rule of the crate `hostkeeper-wire` (`prerequisites::digest`), which
+  // daemon and coordinator share.
+  string digest = 1;
+  // The names, 0 to 16, each 1 to 64 bytes of `[a-z0-9-]`, a letter first, none twice
+  // (`prerequisites::check_set`). This release knows `xcode-command-line-tools`: Apple's Command
+  // Line Tools for Xcode, on macOS.
+  repeated string names = 2;
+}
+
+// The operator keys of a host group, as the coordinator's operator keys file holds them.
+message OperatorKeys {
+  // The SHA-256 of the keys, each followed by one newline, in order, as 64 lower-case hex
+  // characters, by the rule of the crate `hostkeeper-wire` (`operator_keys::digest`), which
+  // daemon and coordinator share.
+  string digest = 1;
+  // The keys, 0 to 64, each one line in the `authorized_keys` form `<type> <base64> [comment]`
+  // with single spaces and no options, at most 4096 bytes, none twice
+  // (`operator_keys::check_set`). A public key is not a secret.
+  repeated string keys = 2;
+}
+
+// How a host's sshd is set up to trust the coordinator's SSH user CA. The daemon only adds trust;
+// it never removes a way in that works (docs/design/ssh-through-coordinator.md, section 6).
+message SshAccess {
+  // Raised at any change of the rest.
+  uint64 generation = 1;
+  // Whether the daemon sets the access up; false: it reverts what it set up.
+  bool enabled = 2;
+  // The CA public keys sshd trusts, in `authorized_keys` syntax: one or two, of the host's class
+  // only.
+  repeated string ca_public_keys = 3;
+  // The account that takes certificates; empty: none, which the daemon reports as
+  // `no_login_user`.
+  string login_user = 4;
+  // The one principal a certificate must hold, `hk-host-<host id>`, computed by the coordinator
+  // for this host.
+  string principal = 5;
+  // `keep` or `off`: whether sshd keeps password logins as they are or turns them off.
+  string password_auth = 6;
+  // The serials of the revoked certificates, which the daemon writes to sshd's revoked-keys
+  // file.
+  repeated uint64 revoked_serials = 7;
 }
 
 // A host's own values, as the coordinator holds them, for the daemon's facts file. The daemon
@@ -545,6 +890,12 @@ message Order {
     // an absent one and one of a newer schema are refused `record_reads` and not touched. Only for
     // a daemon that announced `clear-record-v1`.
     ClearRecord clear_record = 10;
+    // Run, retry or put back the host's turn of a maintenance run (maintenance.proto). Only for a
+    // daemon that announced `maintenance-v1`. A `RETRY` or `PUT_BACK` is a new try of the order
+    // that took the turn; this release's daemon refuses it `not_halted` when that turn is not
+    // halted. An earlier release that announced `maintenance-v1` runs `RUN` alone and refuses the
+    // other actions `invalid_order`.
+    Maintain maintain = 11;
   }
 }
 
@@ -638,6 +989,11 @@ message EnrollRequest {
   // one now: a daemon of a release before the MDM's removal may still send it, and the coordinator
   // reads it and ignores it (nothing approves a request by it).
   bytes mac_nonce = 5 [(hostkeeper.secret) = true];
+  // The fingerprints of the host's sshd host keys, `SHA256:` and 43 base64 characters each, at
+  // most 8; empty when the host runs no sshd yet, and from a daemon that predates it. The
+  // operator sees them with the request and approves them with the host: they become the pin
+  // `Ssh.HostKeys` returns.
+  repeated string host_key_fingerprints = 6;
 }
 
 // What a host says it is. Every claim is optional, by being empty. Claims help an operator

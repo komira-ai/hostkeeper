@@ -18,10 +18,11 @@ use crate::converge::Convergence;
 use crate::desired::{Desired, DesiredError};
 use crate::force::end_by_setter;
 use crate::halt::lift_by_setter;
-use crate::ops::{AuditEntry, Write};
+use crate::ops::{AuditBy, AuditEntry, Write};
 use crate::releases::{self, Release, Targets};
 use crate::services::ServiceDef;
 use crate::status::convergence_of;
+use crate::tokens::Operator;
 use crate::write_record::{WriteAsk, WriteRecord};
 
 /// Why `Releases.GetRelease` answers no release.
@@ -54,8 +55,24 @@ pub(super) fn release_of(
 pub(crate) enum Setter<'a> {
     /// CI, by this verified token.
     Ci(&'a Verified),
-    /// The operator token of this name.
-    Operator(&'a str),
+    /// This operator.
+    Operator(&'a Operator),
+}
+
+/// A set is audited by `ci` for CI, and by the operator, with their API token, for an operator.
+impl AuditBy for Setter<'_> {
+    fn by_name(&self) -> &str {
+        match self {
+            Self::Ci(_) => crate::reconcile::CI,
+            Self::Operator(operator) => operator.name(),
+        }
+    }
+    fn by_token(&self) -> Option<&str> {
+        match self {
+            Self::Ci(_) => None,
+            Self::Operator(operator) => operator.api_token(),
+        }
+    }
 }
 
 impl Coordinator {
@@ -184,9 +201,10 @@ impl Coordinator {
         if !host_group.is_empty() {
             return Err(SetError::NotInHostGroup);
         }
-        let (actor, set_by) = match setter {
-            Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
-            Setter::Operator(name) => (*name, format!("operator token {name}")),
+        let actor = setter;
+        let set_by = match setter {
+            Setter::Ci(verified) => verified.job_workflow_ref.clone(),
+            Setter::Operator(operator) => format!("operator token {}", operator.name()),
         };
         // The fleet's lock is held to the end of the set: a heartbeat plans a rollback and
         // writes it under that lock, so it cannot write a rollback from the state it read over
@@ -262,8 +280,9 @@ impl Coordinator {
                 %service,
                 "desired state set by CI"
             ),
-            Setter::Operator(name) => tracing::info!(
-                token = %name,
+            Setter::Operator(operator) => tracing::info!(
+                operator = operator.name(),
+                token = operator.api_token(),
                 %service,
                 "desired state set by an operator"
             ),

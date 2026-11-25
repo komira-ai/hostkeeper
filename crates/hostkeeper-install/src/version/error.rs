@@ -21,9 +21,9 @@ pub const REASON_IO_ERROR: &str = "io_error";
 /// Why [`crate::version::stage_filled`] gave no sealed version. Whatever the error, nothing
 /// outside the staging directory was changed and no version directory was created, with one
 /// exception: an [`UnpackError::Io`] or [`UnpackError::NoSpace`] from the last steps of the
-/// publish (the fsync of the service directory after the rename, the mode 0555 of the version
+/// publish (the fsync of the service directory after the rename, the mode 0700 of the version
 /// directory and its fsync) leaves the version in place, whole and sealed, and the next publish
-/// of the same order takes it as it is and makes its directory 0555.
+/// of the same order takes it as it is and makes its directory 0700.
 #[derive(Debug, thiserror::Error)]
 pub enum UnpackError {
     #[error("no space left while publishing: {0}")]

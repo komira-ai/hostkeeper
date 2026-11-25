@@ -12,6 +12,7 @@ use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_steps::{Layout, Seal, SealError, read_seal};
 
+use super::VERSION_MODE;
 use super::error::UnpackError;
 use super::fs::{PackageFs, ServiceLock};
 use super::publish::settle;
@@ -144,20 +145,20 @@ pub(crate) fn sealed(
     Ok(Some(seal))
 }
 
-/// Makes the directory `dir` of `version` 0555 unless it is.
+/// Makes the directory `dir` of `version` [`VERSION_MODE`] unless it is.
 pub(crate) fn settle_if_open(
     fs: &dyn PackageFs,
     service: &str,
     version: &str,
     dir: &Path,
 ) -> Result<(), UnpackError> {
-    // A crash between the publish's rename of the tree and the mode after it leaves the version
-    // sealed and whole but still 0700; this is where it is made 0555. The mode of the version
-    // directory is not part of the tree digest, so the seal is untouched; a version already 0555
-    // is not written to (one that cannot be looked at is settled, and the settle says why).
-    let read_only = std::fs::symlink_metadata(dir)
-        .is_ok_and(|meta| meta.permissions().mode() & 0o7777 == 0o555);
-    if !read_only {
+    // An earlier release made a published version 0555, readable by every user; this is where a
+    // version found on the host is closed to them. The mode of the version directory is not part
+    // of the tree digest, so the seal is untouched; a version already closed is not written to
+    // (one that cannot be looked at is settled, and the settle says why).
+    let closed = std::fs::symlink_metadata(dir)
+        .is_ok_and(|meta| meta.permissions().mode() & 0o7777 == VERSION_MODE);
+    if !closed {
         settle(fs, Path::new(service), version)?;
     }
     Ok(())

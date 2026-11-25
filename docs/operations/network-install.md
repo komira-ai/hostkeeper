@@ -6,7 +6,7 @@ manual step of its own: enter its record, which is also its approval
 board that does not try network boot before its disk. The design, and the
 reason for every rule below, is [network-install.md](../design/network-install.md) (cited here as
 "the design"). Enrolling the machine once it has posted its request is
-[enrollment.md](enrollment.md), and every `hkctl` command and flag is
+[enrollment.md](enrollment.md), and every `hk` command and flag is
 [cli.md](../cli.md).
 
 The parts:
@@ -22,15 +22,15 @@ The parts:
 - The coordinator, which `serve` reads before every answer to learn which machines may be
   installed, and which the installed daemon enrolls with over its LAN listener.
 
-The commands of `hkctl` below reach the coordinator's private listener, as in
-[enrollment.md](enrollment.md), which also says where `hkctl` comes from:
+The commands of `hk` below reach the coordinator's private listener, as in
+[enrollment.md](enrollment.md), which also says where `hk` comes from:
 `https://<private-listener>` is its address, `<ca.pem>` the CA its certificate chains to, and
 `<token-file>` a file holding an operator token. The examples use the documentation addresses
 `192.0.2.0/24` for the farm LAN and `00:00:5e:00:53:xx` for MACs; put your own in their place.
 
 **The record's platform.** Router mode chooses the shim and the boot set by the record's platform,
 since the machine's own packets may state none, so every record of a machine to install in router
-mode names it: `hkctl enrollment add-record --platform linux_x86_64` or
+mode names it: `hk enrollment add-record --platform linux_x86_64` or
 `--platform linux_arm64` ([enrollment.md](enrollment.md#record-the-server)). A record with no
 platform is still read, and `serve` logs `has no platform, which router mode needs` for its MACs:
 router mode installs nothing for it, and it gets the menu that boots its local disk. Proxy mode
@@ -69,7 +69,7 @@ can stay in the inventory: its `hostHeld` keeps the machine from being installed
 what `serve` will see:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --enrolled false
 ```
 
@@ -118,7 +118,9 @@ gain one: every machine of the answer set fetches it over plain HTTP. Make it ro
 writes by group and others (`chown root:root`, `chmod 0600`): `prepare` and `serve` load it with the
 daemon's own loader and refuse what the daemon would refuse, before a seed is made. The boot host
 keeps a copy as `/etc/pxe/hostkeeper.toml` (step 5), a file of its own beside the host's
-own `/etc/hostkeeper/hostkeeper.toml`.
+own `/etc/hostkeeper/hostkeeper.toml`. Add `serial_console = "ttyS1"`, the port of `serve`'s
+`serial-console`: the installed host's daemon then keeps the serial console baseline the seed
+wrote, and puts it back if it is lost ([console.md](console.md#the-daemon-keeps-the-serial-baseline)).
 
 ### 3a. Write the repository entries of the installed hosts
 
@@ -208,10 +210,11 @@ ca-file = "/etc/pxe/ca.pem"
 token-file = "/etc/pxe/token"
 user-id = 65534
 group-id = 65534
+serial-console = "ttyS1"
 ```
 
-Router mode is the same with `mode = "router"`; this one also sets the install disk, the
-serial console and the repository entries of step 3a:
+Router mode is the same with `mode = "router"`; this one also sets the install disk and the
+repository entries of step 3a:
 
 ```toml
 # /etc/pxe/pxe.toml
@@ -226,8 +229,8 @@ ca-file = "/etc/pxe/ca.pem"
 token-file = "/etc/pxe/token"
 user-id = 65534
 group-id = 65534
-install-disk = "serial=SN-*"
 serial-console = "ttyS1"
+install-disk = "serial=SN-*"
 repositories = "/etc/pxe/repositories"
 ```
 
@@ -253,8 +256,18 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
   `path=<glob>`, the smallest of those it matches. Without it, the smallest SSD (a disk the
   kernel reports as not rotational). Only that disk is written. See the disks of the board check.
 - `serial-console`: `ttyS<n>` or `ttyAMA<n>`: the installed system's kernel console and a getty
-  on that port at 115200 baud, so the BMC's serial console shows the key hash. Which port the
-  BMC's serial console is depends on the board model **[V]** (the board check records it).
+  on that port at 115200 baud, so the BMC's serial console shows the key hash; on a `ttyS<n>`
+  port GRUB's output too (`GRUB_TERMINAL="console serial"`, `GRUB_SERIAL_COMMAND="serial --unit=<n>
+  --speed=115200"`). Set `"ttyS1"` on every farm: the BMC's serial console (Serial over LAN) is
+  the board's second serial port, COM2, which Linux names `ttyS1`, on every Linux server, a fleet
+  rule and not a value per board model ([console-broker.md](../design/console-broker.md),
+  section 5.2). Every example in this runbook sets it. The board check confirms it (item 8). An
+  Arm board's port is a `ttyAMA<n>`, which gets the kernel's console and the getty but no GRUB
+  serial terminal. On either kind of port the getty stays at 115200 baud: the seed writes a
+  drop-in, `/etc/systemd/system/serial-getty@<port>.service.d/99_hostkeeper.conf`, whose
+  `ExecStart=-/sbin/agetty -o '-p -- \\u' 115200 - $TERM` replaces the stock unit's
+  `--keep-baud 115200,57600,38400,9600`, which drops the port to 9600 at the first Enter over
+  Serial over LAN, after which the BMC's serial console shows NUL bytes.
 - `dhcp-listen`, `proxy-listen`, `tftp-listen`, `http-listen`: `address:port` of each socket; by
   default the protocol ports 67, 4011, 69 and 80 on every address. Keep the HTTP port at 80: a
   port other than 80 is written into GRUB's device name, which Ubuntu's signed GRUB is not known
@@ -282,6 +295,7 @@ ca-file = "/etc/pxe/ca.pem"
 token-file = "/etc/pxe/token"
 user-id = 65534
 group-id = 65534
+serial-console = "ttyS1"
 
 [prepare]
 platform = ["linux-x86_64"]
@@ -351,7 +365,7 @@ true when `serve` logs a `dhcp:` line for a booting machine's MAC.
 
 Once, on the coordinator. `pxe` runs on the hosts of a host group that lists it
 ([hostgroups.md](hostgroups.md)). Make a group for the boot host, `pxe-boot`, that lists every
-package the boot host runs now (`hkctl host-groups get` of its group shows them; a move uninstalls
+package the boot host runs now (`hk host-groups get` of its group shows them; a move uninstalls
 what the new group does not list) and `pxe` after them, in the order they install:
 
 ```json
@@ -359,7 +373,7 @@ what the new group does not list) and `pxe` after them, in the order they instal
 ```
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups put --request pxe-boot.json --reason "the boot server's host"
 ```
 
@@ -377,7 +391,7 @@ cargo xtask release targets --service pxe --version <version> --dir <assets> \
   | sed -n 's/^targets=//p' > targets.json
 jq -n --arg version <version> --slurpfile targets targets.json \
   '{desired: {version: $version}, targets: $targets[0]}' > desired.json
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases set-desired --service pxe --request desired.json
 ```
 
@@ -392,7 +406,7 @@ Move the boot host into `pxe-boot`. The daemon installs the package at its next 
 after the move has admitted it ([hostgroups.md](hostgroups.md#moving-a-host)):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id <boot-host> --host-group pxe-boot --reason "install window"
 ```
 
@@ -449,7 +463,7 @@ group, which does not list `pxe`: the move orders the uninstall of `pxe` (an uni
 [hostgroups.md](hostgroups.md#uninstalls)):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id <boot-host> --host-group <its-own-group> --reason "window over"
 ```
 
@@ -517,8 +531,18 @@ keep the packets with the result. Power the machine on and read `serve`'s log fo
    disk is not the smallest SSD, pass `install-disk = "serial=<glob>"` or `model=<glob>`.
 7. **Memory.** The live system loads the whole ISO into memory, so a machine needs several GiB
    of RAM **[V]**: record the board's RAM and whether the install succeeded.
-8. **The serial console.** Which `ttyS<n>` the BMC's serial console reads, for
-   `serial-console`.
+8. **The serial console, COM2 = `ttyS1`.** In the firmware setup, console redirection is on
+   COM2 at 115200 baud, 8 bits, no parity (on a Supermicro board, Advanced, Serial Port Console
+   Redirection, the SOL or COM2 entry; the names are **[V]** per firmware). After the first
+   install of the model, reboot the host once (the kernel's console and GRUB's terminal take
+   effect from the second boot) and open the BMC's serial console (Serial over LAN): the
+   kernel's messages and then the login prompt with the key hash appear on it (GRUB's menu
+   appears only when GRUB's timeout is visible, which Ubuntu's default, hidden with a timeout
+   of 0, is not). Press Enter twice: the login prompt is drawn again, readable. A blank serial
+   console means the BMC does not carry COM2 at 115200 baud: set the redirection and the BMC's
+   SOL bit rate, and check again. NUL bytes or garbage after the first Enter mean the getty
+   fell to a slower baud: `systemctl cat serial-getty@ttyS1.service` must show the seed's
+   drop-in, with `115200` alone and no `--keep-baud`.
 9. **After the first install of the model,** whether the board keeps the boot order curtin
    writes. Curtin puts the installed system first in the UEFI boot order after an install
    (`reorder_uefi`, at its default) **[V]**; on the installed host, `sudo efibootmgr` shows the
@@ -539,7 +563,7 @@ with no further step ([enrollment.md](enrollment.md#the-record-is-the-approval))
 before the machine boots.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --host-group web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --platform linux_x86_64 \
@@ -576,7 +600,7 @@ daemon logs `enrolled as host:web-17`, and the record is used: `list-records` sh
 `RECORD_STATE_USED`, with the request that used it.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
@@ -590,12 +614,12 @@ than the record's, or is contested by another request. Approve those by hand, by
 the console, as in [enrollment.md](enrollment.md#approve):
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-group web --reason "network install, key checked on the console"
 ```
@@ -625,7 +649,7 @@ components record; nothing is timed by hand. Keep three files of that machine:
   `pending.json`. The request leaves the list at its approval, and its `firstSeenUnix` with it.
 
   ```
-  hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+  hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
       enrollment list --limit 50
   ```
 
@@ -635,7 +659,7 @@ components record; nothing is timed by hand. Keep three files of that machine:
   it under way; until then take it again.
 
   ```
-  hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+  hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
       hosts get --node-id web-17
   ```
 
@@ -682,6 +706,7 @@ to set one on a record, remove the record and add it again.
    token-file = "/etc/pxe/token"
    user-id = 65534
    group-id = 65534
+   serial-console = "ttyS1"
    reinstall = ["web-17"]
    ```
 
@@ -700,7 +725,7 @@ to set one on a record, remove the record and add it again.
    is refused `host_group_differs`):
 
    ```
-   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
        enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
        --host-id web-17 --host-group web --replace true \
        --reason "web-17 reinstalled from the network, key checked on the console"

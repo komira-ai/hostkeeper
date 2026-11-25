@@ -88,6 +88,44 @@ fn the_header_says_degraded_for_a_live_host_with_an_unhealthy_service_not_health
     }
 }
 
+/// Proves: on the Services tab, a service card's health pill says the health word and is `bad`
+/// for `HEALTH_UNHEALTHY` and for `HEALTH_SILENT` (the coordinator's word for a service of a host
+/// that is not live), `ok` for `HEALTH_HEALTHY` and `muted` for `HEALTH_ABSENT`.
+/// Catches: a silent host's services shown in the neutral tone of a health the page does not know.
+#[test]
+fn a_service_card_marks_a_silent_service_as_bad_like_an_unhealthy_one() {
+    let mut ui = ui_with(json!({
+        "nodeId": "web-2", "live": false, "lastHeartbeatUnix": "1799999000",
+        "services": [
+            {"service": "a-silent", "health": "HEALTH_SILENT"},
+            {"service": "b-unhealthy", "health": "HEALTH_UNHEALTHY"},
+            {"service": "c-healthy", "health": "HEALTH_HEALTHY"},
+            {"service": "d-absent", "health": "HEALTH_ABSENT"},
+        ],
+    }));
+    let out = ui.run(&page_driver(
+        "host",
+        r#"{ nodeId: "web-2" }"#,
+        "[]",
+        r#"
+await click(tree, "tab-services");
+const shown = seen.shown[seen.shown.length - 1];
+return nodes(shown).filter((n) => n.attrs["class"] === "service card").map((card) => {
+  const pill = nodes(card).find((n) => String(n.attrs["class"]).startsWith("pill"));
+  return [text(nodes(card).find((n) => n.tag === "h3")), text(pill), pill.attrs["class"]];
+});"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!([
+            ["a-silent", "silent", "pill bad"],
+            ["b-unhealthy", "unhealthy", "pill bad"],
+            ["c-healthy", "healthy", "pill ok"],
+            ["d-absent", "absent", "pill muted"],
+        ])
+    );
+}
+
 #[test]
 fn the_page_has_one_tab_open_at_a_time_and_keeps_it_across_a_refresh_of_the_same_host() {
     // Asserts: the six tabs in order, Overview on at first, a click on a tab shows that panel and
@@ -117,7 +155,7 @@ return { first, second, kept, reset };"#,
     ));
     assert_eq!(
         out["out"]["first"],
-        json!({"names": ["tab-overview", "tab-services", "tab-trust", "tab-labels", "tab-placement", "tab-group"],
+        json!({"names": ["tab-overview", "tab-services", "tab-updates", "tab-trust", "tab-labels", "tab-placement", "tab-group", "tab-ssh", "tab-power"],
                "on": ["tab-overview"], "open": 1})
     );
     assert_eq!(
@@ -147,6 +185,31 @@ return nodes(tree).filter((n) => n.attrs["class"] && String(n.attrs["class"]).st
   .map((n) => n.attrs["class"]);"#,
     ));
     assert_eq!(out["out"], json!(["dot bad", "dot warn", "dot muted"]));
+}
+
+/// Proves: the Services tab carries the bad dot for a service whose view says `HEALTH_SILENT`
+/// (a host that is not live), as for an unhealthy one, and none for a healthy service alone.
+/// Catches: a silent host whose Services tab looks as if nothing needed a look.
+#[test]
+fn the_services_tab_shows_a_dot_for_a_silent_service() {
+    for (health, dots) in [
+        ("HEALTH_SILENT", json!(["dot bad", "dot muted"])),
+        ("HEALTH_HEALTHY", json!(["dot muted"])),
+    ] {
+        let mut ui = ui_with(json!({
+            "nodeId": "web-9", "live": false, "lastHeartbeatUnix": "1799999000",
+            "services": [{"service": "api", "health": health}],
+        }));
+        let out = ui.run(&page_driver(
+            "host",
+            r#"{ nodeId: "web-9" }"#,
+            "[]",
+            r#"
+return nodes(tree).filter((n) => n.attrs["class"] && String(n.attrs["class"]).startsWith("dot"))
+  .map((n) => n.attrs["class"]);"#,
+        ));
+        assert_eq!(out["out"], dots, "{health}");
+    }
 }
 
 #[test]

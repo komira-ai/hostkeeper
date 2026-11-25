@@ -145,7 +145,7 @@ fn text(value: &str) -> Option<String> {
 
 /// Proves: over the database every accepted set raises the generation by one, a set identical
 /// to the state held included: two identical sets answer generations 1 and 2, each is a commit
-/// of its own (the lease's counter moves on by one each), the row holds generation 2,
+/// of its own (the ledger gains a row each), the row holds generation 2,
 /// `Converge` shows it, and a start again on the database loads it.
 ///
 /// Catches: an identical set skipped as unchanged over the database, so a writer could not tell
@@ -155,7 +155,7 @@ async fn an_accepted_write_raises_the_generation_even_for_an_identical_set() {
     let database = TestDatabase::new();
     let farm = Releasing::start("pg-generation-identical", &database);
     assert_eq!(farm.converged().await, record(0));
-    let commits = || database.rows("SELECT commits FROM lease");
+    let commits = || database.rows("SELECT count(*) FROM tx_ledger");
     let before = commits();
     assert_eq!(farm.ci_sets(set("1.0", 1)).await, record(1));
     assert_eq!(farm.ci_sets(set("1.0", 1)).await, record(2));
@@ -181,8 +181,7 @@ async fn an_accepted_write_raises_the_generation_even_for_an_identical_set() {
 
 /// Proves: a set as the operator whose `if_generation` is not the service's generation is
 /// refused `ABORTED` `generation_conflict`, and nothing changes: not the desired state, not its
-/// row, not the audit table (the operator's `set_desired` entry is not written), not the lease's
-/// counter. The same set over the generation now is taken and raises it.
+/// row, not the audit table (the operator's `set_desired` entry is not written), not the ledger. The same set over the generation now is taken and raises it.
 ///
 /// Catches: a precondition checked after the operator's audit entry is written, or after the
 /// state is committed; one read as "at least".
@@ -200,7 +199,7 @@ async fn a_stale_if_generation_is_refused_generation_conflict_and_changes_nothin
         (
             database.rows("SELECT version, generation FROM desired"),
             database.rows("SELECT seq, action FROM audit ORDER BY seq"),
-            database.rows("SELECT commits FROM lease"),
+            database.rows("SELECT count(*) FROM tx_ledger"),
         )
     };
     let before = snapshot();
@@ -266,7 +265,9 @@ async fn the_write_id_and_the_replaced_state_come_back_in_the_record() {
             text("2"),
             text("ci-2"),
             text("1.0"),
-            text(r#"{"storage": 2}"#)
+            // As the state holds it once read from the rows (the set before stamped the queue's
+            // number, so the part is read again): the format's `frontend` named, as answered.
+            text(r#"{"storage": 2, "frontend": 0}"#)
         ]]
     );
 

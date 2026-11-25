@@ -19,9 +19,9 @@ For every installer but `hostkeeper-archive` (a repository installer adds `apt/`
 packages-repositories.md sections 4.2 and 4.7):
 
 ```
-/var/lib/hostkeeper/packages/<service>/<version>/     0555, sealed
+/var/lib/hostkeeper/packages/<service>/<version>/     0700, sealed
   target.json        the order's entry (installer, digest, manifest...), as canonical JSON
-  artifact           the verified bytes, 0444
+  artifact           the verified bytes, 0400
   tree/              what stage extracted: the hook, and the files the observer hashes
 ```
 
@@ -58,7 +58,8 @@ An update runs, in order:
 3. Hook `prepare`, from the new version's tree.
 4. Installer `activate` of the new version. This takes the place of today's switch of `current` before `cutover`.
 5. Hook `cutover`, `verify`, `cleanup`, as today.
-6. After a confirmed switch: installer `retire` of every version but `current` and `previous` (today's prune).
+6. After a confirmed switch: installer `retire` of every version but `current`, `previous`, the pinned one and the newest
+   `--keep-versions` others (today's prune, hostkeeper-design.md Q14).
 
 The installer changes what is on disk. The hook changes what runs: it stops the old processes, drains, migrates, starts
 the new ones and says whether the new release serves. A package whose own scripts restart the service (a `postinst` running `deb-systemd-invoke restart`)

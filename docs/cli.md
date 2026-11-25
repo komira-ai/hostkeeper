@@ -1,41 +1,47 @@
-# hkctl
+# hk
 
-<!-- Generated from the protos: `cargo test -p hostkeeper-hkctl --test docs` fails when this file differs, and writes the current text beside its test binary. Do not edit by hand. -->
+<!-- Generated from the protos: `cargo test -p hostkeeper-hk` fails when this file differs, and writes the current text to `cli.md` in the target directory's `tmp`. Do not edit by hand. -->
 
-`hkctl` is the command line of hostkeeper's coordinator: one bash script, generated from the protobuf services of `hostkeeper-proto`, that calls one method of the coordinator's JSON gateway ([gateway.md](gateway.md)) per command. It is released as the asset `hkctl-<version>`, attested like every other asset ([deploy/verify-a-release.md](deploy/verify-a-release.md)); `hkctl --version` prints `hkctl <version>+<first 12 hex digits of the commit>`. Every command, flag and help text below is generated from the descriptors; the host API (`hostkeeper.agent.v<n>`), whose caller is the daemon, is not here.
+`hk` is the operator's command line of hostkeeper's coordinator: one program, generated from the protobuf services of `hostkeeper-proto`, that calls one method of the coordinator's JSON gateway ([gateway.md](gateway.md)) per command, and has the SSH tunnel built in. It is released as `hk-<version>-<platform>.tar.gz`, attested like every other asset ([deploy/verify-a-release.md](deploy/verify-a-release.md)); `hk --version` prints `hk <version>+<first 12 hex digits of the commit>`. The archive holds the one file `hk`, and the program says `hk:` before its diagnostics whatever file name it is run as. Every command, flag and help text below is generated from the descriptors; the host API (`hostkeeper.agent.v<n>`), whose caller is the daemon, is not here.
 
 ## Rules
 
-Every command is one method: `hkctl <service> <method>`, both in kebab case as the protos name them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the coordinator's gateway with curl. hkctl needs bash 3.2 or later and curl 7.55 or later, and no jq.
+Every command is one method: `hk <service> <method>`, both in kebab case as the protos name them (`Releases.SetDesired` is `releases set-desired`), called as one POST of JSON to the coordinator's gateway over HTTPS. hk is one program: it needs no bash, no curl and no jq, and runs no other program for a gateway call. It puts `hk:` before its diagnostics, whatever file name it is run as.
 
 A request field is a flag named after it (`node_id` is `--node-id`): a scalar takes one value; a bool takes `true` or `false`, so that an absent flag and `false` differ; an enum takes a value's name without its prefix, in lower case, never `unspecified`; a repeated field repeats its flag; a `map<string, string>` repeats `--<field> key=value`. A flag takes its value as `--flag value` or `--flag=value`; a value that starts with `--` only as `--flag=value`.
 
 A message, a oneof, `bytes` and any other map come only through `--request <file|->`: a JSON object, `-` for stdin, which the flags add to. A field named both by a flag and by the request file is a usage error.
 
-A secret field (`(hostkeeper.secret)`) is never a flag: it is read with `--<field>-file <path>` (one trailing newline dropped) or `--<field>-stdin`, and never printed. At most one input reads stdin. No token or secret is ever written to a file, put in an argument list or in a child's environment: curl reads each through a pipe.
+A secret field (`(hostkeeper.secret)`) is never a flag: it is read with `--<field>-file <path>` (one trailing newline dropped) or `--<field>-stdin`, and never printed. At most one input reads stdin. No token or secret is ever written to a file or put in an argument list or in the environment of a program hk runs: it is read into memory and sent in the request.
 
-The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnostics go to stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`. A call refused `invalid_request` makes one more call, with no token, to the coordinator's `GET /v1/version?at_least=<this hkctl's release>`: when that says the coordinator is older (`409`, or `404` from a coordinator before the route), hkctl says so on stderr, with the coordinator's version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or none, leaves `invalid_request`.
+The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnostics go to stderr. A refusal prints `refused: <reason>` when its reason is a token of `[a-z0-9_]{1,64}`. A call refused `invalid_request` makes one more call, with no token, to the coordinator's `GET /v1/version?at_least=<this hk's release>`: when that says the coordinator is older (`409`, or `404` from a coordinator before the route), hk says so on stderr, with the coordinator's version when it gave one, and the reason it prints is `coordinator_older`; any other answer, or none, leaves `invalid_request`.
+
+Four commands are not gateway calls: the SSH tunnel is built into hk. `hk ssh <host-id> [--identity FILE] [--reason TEXT] [-- ssh args]` gets a one-host SSH certificate and runs ssh to the host through the coordinator's tunnel (a word after `ssh` that is not a method of the service `ssh` is a host id). `hk ssh-proxy <host-id>` is the byte stream for `ProxyCommand hk --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h` in `~/.ssh/config`. `hk ssh-revoke --operator NAME | --serial N | --host <host-id>` revokes certificates. `hk ssh-status <host-id>` shows the host keys pinned for a host and the certificate held. They need --endpoint, --ca-file and --token-file, take no other credential, keep the key, the certificates and the pins in `$HOME/.hostkeeper/ssh`, and read the token from its file. `hk ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.
+
+`hk xcode-push <version> | <archive.xip>` is not a gateway call either: on macOS only, it brings an Xcode release into the coordinator's Xcode store. Given a version, it downloads the archive with `xcodes download <version>` in the operator's own session (a two-factor prompt is answered at the terminal); given a file, it takes the file. Apple's signature must be on it (`pkgutil --check-signature`: exit 0, `signed Apple Software`, a chain ending at Apple Root CA), its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other credential; `hk xcode-push --help` says each step.
+
+`hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no token, up to N times (6 by default) with S seconds between two tries (10 by default), until any HTTP answer comes; when none does, it runs `tailscale down`, then `tailscale up`, and asks as many times again. It ends 0 at the first answer, with one line saying which try it was, and 1 when neither round had one, saying how each ended. It needs --endpoint and --ca-file, takes --timeout-secs for each try, and takes no token; `hk tailnet-wait --help` says each step.
 
 ## Global flags
 
 | flag | value | default | meaning |
 |---|---|---|---|
 | `--endpoint` | URL |  | The coordinator's private listener, as https://<host>[:<port>]. Needed for a call. |
-| `--ca-file` | PATH |  | PEM certificates of the CA the coordinator's certificate must chain to, given to curl as `--cacert` in place of its default bundle (a curl built with a default CA directory also reads that directory). Needed for a call. |
+| `--ca-file` | PATH |  | PEM certificates of the CA the coordinator's certificate must chain to; no other root is trusted for the coordinator. Needed for a call. |
 | `--token-file` | PATH |  | Read the bearer token (an operator token) from this file, which only its owner may read; one trailing newline is dropped. The token is never an argument, an environment variable or a line of output. |
 | `--token-stdin` |  |  | Read the bearer token from stdin instead. |
 | `--github-oidc-audience` | AUDIENCE |  | In a GitHub Actions job with id-token: write: ask the runner for a fresh ID token for this audience and call with it; `::add-mask::<token>` is printed on stdout first. |
 | `--response-file` | PATH |  | Write the answer to this file instead of stdout. |
 | `--timeout-secs` | SECONDS | 30 | How long to wait to connect, and for the answer, 1 to 999999; a method that holds the call (a `wait_secs` field) adds its hold. |
-| `--help` |  |  | Print the help of hkctl, a service or a method. |
-| `--version` |  |  | Print `hkctl <version>+<commit>`; only before the service, so a method's own `--version` is its field. |
+| `--help` |  |  | Print the help of hk, a service or a method. |
+| `--version` |  |  | Print `hk <version>+<commit>`; only before the service, so a method's own `--version` is its field. |
 
 ## Exit codes
 
 | code | meaning | gateway codes |
 |---|---|---|
 | 0 | the call succeeded |  |
-| 1 | anything else: no answer (curl failed), an answer that is not the gateway's, or any other code | CANCELLED, UNKNOWN, DEADLINE_EXCEEDED, NOT_FOUND, ALREADY_EXISTS, RESOURCE_EXHAUSTED, ABORTED, OUT_OF_RANGE, UNIMPLEMENTED, INTERNAL, UNAVAILABLE, DATA_LOSS |
+| 1 | anything else: no answer, an answer that is not the gateway's, or any other code | CANCELLED, UNKNOWN, DEADLINE_EXCEEDED, NOT_FOUND, ALREADY_EXISTS, RESOURCE_EXHAUSTED, ABORTED, OUT_OF_RANGE, UNIMPLEMENTED, INTERNAL, UNAVAILABLE, DATA_LOSS |
 | 2 | a usage error, or the coordinator refused the request: INVALID_ARGUMENT or FAILED_PRECONDITION | INVALID_ARGUMENT, FAILED_PRECONDITION |
 | 3 | the coordinator refused the caller: UNAUTHENTICATED or PERMISSION_DENIED | PERMISSION_DENIED, UNAUTHENTICATED |
 
@@ -45,7 +51,7 @@ The answer, the gateway's JSON, goes to stdout or to `--response-file`; diagnost
 
 The service `Alerts` of the package `hostkeeper.operator.v1`. The conditions that need a person.
 
-#### `hkctl alerts list`
+#### `hk alerts list`
 
 `/hostkeeper.operator.v1.Alerts/List`
 
@@ -54,16 +60,16 @@ nothing.
 
 ### `api-tokens`
 
-The service `ApiTokens` of the package `hostkeeper.operator.v1`. The tokens a script calls with. A token acts as the operator it is named for and cannot sign in. Each mutating call is audited under the caller's name, with the token as the entry's subject: `api_token_create` and `api_token_revoke`.
+The service `ApiTokens` of the package `hostkeeper.operator.v1`. The tokens a script calls with. A token made here belongs to a user, its owner, and acts as that user: every check of who may do what (the console's operators file among them) reads the owner's name, and the audit records the owner as `by` and the token as `api_token`. A token cannot sign in. Revoking it, or disabling or deleting its owner, refuses it from the next call; deleting the owner also removes their tokens. A token of the tokens file has no owner and acts as the operator it is named for. Each mutating call is audited under the caller's name, with the token as the entry's subject: `api_token_create` and `api_token_revoke`.
 
-#### `hkctl api-tokens list`
+#### `hk api-tokens list`
 
 `/hostkeeper.operator.v1.ApiTokens/List`
 
 Every token, by name: the coordinator's tokens file's, which are read-only, and those made
 here. Changes nothing. No token and no digest is ever in the answer.
 
-#### `hkctl api-tokens create`
+#### `hk api-tokens create`
 
 `/hostkeeper.operator.v1.ApiTokens/Create`
 
@@ -73,8 +79,9 @@ once: the coordinator keeps its SHA-256 only.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The new token's name. |
+| `--owner` | STRING | The user the token belongs to and acts as; absent, the caller (a user, or the owner of the caller's token). A name that is no user's is `unknown_owner`. |
 
-#### `hkctl api-tokens revoke`
+#### `hk api-tokens revoke`
 
 `/hostkeeper.operator.v1.ApiTokens/Revoke`
 
@@ -89,7 +96,7 @@ by editing the file.
 
 The service `Audit` of the package `hostkeeper.operator.v1`. The coordinator's audit log.
 
-#### `hkctl audit list`
+#### `hk audit list`
 
 `/hostkeeper.operator.v1.Audit/List`
 
@@ -107,11 +114,94 @@ The entries after `since_seq` that match every filter set, newest last. Changes 
 | `--newest` | true\|false | The newest `limit` matching entries after `since_seq`, oldest first, in place of the oldest; `next_seq` goes on from the newest of them. |
 | `--host-group` | STRING | Only entries about this host group (`AuditEntry.host_group`); a coordinator that does not hold host groups lists none. |
 
+### `console`
+
+The service `Console` of the package `hostkeeper.operator.v1`. A host's console. One session per host: a second `Open` of a host that has one is refused `console_busy`, and `List` names who holds it. Each call that acts is audited under the caller's name with the host as the entry's node: `console_open`, `console_close`, `power_action` and `boot_device_set`; a refusal of an operator named in the console operators file is audited as `console_denied` with its cause.
+
+#### `hk console open`
+
+`/hostkeeper.operator.v1.Console/Open`
+
+Opens a console session on a host: takes the host's one session slot and writes the audit
+line, without contacting the device. The session is then attached by a WebSocket at
+`/console/v1/stream/<session>` on the private listener, by the same operator name, within
+`expires_in_secs`; an unattached session ends after that.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--reason` | STRING | Why the console is opened; the audit line carries it. |
+
+#### `hk console power`
+
+`/hostkeeper.operator.v1.Console/Power`
+
+Reads or changes a Linux server's power through its BMC, after checking that the BMC at the
+host's address has the host's BMC MAC. Answered when the BMC has acknowledged the command;
+the host's own state follows later (`Hosts.Get`).
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--action` | VALUE | The command. One of: status, on, off, soft, cycle, reset. |
+| `--reason` | STRING | Why; the audit line carries it. |
+
+#### `hk console set-boot-device`
+
+`/hostkeeper.operator.v1.Console/SetBootDevice`
+
+Sets the device a Linux server boots from through its BMC, after the same MAC check as
+`Power`, and answers with the boot flags the BMC holds afterwards, read back.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--device` | VALUE | The device to boot from. One of: pxe, disk, bios. |
+| `--persistent` | true\|false | Every boot from now on, not only the next one. |
+| `--efi` | true\|false | Boot in UEFI mode; a UEFI board may ignore the device otherwise. |
+| `--reason` | STRING | Why; the audit line carries it. |
+
+#### `hk console list`
+
+`/hostkeeper.operator.v1.Console/List`
+
+Every open console session, by host id. Changes nothing and is not audited.
+
+#### `hk console close`
+
+`/hostkeeper.operator.v1.Console/Close`
+
+Ends the console session of a host, whoever holds it. The closer's name is in the audit
+line.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose session ends. |
+
+#### `hk console probe`
+
+`/hostkeeper.operator.v1.Console/Probe`
+
+Reads a Linux server's serial console without typing and says what it saw: opens a session
+as `Open` does (the same checks, refusals and `console_open` line), attaches it in the
+coordinator, reads until `max_bytes` came, `quiet_secs` passed without a byte or
+`wait_secs` passed, then ends it as a stream ends (the payload deactivated, one
+`console_close` line). It sends the host no byte, not even a newline. A Mac is `no_bmc_mac`; a
+device not reached, or that fails before the host sent a byte, is refused with its cause.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host's id. |
+| `--reason` | STRING | Why the console is probed; the `console_open` line carries it. |
+| `--wait-secs` | UINT32 | The longest the read lasts, in seconds: 1 to 900 (`invalid_request` otherwise). `hk` waits this long beyond its own timeout. |
+| `--quiet-secs` | UINT32 | The read ends once this many seconds pass with no byte from the host, from its start or from the last byte; 0 is the coordinator's `--console-quiet-s`. |
+| `--max-bytes` | UINT32 | The read ends once this many bytes came: 0 is 65536; above 1048576 is `invalid_request`. |
+
 ### `enrollment`
 
 The service `Enrollment` of the package `hostkeeper.operator.v1`. The hosts waiting for an operator to approve their enrollment.
 
-#### `hkctl enrollment list`
+#### `hk enrollment list`
 
 `/hostkeeper.operator.v1.Enrollment/List`
 
@@ -124,7 +214,7 @@ expired instead.
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
 | `--unenrolled` | true\|false | List the requests that expired, whose hosts are unenrolled, in place of the pending ones: each waited for an operator longer than the coordinator's `--enrollment-request-ttl` and is no longer approved. The order and the page tokens are the same. A coordinator before expiry ignores the field and lists the pending requests, each with `state` UNSPECIFIED. |
 
-#### `hkctl enrollment approve`
+#### `hk enrollment approve`
 
 `/hostkeeper.operator.v1.Enrollment/Approve`
 
@@ -149,7 +239,7 @@ reason is optional too.
 | `--placement-sled` | STRING | Or the sled the server stands on (`Layout.Get`'s `sleds`) and its slot from 0 (left out: the lowest free): `rack`, `placement_u` and `placement_height_u` left empty (`placement_invalid` otherwise). A slot another subject holds is `placement_overlap`, a sled the layout lacks `placement_invalid`. With `rack`, `placement_u` and `placement_height_u` instead, the approval makes a sled of that U and height for the server, which goes when the server leaves it. |
 | `--placement-slot` | UINT32 |  |
 
-#### `hkctl enrollment reject`
+#### `hk enrollment reject`
 
 `/hostkeeper.operator.v1.Enrollment/Reject`
 
@@ -162,7 +252,7 @@ is answered as rejected and audited once.
 | `--request-id` | STRING | The request to reject, as `PendingEnrollment.request_id` lists it. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
-#### `hkctl enrollment add-record`
+#### `hk enrollment add-record`
 
 `/hostkeeper.operator.v1.Enrollment/AddRecord`
 
@@ -195,7 +285,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a command-line flag); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. One of: linux_x86_64, linux_arm64, darwin_arm64. |
 | `--host-group` | STRING | The host group the host is to be in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any); empty for none. A record that names a group has a window as one that names a role does. |
 
-#### `hkctl enrollment list-records`
+#### `hk enrollment list-records`
 
 `/hostkeeper.operator.v1.Enrollment/ListRecords`
 
@@ -208,7 +298,7 @@ against, or only the others.
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
 | `--enrolled` | true\|false | Unset for every record; true for only the records a host is enrolled against (`InventoryRecord.enrolled`), false for only the others. |
 
-#### `hkctl enrollment remove-record`
+#### `hk enrollment remove-record`
 
 `/hostkeeper.operator.v1.Enrollment/RemoveRecord`
 
@@ -219,7 +309,7 @@ Remove the record of a host id. An enrolled host keeps its certificate.
 | `--host-id` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl enrollment update-record`
+#### `hk enrollment update-record`
 
 `/hostkeeper.operator.v1.Enrollment/UpdateRecord`
 
@@ -238,7 +328,7 @@ record must still hold a data MAC or a serial. A MAC that another record holds i
 | `--bmc-mac` | STRING | As `AddRecordRequest.bmc_mac`. |
 | `--notes` | STRING | As `AddRecordRequest.notes`. |
 
-#### `hkctl enrollment open-record`
+#### `hk enrollment open-record`
 
 `/hostkeeper.operator.v1.Enrollment/OpenRecord`
 
@@ -258,7 +348,7 @@ matches the record is approved then, as at `AddRecord`.
 
 The service `HostGroups` of the package `hostkeeper.operator.v1`. The host groups: what each group's hosts run, and by which rollout policy. A host is in one group or in none; a host in none is ordered no package (it keeps what it runs). Every group lists `hostkeeper`. There is no built-in group: `all` is a name like any other. Each mutating call takes a reason and answers the audit entry it wrote.
 
-#### `hkctl host-groups list`
+#### `hk host-groups list`
 
 `/hostkeeper.operator.v1.HostGroups/List`
 
@@ -270,7 +360,7 @@ count and, per package, its desired version. Changes nothing.
 | `--limit` | UINT32 | The most groups to return; capped at 256, and 0 means the cap. |
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
 
-#### `hkctl host-groups get`
+#### `hk host-groups get`
 
 `/hostkeeper.operator.v1.HostGroups/Get`
 
@@ -283,7 +373,7 @@ page of its hosts. Changes nothing.
 | `--limit` | UINT32 | The most hosts to return; capped at 256, and 0 means the cap. |
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
 
-#### `hkctl host-groups put`
+#### `hk host-groups put`
 
 `/hostkeeper.operator.v1.HostGroups/Put`
 
@@ -299,7 +389,7 @@ resets it (`Services.SetMinVersion` writes it). Audited `host_group_put`.
 
 Through `--request` only: `host_group` (hostkeeper.operator.v1.HostGroup).
 
-#### `hkctl host-groups remove`
+#### `hk host-groups remove`
 
 `/hostkeeper.operator.v1.HostGroups/Remove`
 
@@ -312,7 +402,7 @@ or Mac allowlist entry names, with its desired versions and plan positions. Audi
 | `--host-group` | STRING | The group. |
 | `--reason` | STRING | Why; 1 to 256 bytes. |
 
-#### `hkctl host-groups move`
+#### `hk host-groups move`
 
 `/hostkeeper.operator.v1.HostGroups/Move`
 
@@ -331,7 +421,7 @@ nothing is uninstalled. Audited `host_move`.
 
 The service `Hosts` of the package `hostkeeper.operator.v1`. The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 
-#### `hkctl hosts list`
+#### `hk hosts list`
 
 `/hostkeeper.operator.v1.Hosts/List`
 
@@ -345,7 +435,7 @@ enrollment kept of what it runs (`Host.running`). Changes nothing.
 | `--limit` | UINT32 | The most hosts to return; capped at 256, and 0 means the cap. |
 | `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
 
-#### `hkctl hosts get`
+#### `hk hosts get`
 
 `/hostkeeper.operator.v1.Hosts/Get`
 
@@ -356,7 +446,7 @@ host not heard since included. Changes nothing.
 |---|---|---|
 | `--node-id` | STRING |  |
 
-#### `hkctl hosts exclude`
+#### `hk hosts exclude`
 
 `/hostkeeper.operator.v1.Hosts/Exclude`
 
@@ -370,7 +460,7 @@ ordered. A second exclusion of the same host and service replaces the first.
 | `--reason` | STRING |  |
 | `--abandon` | true\|false | Also free the update slot the host holds for the service mid-update, for a host that is gone and will not report its update final. False (the default) keeps the slot. |
 
-#### `hkctl hosts include`
+#### `hk hosts include`
 
 `/hostkeeper.operator.v1.Hosts/Include`
 
@@ -382,7 +472,7 @@ an error.
 | `--service` | STRING |  |
 | `--node-id` | STRING |  |
 
-#### `hkctl hosts set-labels`
+#### `hk hosts set-labels`
 
 `/hostkeeper.operator.v1.Hosts/SetLabels`
 
@@ -394,7 +484,7 @@ carries (its daemon is sent them at its next heartbeat). An empty set removes th
 | `--node-id` | STRING |  |
 | `--labels` | KEY=VALUE | At most 8; each key and value 1 to 32 bytes of `[a-z0-9-]`. Repeat the flag for more. |
 
-#### `hkctl hosts abort`
+#### `hk hosts abort`
 
 `/hostkeeper.operator.v1.Hosts/Abort`
 
@@ -407,7 +497,7 @@ abort of a host that runs nothing of the service is accepted and changes nothing
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl hosts retire`
+#### `hk hosts retire`
 
 `/hostkeeper.operator.v1.Hosts/Retire`
 
@@ -424,7 +514,7 @@ audited once.
 | `--node-id` | STRING | The host id the host was enrolled as. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
-#### `hkctl hosts clear-record`
+#### `hk hosts clear-record`
 
 `/hostkeeper.operator.v1.Hosts/ClearRecord`
 
@@ -439,7 +529,7 @@ verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
 | `--node-id` | STRING | The host, heard from since the coordinator started. |
 | `--service` | STRING | The service whose step record the host sets aside; one the coordinator manages. |
 
-#### `hkctl hosts retry`
+#### `hk hosts retry`
 
 `/hostkeeper.operator.v1.Hosts/Retry`
 
@@ -455,7 +545,7 @@ at its next heartbeat, at the next try (see `RetryRequest`). Audited `retry`.
 
 The service `Layout` of the package `hostkeeper.operator.v1`. The lab's layout. Every write is audited under the caller's name: `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place`, `layout_unplace`, `layout_device_put` and `layout_device_remove`. A write takes an optional reason; without one the audit says "layout edit".
 
-#### `hkctl layout get`
+#### `hk layout get`
 
 `/hostkeeper.operator.v1.Layout/Get`
 
@@ -463,7 +553,7 @@ The whole layout: the cluster's name, every row by number, every rack by row and
 every placement by rack and lowest U. Changes nothing. The layout is empty on a coordinator
 that holds none.
 
-#### `hkctl layout put-name`
+#### `hk layout put-name`
 
 `/hostkeeper.operator.v1.Layout/PutName`
 
@@ -474,7 +564,7 @@ Names the cluster.
 | `--name` | STRING | 1 to 32 characters of letters, digits, space, `.`, `_` and `-`. |
 | `--reason` | STRING | 0 to 256 bytes, no control character; empty: "layout edit". |
 
-#### `hkctl layout add-row`
+#### `hk layout add-row`
 
 `/hostkeeper.operator.v1.Layout/AddRow`
 
@@ -484,7 +574,7 @@ Adds the next row: its number is one more than the highest row number held (0 fo
 |---|---|---|
 | `--reason` | STRING |  |
 
-#### `hkctl layout remove-row`
+#### `hk layout remove-row`
 
 `/hostkeeper.operator.v1.Layout/RemoveRow`
 
@@ -496,7 +586,7 @@ holds no placement, so a row's servers are named by `Get` (the page names them).
 | `--id` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl layout put-rack`
+#### `hk layout put-rack`
 
 `/hostkeeper.operator.v1.Layout/PutRack`
 
@@ -511,7 +601,7 @@ that row, 0 for the first. With an `id`, resizes that rack and, when `row` names
 | `--height-u` | UINT32 | 1 to 60; 0 on an add is 42. |
 | `--reason` | STRING |  |
 
-#### `hkctl layout remove-rack`
+#### `hk layout remove-rack`
 
 `/hostkeeper.operator.v1.Layout/RemoveRack`
 
@@ -522,7 +612,7 @@ Removes a rack that holds no placement.
 | `--id` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl layout place`
+#### `hk layout place`
 
 `/hostkeeper.operator.v1.Layout/Place`
 
@@ -540,7 +630,7 @@ place.
 
 Through `--request` only: `subject` (hostkeeper.operator.v1.LayoutSubject).
 
-#### `hkctl layout unplace`
+#### `hk layout unplace`
 
 `/hostkeeper.operator.v1.Layout/Unplace`
 
@@ -552,7 +642,7 @@ Takes a server out of its rack: it is unplaced again.
 
 Through `--request` only: `subject` (hostkeeper.operator.v1.LayoutSubject).
 
-#### `hkctl layout put-device`
+#### `hk layout put-device`
 
 `/hostkeeper.operator.v1.Layout/PutDevice`
 
@@ -571,7 +661,7 @@ inventory entry: `Place` with the subject kind INVENTORY and the device's id.
 | `--notes` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl layout remove-device`
+#### `hk layout remove-device`
 
 `/hostkeeper.operator.v1.Layout/RemoveDevice`
 
@@ -582,7 +672,7 @@ Removes a network device and its placement, if it has one.
 | `--id` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl layout put-sled`
+#### `hk layout put-sled`
 
 `/hostkeeper.operator.v1.Layout/PutSled`
 
@@ -600,7 +690,7 @@ stands on a sled moves with it.
 | `--reason` | STRING |  |
 | `--slots` | UINT32 | 1 to 8; 0 on an add is 1, 0 on a replace keeps the sled's count. A count below the slot of an item on the sled is `in_use`, naming it. |
 
-#### `hkctl layout remove-sled`
+#### `hk layout remove-sled`
 
 `/hostkeeper.operator.v1.Layout/RemoveSled`
 
@@ -611,11 +701,107 @@ Removes a sled that holds nothing: refused `in_use`, naming what stands on it, o
 | `--id` | STRING |  |
 | `--reason` | STRING |  |
 
+### `maintenance`
+
+The service `Maintenance` of the package `hostkeeper.operator.v1`. The maintenance runs. Each call that changes something takes a reason and answers the audit entry it wrote, under the caller's name, with the caller's reason followed by `run <id>`: `maintenance_schedule` (with the host group as the entry's `host_group` when the run names one), `maintenance_cancel`, `maintenance_retry_host` and `maintenance_put_back` (each with the host as the entry's `node_id`). `List`, `Get` and a `Schedule` without `confirm` change nothing and write no audit entry.
+
+#### `hk maintenance schedule`
+
+`/hostkeeper.operator.v1.Maintenance/Schedule`
+
+Schedule a run: of the kinds asked (all that are due, when none is named), on the hosts named
+or every host of a host group, now or in a window, with the group's batch and drain deadline
+unless the request names its own. The run takes the hosts that have something due of its
+kinds; a host it cannot order is listed skipped, with why. Without `confirm` nothing is stored
+and the answer is the run as it would be, with no id; it is refused as the stored run would
+be.
+
+| flag | value | meaning |
+|---|---|---|
+| `--kinds` | VALUE | The kinds to apply, each at most once; empty: every kind that is due on each host. One of: macos, xcode, linux, reboot. Repeat the flag for more. |
+| `--host-ids` | STRING | The hosts, 1 to 32, by node id: one host, or a selection. Empty when `host_group` is set. Repeat the flag for more. |
+| `--host-group` | STRING | Every host of this host group. Empty when `host_ids` is set. |
+| `--window-start-unix` | UINT64 | When the window opens; 0: now. |
+| `--window-end-unix` | UINT64 | When the window ends: no host starts its turn after it, and a host in its turn finishes; 0: no end. Set whenever `window_start_unix` is. |
+| `--batch` | UINT32 | How many hosts of each group may be in their turn at once, 1 to 10000; absent: the group's `batch`. |
+| `--drain-deadline-secs` | UINT64 | How long a host's drain may wait before the host is put back as it was and deferred; 0: no deadline; absent: the group's `drain_deadline_secs`. |
+| `--reason` | STRING | Why; the audit entry carries it. Needed with `confirm`; a call without it may leave it out. |
+| `--take-last-host` | true\|false | Take every host of a group, the one host of a group of one included; otherwise such a run is refused (`last_host`). |
+| `--confirm` | true\|false | Store the run. Without it nothing is stored, no host is ordered, and the answer is the run as it would be. |
+
+#### `hk maintenance list`
+
+`/hostkeeper.operator.v1.Maintenance/List`
+
+The newest runs, newest first, as many as `limit` allows, with no hosts; every run, or those
+in the states asked. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--states` | VALUE | Only the runs in these states; empty: every run. One of: scheduled, running, halted, done, cancelled, window_ended. Repeat the flag for more. |
+| `--limit` | UINT32 | At most this many of the newest runs. |
+
+#### `hk maintenance get`
+
+`/hostkeeper.operator.v1.Maintenance/Get`
+
+One run, with each of its hosts, by node id: its step, since when, and why it halted,
+deferred or was skipped. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+
+#### `hk maintenance cancel`
+
+`/hostkeeper.operator.v1.Maintenance/Cancel`
+
+Cancel a run: no host of it starts its turn from now on; a host in its turn finishes it, and
+the hosts that had not started end as not reached. A halted host stays halted, and cordoned,
+until it is put back: `PutBack` is still taken. Audited `maintenance_cancel`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+| `--reason` | STRING | Why; the audit entry carries it. |
+
+#### `hk maintenance retry-host`
+
+`/hostkeeper.operator.v1.Maintenance/RetryHost`
+
+Retry a halted host's turn from the step that failed: its daemon is ordered the run again
+(`MAINTAIN_ACTION_RETRY`) with a new try. The order is queued, and sent at each heartbeat of
+the host until its daemon reports the turn at another step; the answer is the turn as stored,
+still halted. Audited `maintenance_retry_host`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+| `--host-id` | STRING | The halted host, by node id. |
+| `--reason` | STRING | Why; the audit entry carries it. |
+
+#### `hk maintenance put-back`
+
+`/hostkeeper.operator.v1.Maintenance/PutBack`
+
+Put a halted host back: its daemon runs the drained services' `resume`
+(`MAINTAIN_ACTION_PUT_BACK`) and leaves the update as far as it got; the host's turn ends, and
+the run goes on in its group. Taken in a run that has ended too (cancelled, or past its
+window), for a host still halted there. The order is queued, and sent at each heartbeat of
+the host until its daemon reports the turn at another step; the answer is the turn as stored,
+still halted. Audited `maintenance_put_back`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--run-id` | STRING | The run's id. |
+| `--host-id` | STRING | The halted host, by node id. |
+| `--reason` | STRING | Why; the audit entry carries it. |
+
 ### `mdm`
 
 The service `Mdm` of the package `hostkeeper.operator.v1`. No longer served: every method answers UNIMPLEMENTED, the coordinator's MDM having been removed (2026-11-14). The devices of the MDM policy gate, as it was.
 
-#### `hkctl mdm list-devices`
+#### `hk mdm list-devices`
 
 `/hostkeeper.operator.v1.Mdm/ListDevices`
 
@@ -627,14 +813,14 @@ is asked. A coordinator that runs no gate answers none, with `gate` false. Chang
 | `--limit` | UINT32 | At most this many devices; 0 means the cap. |
 | `--page-token` | STRING | Empty for the first page; else the `next_page_token` of the page before. |
 
-#### `hkctl mdm put-secret`
+#### `hk mdm put-secret`
 
 `/hostkeeper.operator.v1.Mdm/PutSecret`
 
 Seals `material` as the next version of the secret of `kind` and keeps it; the version it
 replaces is kept for the `secret_grace_days` setting, so that a wrong upload is undone by
 uploading again. Session-only: a call with a bearer token is refused `PERMISSION_DENIED`
-`session_required`, so `hkctl` cannot make it. Audited under the signed-in user's name as
+`session_required`, so `hk` cannot make it. Audited under the signed-in user's name as
 `mdm_push_cert_put`, `mdm_abm_token_put`, `mdm_tls_put`, `mdm_acme_credential_put` or
 `mdm_secret_put` by the kind, with the kind, the fingerprint and the expiry, and never the
 material; a refusal after the caller is known is audited with its token. Answers what
@@ -648,7 +834,7 @@ holds no master key.
 
 Through `--request` only: `material` (bytes), `with_certificate` (bytes).
 
-#### `hkctl mdm put-setting`
+#### `hk mdm put-setting`
 
 `/hostkeeper.operator.v1.Mdm/PutSetting`
 
@@ -660,21 +846,21 @@ Audited as `mdm_setting_set` with the name and the value.
 | `--name` | STRING | The setting, one `ListSettings` names: else `invalid_request`. |
 | `--value` | STRING | The value, in the form the setting takes (a number of days, or a falling list of them such as `60,14`): else `invalid_request`. |
 
-#### `hkctl mdm list-secrets`
+#### `hk mdm list-secrets`
 
 `/hostkeeper.operator.v1.Mdm/ListSecrets`
 
 Every version of every secret the coordinator holds, by kind and version: what is shown of
 each, never its value. Changes nothing.
 
-#### `hkctl mdm list-settings`
+#### `hk mdm list-settings`
 
 `/hostkeeper.operator.v1.Mdm/ListSettings`
 
 Every setting this release knows, with its value and whether that is its default. Changes
 nothing.
 
-#### `hkctl mdm create-push-request`
+#### `hk mdm create-push-request`
 
 `/hostkeeper.operator.v1.Mdm/CreatePushRequest`
 
@@ -694,7 +880,7 @@ take it; the request stays pending), `audit_unavailable`, `store_failed`.
 | `--email` | STRING | The address the request is made for: it is in the CSR's subject, and mdmcert.download emails its reply to it. One plain address (`local@domain`), up to 254 bytes; else `invalid_request`. |
 | `--submit` | true\|false | Whether the coordinator posts the request to mdmcert.download. |
 
-#### `hkctl mdm put-push-reply`
+#### `hk mdm put-push-reply`
 
 `/hostkeeper.operator.v1.Mdm/PutPushReply`
 
@@ -707,7 +893,7 @@ message encrypted to the pending request's key), `reply_not_for_request`, `audit
 
 Through `--request` only: `reply` (bytes).
 
-#### `hkctl mdm put-push-certificate`
+#### `hk mdm put-push-certificate`
 
 `/hostkeeper.operator.v1.Mdm/PutPushCertificate`
 
@@ -723,7 +909,7 @@ Refused `certificate_invalid`, `key_invalid`, `key_mismatch`, `certificate_expir
 
 Through `--request` only: `certificate_pem` (bytes), `key_pem` (bytes).
 
-#### `hkctl mdm status`
+#### `hk mdm status`
 
 `/hostkeeper.operator.v1.Mdm/Status`
 
@@ -733,7 +919,7 @@ ABM token and the TLS certificate and key in use, with the expiry and topic read
 material. Computed from the records at each call and never stored, so it cannot go stale.
 Never returns a value of a secret. Changes nothing.
 
-#### `hkctl mdm put-name`
+#### `hk mdm put-name`
 
 `/hostkeeper.operator.v1.Mdm/PutName`
 
@@ -749,7 +935,7 @@ has, a different `--mdm-host` is refused at start.
 |---|---|---|
 | `--name` | STRING | The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and not starting or ending with `-`, at most 253 in all, whose last label is not all digits; kept in lower case. Else `invalid_request`. |
 
-#### `hkctl mdm verify`
+#### `hk mdm verify`
 
 `/hostkeeper.operator.v1.Mdm/Verify`
 
@@ -770,7 +956,7 @@ one), `audit_unavailable`, `store_failed`.
 |---|---|---|
 | `--enrollment-id` | STRING | The enrollment id of the enrolled Mac to send the test push to (as `ListDevices` lists it); empty sends none and checks the rest. |
 
-#### `hkctl mdm put-abm-token`
+#### `hk mdm put-abm-token`
 
 `/hostkeeper.operator.v1.Mdm/PutAbmToken`
 
@@ -788,7 +974,7 @@ for the two faults Apple names on the session, `abm_unreachable` when no answer 
 
 Through `--request` only: `token_json` (bytes), `token_p7m` (bytes).
 
-#### `hkctl mdm get-abm-public-key`
+#### `hk mdm get-abm-public-key`
 
 `/hostkeeper.operator.v1.Mdm/GetAbmPublicKey`
 
@@ -798,7 +984,7 @@ over). The key pair is made when none is held (RSA 2048, stored as `abm_key` and
 which is why the call is session-only; once made, the same certificate is answered. Audited as
 `mdm_abm_cert_get`. The private key is never returned.
 
-#### `hkctl mdm list-enrollment-requests`
+#### `hk mdm list-enrollment-requests`
 
 `/hostkeeper.operator.v1.Mdm/ListEnrollmentRequests`
 
@@ -808,7 +994,7 @@ verify against Apple's roots, so it was given no challenge. The list is in memor
 empties it and the Mac's next post fills it again). Each entry says whether the ABM table lists
 the serial now. Changes nothing.
 
-#### `hkctl mdm confirm-enrollment`
+#### `hk mdm confirm-enrollment`
 
 `/hostkeeper.operator.v1.Mdm/ConfirmEnrollment`
 
@@ -827,7 +1013,7 @@ Refused also `enrollment_unavailable` when this coordinator has no MDM listener,
 
 The service `Releases` of the package `hostkeeper.operator.v1`. The desired version of each service, how far the hosts are, and the operator's overrides.
 
-#### `hkctl releases set-desired`
+#### `hk releases set-desired`
 
 `/hostkeeper.operator.v1.Releases/SetDesired`
 
@@ -849,7 +1035,7 @@ the coordinator manages, audited as `set_desired` under the token's name; a set 
 
 Through `--request` only: `desired` (hostkeeper.operator.v1.DesiredState), `targets` (map).
 
-#### `hkctl releases converge`
+#### `hk releases converge`
 
 `/hostkeeper.operator.v1.Releases/Converge`
 
@@ -861,7 +1047,7 @@ token or the operator token.
 | `--service` | STRING |  |
 | `--host-group` | STRING | The host group. From a coordinator that holds host groups: empty for every group that lists the service and has a desired version of it, converged when all are. |
 
-#### `hkctl releases force`
+#### `hk releases force`
 
 `/hostkeeper.operator.v1.Releases/Force`
 
@@ -878,7 +1064,7 @@ Switch a service to a version on the targeted hosts at once, with no hook (see
 
 Through `--request` only: `fleet` (hostkeeper.operator.v1.FleetTarget, in a oneof), `role` (string, in a oneof), `hosts` (hostkeeper.operator.v1.HostList, in a oneof).
 
-#### `hkctl releases unmark-bad`
+#### `hk releases unmark-bad`
 
 `/hostkeeper.operator.v1.Releases/UnmarkBad`
 
@@ -890,18 +1076,18 @@ Lift a bad mark from a version, so that it may be ordered and CI may set it agai
 | `--version` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl releases clear-halt`
+#### `hk releases clear-halt`
 
 `/hostkeeper.operator.v1.Releases/ClearHalt`
 
-Lift a service's standing halt.
+Lift a service's standing halt, and the halts hosts hold of it of their own.
 
 | flag | value | meaning |
 |---|---|---|
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl releases status`
+#### `hk releases status`
 
 `/hostkeeper.operator.v1.Releases/Status`
 
@@ -911,7 +1097,7 @@ Everything the coordinator holds about each service. Changes nothing.
 |---|---|---|
 | `--service` | STRING | One service; empty for every service the coordinator manages. |
 
-#### `hkctl releases mark-bad`
+#### `hk releases mark-bad`
 
 `/hostkeeper.operator.v1.Releases/MarkBad`
 
@@ -924,7 +1110,7 @@ not reached.
 | `--version` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl releases halt`
+#### `hk releases halt`
 
 `/hostkeeper.operator.v1.Releases/Halt`
 
@@ -936,7 +1122,7 @@ is cleared.
 | `--service` | STRING |  |
 | `--reason` | STRING |  |
 
-#### `hkctl releases wait-converged`
+#### `hk releases wait-converged`
 
 `/hostkeeper.operator.v1.Releases/WaitConverged`
 
@@ -952,7 +1138,7 @@ CI's OIDC token or the operator token, checked once, when the call is admitted.
 | `--wait-secs` | UINT32 | How long to hold the call, 1 to 1800 seconds. |
 | `--host-group` | STRING | The host group. From a coordinator that holds host groups: empty for every group that lists the service and has a desired version of it, converged when all are (a group with no hosts is converged). |
 
-#### `hkctl releases get-release`
+#### `hk releases get-release`
 
 `/hostkeeper.operator.v1.Releases/GetRelease`
 
@@ -970,14 +1156,14 @@ token, and answers either for any service.
 
 The service `Repositories` of the package `hostkeeper.operator.v1`. The coordinator's registry of package repositories.
 
-#### `hkctl repositories list`
+#### `hk repositories list`
 
 `/hostkeeper.operator.v1.Repositories/List`
 
 Every repository of the registry, by name, without its keyring (`keyring_sha256` names it),
 and the registry's generation. Changes nothing.
 
-#### `hkctl repositories get`
+#### `hk repositories get`
 
 `/hostkeeper.operator.v1.Repositories/Get`
 
@@ -987,7 +1173,7 @@ One repository, with its keyring. Changes nothing.
 |---|---|---|
 | `--name` | STRING | The repository's name. |
 
-#### `hkctl repositories put`
+#### `hk repositories put`
 
 `/hostkeeper.operator.v1.Repositories/Put`
 
@@ -1001,7 +1187,7 @@ registry's generation grows by one. Writes the audit entry `repository_put`.
 
 Through `--request` only: `repository` (hostkeeper.release.v1.Repository).
 
-#### `hkctl repositories remove`
+#### `hk repositories remove`
 
 `/hostkeeper.operator.v1.Repositories/Remove`
 
@@ -1013,7 +1199,7 @@ by one. Writes the audit entry `repository_remove`.
 | `--name` | STRING | The repository's name. |
 | `--reason` | STRING | Why, for the audit entry. |
 
-#### `hkctl repositories discover`
+#### `hk repositories discover`
 
 `/hostkeeper.operator.v1.Repositories/Discover`
 
@@ -1028,7 +1214,7 @@ nothing (docs/deploy/package-repositories.md, "hostkeeper repository format, ver
 | `--access` | STRING | `public` (or empty), or `hosts` for a private repository. |
 | `--credential-file` | STRING | `hosts` only: the credential file on the coordinator's machine, as `Repository.credential_file`. |
 
-#### `hkctl repositories add`
+#### `hk repositories add`
 
 `/hostkeeper.operator.v1.Repositories/Add`
 
@@ -1051,7 +1237,7 @@ generation up by one).
 
 The service `Rollouts` of the package `hostkeeper.operator.v1`. The update plans of the services: an operator moves a plan on, pauses it and resumes it. Each call is an audit entry under the operator token's name.
 
-#### `hkctl rollouts advance`
+#### `hk rollouts advance`
 
 `/hostkeeper.operator.v1.Rollouts/Advance`
 
@@ -1064,7 +1250,7 @@ stage, or none yet for a manual first stage.
 | `--reason` | STRING | Why; 1 to 256 bytes. |
 | `--host-group` | STRING | The host group of the plan. From a coordinator that holds host groups: empty for the one group that lists the service (`ambiguous_host_group` when more do). |
 
-#### `hkctl rollouts pause`
+#### `hk rollouts pause`
 
 `/hostkeeper.operator.v1.Rollouts/Pause`
 
@@ -1077,7 +1263,7 @@ running finish and bake. The pause stands across a new desired version, until `R
 | `--reason` | STRING | Why; 1 to 256 bytes. |
 | `--host-group` | STRING | The host group of the plan. From a coordinator that holds host groups: empty for the plan of every group that lists the service, in one change. |
 
-#### `hkctl rollouts resume`
+#### `hk rollouts resume`
 
 `/hostkeeper.operator.v1.Rollouts/Resume`
 
@@ -1093,14 +1279,14 @@ Resume a paused plan from where it stands.
 
 The service `Services` of the package `hostkeeper.operator.v1`. The services the coordinator manages, which hosts run them, and the operator's holds.
 
-#### `hkctl services list`
+#### `hk services list`
 
 `/hostkeeper.operator.v1.Services/List`
 
 Every service, with its desired version, the roles and hosts it is assigned to, the
 operator's assignments, its minimum versions, the hosts ordered to uninstall it and its holds.
 
-#### `hkctl services assign`
+#### `hk services assign`
 
 `/hostkeeper.operator.v1.Services/Assign`
 
@@ -1115,7 +1301,7 @@ since `HostGroups.Put` and `HostGroups.Move` place every package.
 | `--service` | STRING |  |
 | `--role` | STRING | A role to assign the service to instead of one host: every host of the role, those that join it later included. Exactly one of `node_id` and `role` is set. |
 
-#### `hkctl services unassign`
+#### `hk services unassign`
 
 `/hostkeeper.operator.v1.Services/Unassign`
 
@@ -1131,7 +1317,7 @@ is.
 | `--uninstall` | true\|false | Order the host to uninstall the service; false (the default) leaves it running there, unmanaged. |
 | `--role` | STRING | A role to take the service off instead of one host. Exactly one of `node_id` and `role` is set. |
 
-#### `hkctl services set-min-version`
+#### `hk services set-min-version`
 
 `/hostkeeper.operator.v1.Services/SetMinVersion`
 
@@ -1145,7 +1331,7 @@ the package in that group. A host's own minimum stands before its group's.
 
 Through `--request` only: `min_version` (hostkeeper.operator.v1.MinVersion).
 
-#### `hkctl services set-repository`
+#### `hk services set-repository`
 
 `/hostkeeper.operator.v1.Services/SetRepository`
 
@@ -1159,7 +1345,7 @@ release names channels of the package's repository. The registry must hold the r
 | `--repository` | STRING | The registry's name of the repository the package comes from. Empty clears the setting: the package goes back to the default repository, `komira`. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
-#### `hkctl services put`
+#### `hk services put`
 
 `/hostkeeper.operator.v1.Services/Put`
 
@@ -1175,7 +1361,7 @@ sets its repository again. Writes the audit entry `service_put`.
 | `--repository` | STRING | The registry's name of the repository the package comes from. Empty: the default repository, `komira`. It must be held by the registry. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
-#### `hkctl services remove`
+#### `hk services remove`
 
 `/hostkeeper.operator.v1.Services/Remove`
 
@@ -1188,7 +1374,7 @@ is not registered. Writes the audit entry `service_remove`.
 | `--service` | STRING | The package. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
-#### `hkctl services list-trusted-publishers`
+#### `hk services list-trusted-publishers`
 
 `/hostkeeper.operator.v1.Services/ListTrustedPublishers`
 
@@ -1203,7 +1389,7 @@ coordinator does not know.
 |---|---|---|
 | `--service` | STRING | The package. |
 
-#### `hkctl services put-trusted-publisher`
+#### `hk services put-trusted-publisher`
 
 `/hostkeeper.operator.v1.Services/PutTrustedPublisher`
 
@@ -1219,7 +1405,7 @@ Writes the audit entry `trusted_publisher_put`.
 | `--environment` | STRING | The environment of the job, if the entry names one; empty: not matched. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
-#### `hkctl services remove-trusted-publisher`
+#### `hk services remove-trusted-publisher`
 
 `/hostkeeper.operator.v1.Services/RemoveTrustedPublisher`
 
@@ -1237,7 +1423,7 @@ restart does not bring the allow-list's entries back. Writes the audit entry
 | `--environment` | STRING | The environment, as the list shows it; empty: none. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
-#### `hkctl services hold`
+#### `hk services hold`
 
 `/hostkeeper.operator.v1.Services/Hold`
 
@@ -1254,7 +1440,7 @@ running finishes. Holding a pair already held under the same scope replaces the 
 
 Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
 
-#### `hkctl services unhold`
+#### `hk services unhold`
 
 `/hostkeeper.operator.v1.Services/Unhold`
 
@@ -1268,17 +1454,72 @@ heartbeat.
 
 Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
 
+### `ssh`
+
+The service `Ssh` of the package `hostkeeper.operator.v1`. Access to the hosts' sshd through the coordinator. Each call is audited under the caller's name; `SignUserCert` as `ssh_cert_signed`, `Revoke` as `ssh_revoke`, `PinHostKeys` as `ssh_hostkey_pinned`, and `Tunnel` as `ssh_tunnel_open` and `ssh_tunnel_close`.
+
+#### `hk ssh sign-user-cert`
+
+`/hostkeeper.operator.v1.Ssh/SignUserCert`
+
+Signs an OpenSSH user certificate for the caller's public key, good for one host and for
+`--ssh-cert-ttl-s` seconds. Its principal is `hk-host-<host id>`, never a value of the
+request. No certificate is made when the audit entry cannot be written.
+
+| flag | value | meaning |
+|---|---|---|
+| `--public-key` | STRING | The caller's public key in `authorized_keys` syntax. |
+| `--reason` | STRING | Why, at most 200 printable ASCII characters; stored and audited, never in the certificate. |
+| `--host-id` | STRING | The host the certificate is for. |
+
+#### `hk ssh host-keys`
+
+`/hostkeeper.operator.v1.Ssh/HostKeys`
+
+The fingerprints of the sshd host keys pinned for a host: the set an operator pinned from
+what the host reported in its heartbeat, with `PinHostKeys`. Changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose pinned fingerprints are read. |
+
+#### `hk ssh pin-host-keys`
+
+`/hostkeeper.operator.v1.Ssh/PinHostKeys`
+
+Pins, as a set, exactly the host keys the host's last heartbeat reported, for a host, and
+answers as `HostKeys` does after. Refused with `not_reported` when `fingerprints` are not, as
+a set, what that heartbeat reported. Audited as `ssh_hostkey_pinned`. The operators file must
+permit the caller the host, as for `SignUserCert`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose host keys are pinned. |
+| `--fingerprints` | STRING | The fingerprints to pin, at most 8, each `SHA256:` and 43 base64 characters; exactly the set the host's last heartbeat reported. Repeat the flag for more. |
+
+#### `hk ssh revoke`
+
+`/hostkeeper.operator.v1.Ssh/Revoke`
+
+Revokes the certificates of an operator, or one certificate by serial. The serials reach the
+hosts in `SshAccess.revoked_serials`, and the operator's open tunnels close.
+
+| flag | value | meaning |
+|---|---|---|
+| `--operator` | STRING | The operator whose certificates are revoked; empty when `serial` names one. |
+| `--serial` | UINT64 | The certificate serial revoked; 0 when `operator` names one. |
+
 ### `users`
 
 The service `Users` of the package `hostkeeper.operator.v1`. The people who sign in with a name and a password. A user is an operator, as a token is: there are no roles. Each mutating call is audited under the caller's name, with the user it concerned as the entry's subject: `user_create`, `user_disable`, `user_enable`, `user_delete` and `password_reset`.
 
-#### `hkctl users list`
+#### `hk users list`
 
 `/hostkeeper.operator.v1.Users/List`
 
 Every user, by name. Changes nothing. No password and no hash is ever in the answer.
 
-#### `hkctl users create`
+#### `hk users create`
 
 `/hostkeeper.operator.v1.Users/Create`
 
@@ -1290,7 +1531,7 @@ and the temporary one stops working an hour after it was made.
 |---|---|---|
 | `--name` | STRING | The new user's name. |
 
-#### `hkctl users disable`
+#### `hk users disable`
 
 `/hostkeeper.operator.v1.Users/Disable`
 
@@ -1301,7 +1542,7 @@ disabled. Disabling a disabled user changes nothing.
 |---|---|---|
 | `--name` | STRING | The user's name. |
 
-#### `hkctl users enable`
+#### `hk users enable`
 
 `/hostkeeper.operator.v1.Users/Enable`
 
@@ -1312,7 +1553,7 @@ changes nothing.
 |---|---|---|
 | `--name` | STRING | The user's name. |
 
-#### `hkctl users reset-password`
+#### `hk users reset-password`
 
 `/hostkeeper.operator.v1.Users/ResetPassword`
 
@@ -1324,7 +1565,7 @@ person changes their own password on the coordinator's page.
 |---|---|---|
 | `--name` | STRING | The user's name. |
 
-#### `hkctl users delete`
+#### `hk users delete`
 
 `/hostkeeper.operator.v1.Users/Delete`
 
@@ -1334,3 +1575,29 @@ enabled user cannot be deleted.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The user's name. |
+
+### `xcode`
+
+The service `Xcode` of the package `hostkeeper.operator.v1`. The Xcode store. `Remove` is audited as `xcode_remove` under the caller's name, with the caller's reason, and the archive's version, build and SHA-256 as its subject; `List` changes nothing and writes no audit entry.
+
+#### `hk xcode list`
+
+`/hostkeeper.operator.v1.Xcode/List`
+
+The archives the store holds, newest release first, the release of the daily list of Xcode
+releases that the store does not hold yet (the one the alert `xcode_release_waiting` names),
+how many releases the store keeps and the most bytes one upload may be. Changes nothing and
+is not audited. A coordinator started without `--xcode-dir` answers `configured` false.
+
+#### `hk xcode remove`
+
+`/hostkeeper.operator.v1.Xcode/Remove`
+
+Removes one archive from the store, by its SHA-256, and writes the audit entry `xcode_remove`
+first: when the entry cannot be written nothing is removed. The version the archive held is
+free for an upload of another build afterwards.
+
+| flag | value | meaning |
+|---|---|---|
+| `--sha256` | STRING | The SHA-256 of the archive to remove, 64 lower-case hex characters, as `List` gives it. |
+| `--reason` | STRING | Why; the audit entry carries it. 1 to 256 bytes once trimmed, with no control character. |

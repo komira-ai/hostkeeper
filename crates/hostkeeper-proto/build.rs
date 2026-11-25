@@ -20,6 +20,7 @@ mod ctl_gen;
 const FILES: &[&str] = &[
     "hostkeeper/options.proto",
     "hostkeeper/agent/v1/agent.proto",
+    "hostkeeper/agent/v1/maintenance.proto",
     "hostkeeper/operator/v1/operator.proto",
     "hostkeeper/operator/v1/enrollment.proto",
     "hostkeeper/operator/v1/entry.proto",
@@ -31,6 +32,10 @@ const FILES: &[&str] = &[
     "hostkeeper/operator/v1/hosts_orders.proto",
     "hostkeeper/operator/v1/accounts.proto",
     "hostkeeper/operator/v1/layout.proto",
+    "hostkeeper/operator/v1/ssh.proto",
+    "hostkeeper/operator/v1/console.proto",
+    "hostkeeper/operator/v1/maintenance.proto",
+    "hostkeeper/operator/v1/xcode.proto",
     "hostkeeper/local/v1/admin.proto",
     "hostkeeper/release/v1/release.proto",
 ];

@@ -7,9 +7,9 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, LayoutRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
-    ServicesRefusal, UsersRefusal,
+    AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
+    HostGroupsRefusal, HostsRefusal, LayoutRefusal, MaintenanceRefusal, ReleasesRefusal,
+    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
 };
 use tonic::{Code, Status};
 
@@ -56,7 +56,7 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::TargetInvalid
         | ReleasesRefusal::LimitsInHostGroup => Code::InvalidArgument,
         ReleasesRefusal::UnknownService | ReleasesRefusal::ReleaseUnknown => Code::NotFound,
-        ReleasesRefusal::GenerationConflict => Code::Aborted,
+        ReleasesRefusal::GenerationConflict | ReleasesRefusal::StateChanged => Code::Aborted,
         ReleasesRefusal::HeldBad
         | ReleasesRefusal::BelowMinVersion
         | ReleasesRefusal::NotHalted
@@ -216,7 +216,8 @@ pub(crate) fn host_groups(refusal: HostGroupsRefusal) -> Status {
         | HostGroupsRefusal::GenerationMismatch
         | HostGroupsRefusal::NotEmpty
         | HostGroupsRefusal::SameHostGroup
-        | HostGroupsRefusal::ReservedHostGroup => Code::FailedPrecondition,
+        | HostGroupsRefusal::ReservedHostGroup
+        | HostGroupsRefusal::HostInMaintenance => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "HOST_GROUPS_REFUSAL_")
 }
@@ -246,6 +247,7 @@ pub(crate) fn api_tokens(refusal: ApiTokensRefusal) -> Status {
         ApiTokensRefusal::NameTaken => Code::AlreadyExists,
         ApiTokensRefusal::UnknownToken => Code::NotFound,
         ApiTokensRefusal::AuditUnavailable => Code::Unavailable,
+        ApiTokensRefusal::UnknownOwner => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "API_TOKENS_REFUSAL_")
 }
@@ -270,4 +272,91 @@ pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
         | LayoutRefusal::Capacity => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "LAYOUT_REFUSAL_")
+}
+
+/// The status of a refusal by `Ssh`.
+pub(crate) fn ssh(refusal: SshRefusal) -> Status {
+    let code = match refusal {
+        SshRefusal::Unspecified | SshRefusal::StoreFailed => Code::Internal,
+        SshRefusal::Unauthorized => Code::Unauthenticated,
+        SshRefusal::Forbidden | SshRefusal::NotPermitted => Code::PermissionDenied,
+        SshRefusal::InvalidRequest | SshRefusal::BadReason | SshRefusal::BadKey => {
+            Code::InvalidArgument
+        }
+        SshRefusal::UnknownHost | SshRefusal::UnknownCert => Code::NotFound,
+        SshRefusal::NotConfigured
+        | SshRefusal::HostNotLive
+        | SshRefusal::NoAddress
+        | SshRefusal::BadSerial
+        | SshRefusal::NotReported => Code::FailedPrecondition,
+        SshRefusal::TooManyTunnels => Code::ResourceExhausted,
+        SshRefusal::Draining | SshRefusal::DialFailed | SshRefusal::AuditUnavailable => {
+            Code::Unavailable
+        }
+    };
+    refused(code, refusal.as_str_name(), "SSH_REFUSAL_")
+}
+
+/// The status of a refusal by `Console`.
+pub(crate) fn console(refusal: ConsoleRefusal) -> Status {
+    let code = match refusal {
+        ConsoleRefusal::Unspecified | ConsoleRefusal::StoreFailed => Code::Internal,
+        ConsoleRefusal::Unauthorized => Code::Unauthenticated,
+        ConsoleRefusal::Forbidden
+        | ConsoleRefusal::NoConsoleAccess
+        | ConsoleRefusal::PowerNotPermitted => Code::PermissionDenied,
+        ConsoleRefusal::InvalidRequest
+        | ConsoleRefusal::ReasonRequired
+        | ConsoleRefusal::ReasonTooLong => Code::InvalidArgument,
+        ConsoleRefusal::HostNotFound | ConsoleRefusal::NoSession => Code::NotFound,
+        ConsoleRefusal::NoAddress
+        | ConsoleRefusal::NoBmcMac
+        | ConsoleRefusal::AmbiguousRecord
+        | ConsoleRefusal::AddressMismatch
+        | ConsoleRefusal::BmcAuthFailed => Code::FailedPrecondition,
+        ConsoleRefusal::ConsoleBusy => Code::AlreadyExists,
+        ConsoleRefusal::TooManySessions => Code::ResourceExhausted,
+        ConsoleRefusal::DeviceUnreachable
+        | ConsoleRefusal::BmcBusy
+        | ConsoleRefusal::AuditUnavailable
+        | ConsoleRefusal::BmcFailed
+        | ConsoleRefusal::BmcSolBusy => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "CONSOLE_REFUSAL_")
+}
+
+/// The status of a refusal by `Xcode`.
+pub(crate) fn xcode(refusal: XcodeRefusal) -> Status {
+    let code = match refusal {
+        XcodeRefusal::Unspecified | XcodeRefusal::StoreFailed => Code::Internal,
+        XcodeRefusal::Unauthorized => Code::Unauthenticated,
+        XcodeRefusal::Forbidden => Code::PermissionDenied,
+        XcodeRefusal::InvalidRequest => Code::InvalidArgument,
+        XcodeRefusal::NoStore => Code::FailedPrecondition,
+        XcodeRefusal::UnknownArchive => Code::NotFound,
+        XcodeRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "XCODE_REFUSAL_")
+}
+
+/// The status of a refusal by `Maintenance`.
+pub(crate) fn maintenance(refusal: MaintenanceRefusal) -> Status {
+    let code = match refusal {
+        MaintenanceRefusal::Unspecified | MaintenanceRefusal::StoreFailed => Code::Internal,
+        MaintenanceRefusal::Unauthorized => Code::Unauthenticated,
+        MaintenanceRefusal::Forbidden => Code::PermissionDenied,
+        MaintenanceRefusal::InvalidRequest => Code::InvalidArgument,
+        MaintenanceRefusal::UnknownGroup
+        | MaintenanceRefusal::UnknownHost
+        | MaintenanceRefusal::UnknownRun
+        | MaintenanceRefusal::NotInRun => Code::NotFound,
+        MaintenanceRefusal::NothingDue
+        | MaintenanceRefusal::WindowEnded
+        | MaintenanceRefusal::LastHost
+        | MaintenanceRefusal::HostInMaintenance
+        | MaintenanceRefusal::RunEnded
+        | MaintenanceRefusal::NotHalted => Code::FailedPrecondition,
+        MaintenanceRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "MAINTENANCE_REFUSAL_")
 }

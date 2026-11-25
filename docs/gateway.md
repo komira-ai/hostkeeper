@@ -3,7 +3,7 @@
 > **Update 2026-11-14.** The `Mdm` service is no longer served: its methods answer `UNIMPLEMENTED`. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
 
 The coordinator's private listener serves the operator API twice: as gRPC, and as plain HTTP with
-JSON bodies, the gateway. `hkctl` (which has no other transport) and the operator web app
+JSON bodies, the gateway. `hk` (which has no other transport) and the operator web app
 ([docs/ui-serving.md](ui-serving.md)) call the gateway. Both ways reach the same handlers with
 the same checks; the gateway adds no rule of its own. Every command and request message is in
 [docs/cli.md](cli.md).
@@ -12,7 +12,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
 `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Repositories`, `HostGroups`, `Users`,
-`ApiTokens`, `Layout`):
+`ApiTokens`, `Layout`, `Ssh`, `Console`, `Xcode`, `Maintenance`):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -21,7 +21,15 @@ POST /<package>.<Service>/<Method>
 for example `POST /hostkeeper.operator.v1.Releases/Converge`. A client sends `Content-Type:
 application/json` (the gateway reads the body as JSON whatever the header says); the response has
 that type. Only the private listener (`--private-listen`)
-serves the gateway; the heartbeat listener never does.
+serves the gateway; the heartbeat listener never does. The `Maintenance` service
+(`maintenance.proto`) serves `Schedule`, `List`, `Get`, `Cancel`, `RetryHost` and `PutBack`.
+
+The `Xcode` service (`List`, `Remove`) lists and removes the archives of the coordinator's Xcode
+store. The archives themselves are not gateway calls: an operator's Mac uploads one with
+`hk xcode-push`, which sends `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the
+private listener, with the operator's token as a bearer, and a host reads one with `GET /v1/xcode/<sha256>`, with byte
+ranges, on the listener hosts use. Both answer only on a coordinator started with
+`--xcode-dir`; without it the path is `not_found`.
 
 ## Authentication
 
@@ -30,12 +38,13 @@ metadata, and the token is checked before the body is read. A browser that has s
 (`docs/operations/coordinator-state.md`, "The sign-in") sends its session cookie instead, with the
 header `X-HK-CSRF` set to the session's CSRF token, an `Origin` that is the listener's own (when it
 sends one), `Sec-Fetch-Site: same-origin` (when it sends one) and `Content-Type: application/json`;
-the call is then made as the signed-in user, who is `by` in the audit as a token's name is. A call
+the call is then made as the signed-in user, who is `by` in the audit as a token's name is (an API token's
+call is made as its owner, with the token as the entry's `api_token`). A call
 that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, and one from a user
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens` and `Layout` take an operator only (a token
+refused it `PERMISSION_DENIED` `session_required`. None is now: the writes of the MDM setup were, and the `Mdm` service is no longer served (a call of it is `UNIMPLEMENTED`). `Users`, `ApiTokens`, `Layout`, `Ssh`, `Console`, `Xcode` and `Maintenance` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and
@@ -84,7 +93,7 @@ that does not arrive whole are all refused as `INVALID_ARGUMENT` with the reason
 `invalid_request`. A response is 200 with the response message.
 
 A field the message does not have is what a coordinator older than its client refuses: the
-client sends a field a later release added. So `hkctl`, on an `invalid_request`, asks the
+client sends a field a later release added. So `hk`, on an `invalid_request`, asks the
 coordinator's version (below) and says `coordinator_older` when the coordinator is older than
 its own release ([docs/cli.md](cli.md)).
 
@@ -156,3 +165,5 @@ Only the HTTP status 200 is a success.
   call the gateway.
 - No gRPC-web, no streaming and no reflection. A gRPC call is HTTP/2 with `Content-Type:
   application/grpc` and does not go through the gateway.
+  The UI's Remote SSH terminal (`GET /v1/ssh/terminal`, a WebSocket) is a route of its own on the
+  private listener, not a gateway call: see `docs/operations/ssh-ca.md`.

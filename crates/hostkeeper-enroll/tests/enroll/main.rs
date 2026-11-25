@@ -14,9 +14,13 @@
 //! - `store.rs`: the pki directory: lock, schema, ownership, crash recovery and pruning;
 //! - `host.rs`: the key, the entropy and the Linux claims over temporary trees;
 //! - `bmc.rs`: the BMC MAC claim of a Linux host, read through the IPMI port;
+//! - `bmc_lan.rs`: the BMC's address and MAC the daemon's heartbeat reports, read through the
+//!   same port;
 //! - `mac.rs`: the claims of a Mac, read from `ioreg` output, and a request refused without them;
 //! - `nonce.rs`: the Mac nonce of the managed preferences, posted once for the host's own
 //!   request, and every file that posts nothing more;
+//! - `reissue.rs`: a certificate that is not what the CA issues now, renewed at the first step or
+//!   returned with its key, and asked once per generation;
 //! - `pacing.rs`: the loop's log and sleeps, and the enrollment it reports after each step;
 //! - `enrollment.rs`: the host's enrollment as the enroller reads it from the pki directory.
 //! - `renewal_state.rs`: what the loop notes after each step for the heartbeat: the end of the
@@ -24,6 +28,7 @@
 
 mod acceptance;
 mod bmc;
+mod bmc_lan;
 mod coordinator;
 mod enrollment;
 mod faults;
@@ -32,6 +37,7 @@ mod mac;
 mod nonce;
 mod pacing;
 mod refusals;
+mod reissue;
 mod renewal_state;
 mod returns;
 mod store;

@@ -26,7 +26,8 @@ use that for one thing only, a tiny **hostkeeper bootstrap** pkg. Everything aft
    Blueprint also carries the farm's two values as the managed preference domain `dev.hostkeeper.config` (section 4); a Mac set up by hand has them in a file.
 2. The bootstrap, run by launchd at load, reads the farm values, fetches hostkeeper's signed macOS pkg from the public repository, checks it (size and
    SHA-256 of the repository's pointer, then `pkgutil --check-signature`, then the signer's Team ID), writes the daemon's config when it is absent
-   (section 6), runs `installer`, and exits. It carries no secret and **does no enrollment**.
+   (section 6), writes the update-account file when the settings name the update account (section 4), runs `installer`, and exits. The pkg carries no
+   secret, and the bootstrap **does no enrollment**.
 3. hostkeeper's own daemon starts, and enrolls through the existing enrollment request and approval flow (`hostkeeper-enroll`, `hostkeeper-enrollment`):
    a key made on the Mac, the coordinator's CA pinned by its SHA-256, approval by the hash of the key (an operator's click, or an inventory record by serial).
 4. From then on hostkeeper updates itself and the coordinator installs services through host groups, as on Linux. Apple never sees those packages,
@@ -50,7 +51,7 @@ What does not change: the daemon, the enrollment protocol, the host certificate,
 | Enroller: key made first, CA checked against `ca_sha256` before anything is sent, request posted once per key, signed poll, certificate checked and stored | `crates/hostkeeper-enroll` | the **daemon's** enrollment, unchanged; the bootstrap does not link it |
 | Mac claims: serial and platform UUID from `ioreg` | `crates/hostkeeper-enroll/src/claims.rs` (`MacClaims`) | the request's claims; a record matches a Mac by serial |
 | CA, request store, approval by operator or by inventory record, host groups | `crates/hostkeeper-enrollment`, [enrollment-coordinator.md](../enrollment-coordinator.md), [operations/enrollment.md](../operations/enrollment.md) | the approval flow, unchanged |
-| The Mac pkg: binary, launchd job, pinned `gh`, trusted root; a postinstall that loads the job; the start keeps an existing `/etc/hostkeeper/hostkeeper.toml` | `crates/xtask/src/release/macos_pkg.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`, `crates/hostkeeper-daemon/src/mac_config.rs` | what the bootstrap installs; "the manual path" of hostkeeper-mdm.md section 4 (deleted; its text is in git history) |
+| The Mac pkg: binary, launchd job, pinned `gh`, trusted root; a postinstall that enables and loads the job; the start keeps an existing `/etc/hostkeeper/hostkeeper.toml` | `crates/xtask/src/release/macos_pkg.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`, `crates/hostkeeper-daemon/src/mac_config.rs` | what the bootstrap installs; "the manual path" of hostkeeper-mdm.md section 4 (deleted; its text is in git history) |
 | The daemon config loader and its trust rule (`DaemonConfig::parse`, `read_trusted`) | `crates/hostkeeper-config` | the bootstrap reads its settings files as the daemon reads its config, and parses the config it writes with the daemon's own loader |
 | The tool port for `pkgutil` and `installer`, and the `pkgutil --check-signature` reader | `crates/hostkeeper-install` (`tools`, `macos_pkg/signature.rs`) | the bootstrap's tools behind a port with fakes, and its reading of the status and the leaf's fingerprint |
 | The HTTPS transport port (`Transport`, `UreqTransport`) | `crates/hostkeeper-package/src/net.rs` | the bootstrap's downloads |
@@ -79,13 +80,14 @@ sequenceDiagram
     Mac->>Repo: GET hostkeeper-<v>-macos-arm64.pkg (streamed, hashed as written)
     Mac->>Mac: size and SHA-256 equal the pointer's; pkgutil --check-signature; Team ID pinned
     Mac->>Mac: write hostkeeper.toml and macos-pkg.toml when absent
-    Mac->>Mac: installer -pkg (postinstall loads dev.hostkeeper.hostkeeper); the bootstrap exits 0
+    Mac->>Mac: installer -pkg (postinstall enables and loads dev.hostkeeper.hostkeeper); the bootstrap exits 0
     D->>Co: TLS probe, SHA-256 of the CA vs ca_sha256 (nothing sent on mismatch)
     D->>Co: Enroll {csr, claims: serial + platform UUID}
     alt a record matches the serial, window open, unused
         Co->>Co: approve in the record's host group (enrollment.auto_approved)
     else no record
         Op->>Co: Enrollment.Approve {request, key_sha256, host_group}
+        Co->>Co: write the Mac's inventory record from its serial (record_add by coordinator)
     end
     D->>Co: Poll (unsigned, then signed with the key)
     Co-->>D: 7-day host certificate
@@ -124,6 +126,32 @@ error, never a reason to try the next one. The keys; **every number is a key wit
 | `[bounds]` `installer_timeout_secs` | 600 | the longest `installer` is waited for |
 | `[bounds]` `wait_secs` | 900 | how long a failed run keeps retrying before it exits (section 9) |
 | `[bounds]` `retry_secs` | 30 (at least 1) | the pause between two attempts |
+| `update_account_name` | none (all four or none) | the update account of [maintenance-updates.md](maintenance-updates.md) section 5.5, `hkupdate` there; written to the update-account file |
+| `update_account_password` | none (all four or none) | its password; written to the update-account file |
+| `admin_name` | none (all four or none) | the administrator made at Setup Assistant, a holder of a Secure Token, which gives the update account its own |
+| `admin_password` | none (all four or none) | that administrator's password; the bootstrap writes it nowhere |
+
+**The update account's four keys** (`crates/hostkeeper-bootstrap/src/update_account.rs`) are given all four or none. A source with none of them
+makes no update-account file, as before they existed; such a Mac has no update account and is never ordered a macOS update. A source with some of
+them is refused, naming the first one missing in the order of the table; nothing is fetched. Each is a string (a number, say, is refused as "is not a
+string", never quoted): a name is ASCII letters, digits, `_`, `.` and `-`, not starting with `-` (the rule of the daemon's reader); a password is not
+empty and holds no line break; the two names differ; and the file the first two make is at most 4096 bytes, the reader's bound. No error or log line holds a value of these keys, and no debug print holds a
+password: an error names the key and the rule, and a password prints as `Password(withheld)` (the names print as they are).
+
+The bootstrap writes `/Library/Application Support/hostkeeper/update-account` (root's, mode 0600; section 6) from the first two, in the layout the
+daemon's reader takes (`crates/hostkeeper-daemon/src/update_account.rs`): the line `name=<update_account_name>`, then the line
+`password=<update_account_password>`, each ending in a newline, the value byte for byte.
+
+**The administrator's password is used for the account-creation call only and not kept: the bootstrap writes no copy of it.** The daemon reads the
+two `admin_` keys from the same settings source (the managed preferences, else `bootstrap.toml`), under the same trust rule, at the start that makes
+the account, and uses them for that call alone (Built: `crates/hostkeeper-daemon/src/update_account_make.rs`, through the
+bootstrap's own `Sources::load`, and only when the token call is to run). A one-shot file handed from the bootstrap to the daemon's first start was the other way, and is not
+chosen: the source holds the password anyway, so a second copy adds a file to remove and a window in which it is there, and a daemon that never ran
+the call (a release before it, or a start that failed first) would leave it behind. The settings that hold the passwords are never committed to a
+repository and never printed. The operator sets a `bootstrap.toml` that holds them to mode 0600; the bootstrap checks only that no account but
+root can write it (the trust rule), not who can read it. The mode macOS gives the managed preferences file is its own
+**[V]**, and the owner's ruling that the update account's password is not treated as a secret (maintenance-updates.md section 5.5, "Threat model")
+is what covers it.
 
 The text of either source is also made into the daemon's config and parsed by the daemon's own loader before anything is fetched, so a value the daemon
 would refuse stops the bootstrap with the loader's reason, not the daemon at its first start.
@@ -147,10 +175,13 @@ this repository).
 Unchanged code, as [operations/enrollment.md](../operations/enrollment.md) "The Mac path" says it. A Mac's request is approved in one of two ways
 (**Q3 and Q6, default, owner may change**: an operator's click is acceptable for every Mac, and a re-imaged Mac takes `--replace true`):
 
-- **Inventory record by serial.** `hkctl enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
+- **Inventory record by serial.** `hk enrollment add-record --host-id mac-03 --host-group build --serial <serial>`. A record that names a group is
   the approval, for a window (24 hours by default, 7 days at most) and once; the request must match exactly one record and no other pending request
   may contest it. The coordinator approves it itself, in the record's group, and audits `enrollment.auto_approved`.
-- **An operator** on the Enrollment page or `hkctl enrollment approve`, naming the key's hash and the `host_group`.
+- **An operator** on the Enrollment page or `hk enrollment approve`, naming the key's hash and the `host_group`. The coordinator then writes
+  the Mac's inventory record from its serial, added by `coordinator`, with no group and no window, so the Mac is listed in the inventory and the
+  record approves nothing ([operations/enrollment.md](../operations/enrollment.md#a-host-approved-without-a-record)); a Mac approved so before
+  this is recorded at the coordinator's next start.
 
 **What is lost against MDM, plainly.** The MDM nonce path proved the serial through Apple (ABM table, supervision, `EnrolledViaDEP`). Without MDM the
 serial is a claim the Mac makes about itself; anyone on the lab LAN who knows a serial can post a request that claims it. The record's window and its
@@ -178,7 +209,13 @@ exists, so "a reinstall never changes a Mac's trust root". The bootstrap uses ex
    file appeared meanwhile; a file that is there as a regular file is kept as it is (refused when group- or other-writable), and a link or a directory is refused and left. If `installer` then fails, the files this attempt made are removed. The staging directory must be owned by root and not group- or other-writable, or the attempt fails.
 2. The text was parsed by the daemon's own loader (`DaemonConfig::parse`, and the signers file's parser) when the settings were read, so a value the
    daemon would refuse stops the bootstrap, not the daemon.
-3. The pkg's postinstall loads the job; the daemon start finds the files and keeps them.
+3. When the settings name the update account (section 4), the bootstrap writes `/Library/Application Support/hostkeeper/update-account` the same
+   way, with mode 0600, after the two configs and before `installer`, so the daemon's first start finds it. One that is there is kept as it is, even
+   when its bytes differ from the settings (the account it names may already have that password; its contents are not checked, and the daemon's
+   reader judges them), but only when it is a regular file of root's with
+   mode 0600 exactly, what the daemon's reader requires; any other file there is refused and left, and the attempt fails. If a write or `installer`
+   fails, every file this attempt made is removed.
+4. The pkg's postinstall loads the job; the daemon start finds the files and keeps them.
 
 `stores.toml` is not written: a pkg the coordinator resolves from a repository entry is fetched from the coordinator itself
 ([packages-repositories.md](packages-repositories.md) 4.7), so a Mac needs no store.
@@ -191,9 +228,13 @@ Mac (a host group's configuration pkg, [hostgroups.md](hostgroups.md) section 6.
 ## 7. Signing and notarization
 
 **What the release produces.** The hostkeeper pkg, hello's pkg and the bootstrap pkg are signed by `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`
-with a trusted timestamp (`artifacts.yml` `sign-pkg`, then `check-pkg`, on a push to `main` only), attested, and **not notarized**
-(`docs/macos.md` "The installer's signature", `docs/deploy/verify-a-release.md`). There is no Developer ID **Application** identity in the workflow:
-the binaries inside carry the linker's ad-hoc signature (the deleted `hostkeeper-mdm.md` section 2).
+with a trusted timestamp (`artifacts.yml` `sign-pkg`, then `check-pkg`, on a push to `main` and in a signing run; attested on a push to `main` only), and **not notarized**
+(`docs/macos.md` "The installer's signature", `docs/deploy/verify-a-release.md`). A Developer ID **Application** identity is now in the workflow:
+`artifacts.yml` `sign-code` signs each Mach-O program (hostkeeper, hk, hello and the bootstrap, as `dev.hostkeeper.bootstrap`) under a stable identifier with the hardened
+runtime and a trusted timestamp, before the pkgs are built, so the programs inside every pkg carry that signature and not the linker's ad-hoc one (`docs/macos.md`
+"The programs' signature"; a run by hand off `main` still packages the ad-hoc ones). The programs are **not notarized**: no step of the release notarizes them. A Gatekeeper
+assessment is not expected of a daemon that an installer installs, since the files carry no quarantine attribute; that is an expectation, not a measurement
+(`docs/operations/mac-full-disk-access.md` lists the measurement).
 
 **Q2 (default, owner may change): no notarization work now; MB4 is deferred.** The bootstrap pkg is signed with the existing identity, built and uploaded
 beside the hostkeeper pkg with a versioned URL, and its SHA-256 is in the release's `SHA256SUMS` and in the `SHA256SUMS` of its version directory (section 8).
@@ -204,7 +245,7 @@ nothing Apple states asked that install for notarization, "added only if a Mac r
 path asks more is unverified. If it does, notarizing a pkg is more than adding a step:
 
 - `notarytool` accepts a pkg only if the Mach-O files in it carry a Developer ID **Application** signature with the hardened runtime and a secure
-  timestamp. The bootstrap binary would need that identity, which the org may not have. (Only for the bootstrap: hostkeeper's pkg is fetched and run through
+  timestamp. The bootstrap binary now has that signature (`sign-code`), so this condition is met; the notary submission itself is not built. (Only for the bootstrap: hostkeeper's pkg is fetched and run through
   `installer` by the bootstrap, not opened by a user, so I expect no Gatekeeper check on it; not tested here.)
 - The notarization ticket is stapled, which changes the pkg's bytes, so the digest, the attestation and `SHA256SUMS` must be of the stapled file,
   after `sign-pkg` and before `check-pkg`.
@@ -244,7 +285,7 @@ The Blueprint takes that versioned URL and the file's SHA-256 from the `files` o
 never takes `stable.json`: a pointer moves, a Blueprint pin must not. (The pointer lists the bootstrap pkg among the `files` of the version; the bootstrap reads only the entry of hostkeeper's own pkg.)
 
 **Rollout of a new bootstrap is editing the Blueprint**: a new URL and hash, by the owner, in Apple Business. No fleet rollout exists or is needed.
-An enrolled Mac's bootstrap is a no-op (section 9), and only a Mac not yet set up needs the newest one. A bootstrap changes only for: a changed
+An enrolled Mac's bootstrap only checks that the daemon's job is loaded (section 9), and only a Mac not yet set up needs the newest one. A bootstrap changes only for: a changed
 farm value, a new settings key, a wire change the old bootstrap cannot speak (B8 makes the repository formats additive, so the old one keeps working), or a Mac OS
 change. Whether Apple reinstalls a pkg when the Blueprint's pin changes, and whether it reinstalls a removed one, is unverified (question 2); the
 bootstrap stays installed, idle, rather than deleting itself, so a declarative "reinstall if missing" has nothing to reinstall.
@@ -253,12 +294,17 @@ bootstrap stays installed, idle, rather than deleting itself, so a declarative "
 
 The bootstrap is a root launchd job (`dev.hostkeeper.bootstrap`, `RunAtLoad`, restarted by launchd only after a failure). On each start (`crates/hostkeeper-bootstrap/src/run.rs`):
 
-1. If `/etc/updater/pki/current` is there, or `/usr/local/bin/hostkeeper` is there **and** the marker `/var/lib/hostkeeper-bootstrap/installed` is (made after `installer` exited 0), exit 0 and do nothing. This makes it idempotent and a no-op on every enrolled Mac
-   and on one the bootstrap installed. The binary alone is not enough: the pkg lays its payload down before its postinstall, so a failed postinstall leaves a binary and no loaded job, and that Mac is installed again. A Mac with a hand-installed binary and no marker is installed again too, which is harmless: existing configs are kept.
+1. If `/etc/updater/pki/current` is there, or `/usr/local/bin/hostkeeper` is there **and** the marker `/var/lib/hostkeeper-bootstrap/installed` is (made after `installer` exited 0), the Mac is not installed again;
+   the bootstrap asks launchd whether the daemon's job is loaded (`launchctl print system/dev.hostkeeper.hostkeeper`, tool timeout from the settings when they can be read, else the default). A loaded job: exit 0 and do nothing more. A job that
+   is not loaded (exit 113 or `Could not find service`): launchd does not load a job that is marked disabled in its override database, so a Mac whose job was left disabled has no daemon after a restart; the bootstrap runs
+   `launchctl enable system/dev.hostkeeper.hostkeeper` and then `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, and exits 0 (`hostkeeper is installed and its job was not loaded: enabled and loaded it`).
+   A bootstrap that fails is followed by one more `print`: a job loaded by then (launchd loads the jobs of a booting Mac while this one starts) is success, and one still not loaded is an error of the attempt. Every `launchctl` failure (it cannot be started, passes its
+   deadline, a `print` that exits with another code, an `enable` that exits non-zero) is an error of the attempt, retried as step 4's are. No file is written and nothing is fetched. This keeps it idempotent and, on a Mac whose job is loaded, a no-op. The binary alone is not enough: the pkg lays its payload down before its postinstall, so a failed postinstall leaves a binary and no loaded job, and that Mac is installed again. A Mac with a hand-installed binary and no marker is installed again too, which is harmless: existing configs are kept.
 2. Read the settings (section 4), then the repository's descriptor and pointer (`hostkeeper_release::descriptor`), and download the pkg into a new root-only file in
    `/var/lib/hostkeeper-bootstrap` (mode 0600, never replacing a file), hashed in the same pass, held to the pointer's size and SHA-256 and to `max_package_bytes`.
 3. `pkgutil --check-signature` and the Team ID pin (section 7). A pkg that fails any check is deleted, and nothing else is written or run.
-4. Write `hostkeeper.toml` and `macos-pkg.toml` when absent (section 6), run `installer -pkg <file> -target /`, delete the file and exit 0.
+4. Write `hostkeeper.toml` and `macos-pkg.toml` when absent, and the update-account file when the settings name the update account (section 6),
+   run `installer -pkg <file> -target /`, delete the file and exit 0.
 
 **The bounded wait (default, owner may change).** A failed attempt (no settings yet, no network, a bad pkg, a failed install) is retried after `retry_secs`, until the sum of
 the pauses would pass `wait_secs`; then the program exits non-zero with the last error and launchd starts it again after its throttle. The Blueprint's preference payload may arrive
@@ -311,11 +357,14 @@ the migrations and their tables (unused), `mdm.proto` (every call answers `UNIMP
 | **Settings refused** (not owned by root, writable by others, a link, an unknown key, a value the daemon's loader refuses) | The same retry; the reason names the file and the key; nothing is fetched | the log |
 | **Repository unreachable, descriptor or pointer wrong** | The same retry; the reason names the URL and the status | the log; the host never has hostkeeper |
 | **Pkg refused** (size or digest differs from the pointer, `pkgutil` fails, the status is not Apple's, the Team ID is not the pinned one) | The file is deleted before anything is written or run: no config, no `installer`. The attempt is retried after `retry_secs`, since the pointer may move to a good file | the log, naming the Team ID found and the one pinned |
-| **`installer` fails** | The staged file is removed, and so are the config files this attempt made (a file the operator had stays), so a corrected setting is read on the next attempt; that attempt installs again | the log, with `installer`'s last line |
+| **The update account's keys are partial or a value breaks its rule** | Settings refused, the same retry; the reason names the file, the key and the rule, never the value | the log |
+| **An update-account file is there with another owner or mode, or something not a file is at its path** | The attempt fails before `installer`, the file is left, and the configs this attempt made are removed; the same retry | the log, naming the uid and mode found |
+| **`installer` fails** | The staged file is removed, and so are the config files and the update-account file this attempt made (a file the operator had stays), so a corrected setting is read on the next attempt; that attempt installs again | the log, with `installer`'s last line |
 | **Coordinator unreachable at first boot** (down, wrong LAN, CA hash mismatch) | Not the bootstrap's: the daemon's CA check fails first, so nothing is sent and no key is made on a hash mismatch (`UntrustedCoordinator`); a connection failure is a failed step, retried every poll period | the daemon's log; no request in the queue |
 | **Approval never given** | The request waits and expires after `--enrollment-request-ttl` (72 h). The daemon posts again with the same key and the request is listed again | the request in the Enrollment page; after the TTL, under `unenrolled` |
 | **The Mac is re-imaged** | The Blueprint installs the bootstrap again; the files of the old install are gone, so it installs hostkeeper again, and the daemon makes a new key and a new request. The host id is held by the old key, so the record does not approve it (the record is used, and "no other key holds the host id" fails): an operator approves with `--replace true` in the same group. A different group is refused `host_group_differs` | one click; the old key's certificate stops being admitted |
-| **The bootstrap runs on a Mac that has hostkeeper** | Step 1 of section 9: it exits 0 | none |
+| **The bootstrap runs on a Mac that has hostkeeper** | Step 1 of section 9: with the daemon's job loaded it exits 0 and does nothing more | none |
+| **A Mac that has hostkeeper whose daemon job is not loaded** (the job was left marked disabled, so launchd did not load it at boot) | Step 1 of section 9: `launchctl enable`, then `launchctl bootstrap` of the daemon's plist; a bootstrap that fails with the job still not loaded, or any other `launchctl` failure, is retried after `retry_secs` until `wait_secs`, then the program exits non-zero and launchd starts it again | the log: `... is not loaded; enabling and loading it`, then `hostkeeper is installed and its job was not loaded: enabled and loaded it`, or the failed attempt with `launchctl <verb> exited ...` |
 
 ## 12. Tasks, one pull request each
 
@@ -326,7 +375,7 @@ Size: S under a day, M a few days. All of them land in the pull request that car
 | MB1 | Crate `hostkeeper-bootstrap`: the loop of section 9 over its ports (the network, `pkgutil` and `installer`, the pause), the settings, the fetch, the check and the install; `main.rs` only forwards to the library (T4). The farm Mac measures the terms of section 9 | M | **Built**: `crates/hostkeeper-bootstrap`. The measurement on the farm Mac is not done |
 | MB2 | `cargo xtask release macos-bootstrap-pkg` and its `check`: one component, the binary, the plist, a postinstall that loads the job, identifier `dev.hostkeeper.bootstrap` | S | **Built**: `crates/xtask/src/release/macos_bootstrap.rs`, `packaging/macos-bootstrap/` |
 | MB3 | `artifacts.yml`: the pkg joins `build-macos`, `sign-pkg` and `check-pkg`, is attested, and the release publishes it beside the hostkeeper pkg; the workflow lint gains the job lines with a negative case (T15) | S | **Built**: `.github/workflows/artifacts.yml`, `crates/xtask/tests/workflows/pkg_signing.rs`, `crates/xtask/src/release/contract.rs`, `crates/xtask/src/channels/spec.rs` |
-| MB4 | Notarization of the bootstrap alone, only if question 2 says so | M | **Deferred** (Q2 default: no notarization work now) |
+| MB4 | Notarization of the bootstrap alone, only if question 2 says so | M | **Deferred** (Q2 default: no notarization work now). The Application identity exists in the workflow (`sign-code`) and the programs are not notarized |
 | MB5 | `docs/operations/mac-bootstrap.md`: the owner's Blueprint steps, the record, the approval, the logs; `docs/macos.md` updated | S | **Built**: `docs/operations/mac-bootstrap.md` |
 | MB6 | Coordinator: approve a re-imaged Mac's request by the serial of an inventory record, additive | S | **Not planned** (Q6 default: an operator's click with `--replace true`) |
 

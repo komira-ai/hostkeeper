@@ -20,8 +20,9 @@ nothing implements it yet. The placement tables (`assignments`, the role scope o
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
 small Linux servers. The coordinator's durable state moves from its files into that database. The file lock goes, and a
-Postgres advisory lock keeps the single-writer guarantee. A standby coordinator is designed here (section 7); the lock
-and its epoch are built by C3, and the standby itself is a later item that is not scheduled.
+Postgres advisory lock, taken shared since migration `0019`, keeps a release before it out (any number of coordinators hold
+it together, which is the multi-instance decision of `coordinator-multi-instance.md`). A standby coordinator is designed here
+(section 7); section 7 is superseded by that decision.
 
 ## 1. What changes for the operator
 
@@ -73,7 +74,7 @@ storage trait (section 4.1).
 | Halts, halt reports, clear generations | `<ops-file>.halts` with the ops file | tables `halts`, `halt_reports`, column `services.halt_generation` |
 | Plan positions (rollout-update-plans.md section 3) | `rollouts` of `<ops-file>.halts` | tables `rollouts`, `rollout_done` |
 | The platform of each inventory record (`linux-x86_64`, `linux-arm64`) | `platforms` of `<ops-file>.halts`, by host id | column `inventory.platform` |
-| The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows |
+| The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows that are changes (the console's audit-only lines, `docs/design/console-broker.md` decision D4, are numbered with them and stay out of it) |
 | Enrollment requests, issued certificates, hosts, deny rows, Mac nonces, the serial counter | `--enrollment-dir/*.pb` | the tables of section 3.6 |
 | The MDM gate's device records | `--enrollment-dir/mdm-devices/<enrollment id>.pb` | table `mdm_devices` (section 3.6) |
 | The single-writer lock | `flock` on `<state-file>.lock`; the enrollment store's own `flock` on `<enrollment-dir>/lock` | an advisory lock on one session, and the row `lease` (section 5); the enrollment store keeps its in-process mutex |
@@ -280,7 +281,8 @@ CREATE INDEX audit_time  ON audit (at_unix);
   `node_id`), `seq > since_seq`, `ORDER BY seq` ascending, or descending for `newest` and turned back, `LIMIT` of at
   most 256. `next_seq` keeps its meaning. `Hosts.Retire`'s check of whether a retirement was audited (`retire_audited`)
   becomes `SELECT action FROM audit WHERE node_id = $1 AND action = ANY($2) ORDER BY seq DESC LIMIT 1`. The ring of 64
-  that `Releases.Status` and `/v1/status` show is the newest 64 rows, loaded at start and kept in memory as today; it is
+  that `Releases.Status` and `/v1/status` show is the newest 64 rows that are changes (an audit-only line of the
+  console is not one), loaded at start and kept in memory as today; it is
   not stored apart.
 - **Retention.** Every row is kept. A row is about 200 bytes, and the file default of eight 16 MiB segments, about
   640,000 lines, would be some 130 MB of rows. `--audit-max-bytes` and `--audit-retained-segments` stay flags of the
@@ -517,20 +519,27 @@ that lowers it needs storage first. They are kept, with storage now the database
   cost.
 - **Bounded waits.** A stalled database must not freeze every heartbeat under the fleet lock. The session is opened with
   `connect_timeout`, `statement_timeout`, `lock_timeout`, client TCP keepalives and `tcp_user_timeout` (values set by
-  C3, each a few seconds), and a timeout is a lost session. While the session is lost the store thread answers every
+  C3, each a few seconds). A connect or connection timeout is a lost session; a statement whose lock or statement
+  timeout runs out is refused, rolled back, and keeps its session. While the session is lost the store thread answers every
   call at once with "lost" and reconnects on its own, never under the fleet lock. So a heartbeat waits at most one
-  statement timeout, once, and then not at all until the session is back.
+  bounded wait for each statement it makes: after a lost connection, once, and then not at all until the session is
+  back; after a refused statement the session stays up, and the next heartbeat's statement waits afresh, as long as
+  the same bound, while what it waits for is held.
 - **Reads.** `Audit.List`, `Enrollment.List`, the inventory's enrolled-host reads and the alerts' scans of requests run
   on a second, read-only connection, so a long list never holds a commit. They see committed rows only, which is
   stricter than a scan of files that may change underneath it, and they show a commit once it has returned. The
   heartbeat's enrollment reads (`host_role_for`, `is_denied`, `is_retiring`, `is_duplicate`), which read files today,
   read an in-memory copy of the hosts and the deny rows, loaded at start and changed only after a commit returns Ok, so
   a heartbeat costs no query. After a commit of unknown outcome (below) the copy is loaded again from the tables before
-  the next heartbeat is answered.
+  the next heartbeat is answered. (Superseded by [coordinator-multi-instance.md](coordinator-multi-instance.md),
+  section 6, "Enrollment": the copy is gone and these rows are read fresh; the store lock is replaced by a check of
+  what each decision read, in the transaction that writes.)
 - **A commit of unknown outcome.** A session lost while `COMMIT` was in flight may or may not have committed. Every
-  transaction also sets `lease.commits` to one more than before (a counter column of the `lease` row), so after the
-  reconnect of section 5, with the epoch its own, the store reads the counter: equal to the number of the lost commit,
-  it landed; one less, it did not. A storage-first change whose commit was lost is refused `store_failed` at once (the
+  transaction first inserts a row of `tx_ledger` (migration `0019`, `id uuid`), so it has an id before its `COMMIT`.
+  After the reconnect of section 5 the store settles the lost commit by inserting the same id again with `ON CONFLICT
+  DO NOTHING`: the unique-index insert waits for a transaction of that id still in progress, so no row inserted means it
+  landed and one inserted means it did not and now never will. (`lease.commits` is no longer written; the release before
+  this one wrote it, and it is left as it was.) A storage-first change whose commit was lost is refused `store_failed` at once (the
   caller cannot wait for a reconnect); if the counter then shows it landed, memory takes it and the log says so, as
   `StoreError::NotSynced` of `desired.rs` does today for a file renamed into place whose directory sync failed. A repeat
   of the call is then a no-op, as it is today. Until the outcome is known, the audit numbers of the lost commit stay
@@ -551,19 +560,27 @@ that lowers it needs storage first. They are kept, with storage now the database
   what is committed, so a commit must be on disk when it returns. jobscheduler's store refuses `synchronous_commit` off
   for the same reason.
 
-## 5. The single writer: an advisory lock
+## 5. The advisory lock (a fence between releases, shared since migration `0019`)
 
-- **The order at start:** take the lock; read `schema_version` and refuse a newer schema (section 6); run the migrations
-  the database lacks; raise the epoch; load. Nothing is read or written before the lock is held.
-- **Taking it.** At start, before anything else, `serve` opens the writing session and calls `pg_try_advisory_lock` with
-  the store's fixed key (a constant of the code that never changes). If another session holds it, the start is refused:
-  `another coordinator holds the lock of this database`, the advisory form of `StartError::Locked`. It never waits.
-  Advisory locks are per database, so two farms on one server do not meet.
+Superseded in part by [coordinator-multi-instance.md](coordinator-multi-instance.md) section 4: the lock is shared, and
+`lease.commits` and the epoch's exit are gone. The bullets on the epoch, on every write and on losing the session below are the
+record of the single writer; the file store keeps its exclusive file lock.
+
+- **The order at start:** take the lock shared; read `schema_version` and refuse a newer schema (section 6); run the
+  migrations the database lacks, under a runners' lock of their own so that coordinators that start together run each
+  once; raise the epoch; load. Nothing is read or written before the lock is held.
+- **Taking it.** At start, before anything else, `serve` opens the writing session and calls
+  `pg_try_advisory_lock_shared` with the store's fixed key (a constant of the code that never changes). Any number of
+  coordinators hold it together. A session that holds it exclusively (the release before this one, an `import`, an
+  `export`) refuses the start: `another coordinator holds the lock of this database`, the advisory form of
+  `StartError::Locked`; and those, which call `pg_try_advisory_lock`, are refused while any coordinator runs. It never
+  waits. Advisory locks are per database, so two farms on one server do not meet.
 - **The epoch.** After the migrations, in the same session, it runs one transaction that adds one to `lease.epoch` and
   records the holder (its first `--server-name`, or `coordinator` without one) and the time. The epoch it wrote is the
   coordinator's own.
-- **Every write on that session.** A transaction can commit only on the session that holds the lock. That is the fence:
-  a coordinator that lost its session cannot commit anything, because the lock went with the session.
+- **Every write on that session.** The trigger `lease_fenced` of the release before lets only a session that holds the
+  lock update `lease`; this release no longer updates it after the start's epoch raise, and a coordinator that lost its
+  session writes nothing until a revival takes the lock again.
 - **Letting go.** A coordinator that ends (its store stopped or dropped) runs `pg_advisory_unlock_all` on the writing
   session before it closes it, so the lock is free when the store is gone and a successor takes it at once. Closing the
   session alone returns before the server has ended it and freed the lock.
@@ -573,11 +590,9 @@ that lowers it needs storage first. They are kept, with storage now the database
      change `store_failed`; memory-first changes stand, pending; heartbeats are still answered and the fleet view is
      still kept; an alert, `store_unreachable` (a new alert kind, additive), stands until the session is back;
   2. its store thread opens a new session and tries the lock again, on its own and never under the fleet lock;
-  3. with the lock, reads `lease.epoch` and `lease.commits`. Equal epoch: no other coordinator held the database
-     meanwhile; it settles a commit of unknown outcome (section 4.4), commits what is pending (section 4.3) and orders
-     again. Different epoch: another coordinator led meanwhile and its memory is stale; it logs every pending change it
-     drops, by audit number, removes the marker (another coordinator's state now governs, so they are dropped
-     knowingly), and exits non-zero; its supervisor starts it again on the database as that one left it.
+  3. with the lock, settles a commit of unknown outcome (section 4.4), commits what is pending (section 4.3) and orders
+     again. Another coordinator having started meanwhile is normal and changes nothing: nothing is deposed, and the
+     epoch of the start remains only the marker's key (section 4.3).
 - **At start, a database that is not up** is a refusal to start, named `not_up` or `refused` by SQLSTATE and I/O kind as
   jobscheduler's `OpenError` does, never by message. The compose file's `depends_on` with the health check and the
   restart policy start it again. There is no wait loop in the code (rule B20).
@@ -608,6 +623,10 @@ that lowers it needs storage first. They are kept, with storage now the database
   Taking something away is a later release's own reviewed change, and is not designed here.
 
 ## 7. A standby, designed and not built
+
+Superseded by [coordinator-multi-instance.md](coordinator-multi-instance.md) (section 18 there): there is no standby, every
+instance serves. Its takeover, its quiet-start timing bound and its list-of-addresses option are not needed. The text below is
+kept as the record.
 
 The lock and the epoch are the base of a standby, and C3 builds them. Nothing else below is built by the items of
 section 13; the standby is listed there as a later item that is not scheduled, and its `--standby` flag and the
@@ -759,8 +778,8 @@ volumes:
 - **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator's image
   has no shell or client to run one, so the coordinator has no compose `healthcheck` and no `HEALTHCHECK`; it exits on a
   refusal and the restart policy starts it again (section 5). Its health is a route a probe outside the container asks
-  instead: `serve --health-listen <loopback address:port>` answers `GET /healthz` with `200 ok`, or `503` and one of
-  `starting`, `store_unreachable`, `not_writer` and `draining` (from SIGTERM until it exits; two-programs.md
+  instead: `serve --health-listen <address:port>` (a loopback address or one interface's) answers `GET /healthz` (liveness: `503 starting`, then `200 ok`) and
+  `GET /readyz` (`200 ok`, or `503` and one of `draining`, `starting` and `store_unreachable`; `draining` from SIGTERM until it exits; two-programs.md
   section 2.7, [coordinator-health.md](../deploy/coordinator-health.md)).
 
 ## 10. Backups and the restore drill
@@ -910,14 +929,15 @@ on the database and the back-out window has closed.
 | `a_refused_change_takes_no_audit_number` | the numbering stays gap-free across a failed commit | C1 |
 | `the_conformance_suite_passes_on_the_files_the_fake_and_postgres` | one contract, three backends | C1, C3 |
 | `the_suite_fails_against_a_backend_that_breaks_each_clause` | the suite catches what it claims | C1 |
-| `a_second_coordinator_on_the_database_is_refused` | the advisory lock | C3 |
+| `coordinators_share_the_database_and_an_exclusive_taker_is_refused` | the shared advisory lock | C3 |
+| `starters_that_run_together_apply_each_migration_once` | the runners' lock | C3 |
 | `a_lost_session_holds_orders_and_resumes_on_the_same_epoch` | section 5, the reconnect | C3 |
-| `a_lost_session_exits_when_another_coordinator_led_meanwhile` | the epoch fence | C3 |
+| `a_store_whose_epoch_was_raised_meanwhile_is_revived` | a coordinator that started meanwhile deposes nobody | C3 |
+| `a_settle_waits_for_the_transaction_in_progress_and_finds_it_landed` | the settle by the ledger | C3 |
 | `a_commit_on_a_session_without_the_lock_fails` | the fence holds at the database | C3 |
-| `a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory` | a commit of unknown outcome, settled by `lease.commits` | C3 |
+| `a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory` | a commit of unknown outcome, settled by its `tx_ledger` row | C3 |
 | `a_commit_that_did_not_land_before_its_session_was_lost_is_not_taken` | the other outcome | C3 |
-| `a_stalled_statement_is_a_lost_session` | the bounded wait | C3 |
-| `the_different_epoch_exit_removes_the_marker_and_names_what_it_dropped` | the exit of section 5 | C3 |
+| `a_statement_whose_lock_wait_runs_out_is_refused_and_keeps_the_session` | the bounded wait | C3 |
 | `store_unreachable_stands_while_the_session_is_lost` | the alert | C3 |
 | `the_enrollment_copy_is_reloaded_after_a_commit_of_unknown_outcome` | the copy never disagrees with the tables | C3 |
 | `the_first_heartbeat_and_the_duplicate_mark_are_written_once` | the heartbeat's enrollment writes, the first serving heartbeat among them | C3 |
@@ -982,18 +1002,18 @@ tests in its own pull request.
 | Question | Decision | Why |
 |---|---|---|
 | One database or one per store | One database, one schema. | The flows that cross stores (force, retire) can then commit together, and one lock covers everything. |
-| What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. |
+| What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. Superseded by coordinator-multi-instance.md section 5.2. |
 | How a change reaches the database | The state before and after, compared in memory; only changed rows are written. | The stores' call sites and edits stay as they are; a change costs what it changes. |
 | Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today; the MDM gate's device records alone are their file's bytes (section 3.6). | The tables can be queried and constrained; each JSON value keeps its reader's strictness. The device record is the gate's own format, versioned by the gate's additive rule, and its reader is already as strict as a row must be. |
 | Generations and write ids | Columns added by C6 with the API that honours them; not in `0001`. | They are what the operator API already describes; adding them before anything maintains them would store numbers that mean nothing. |
-| The audit's numbers | Assigned by the coordinator under its writers' lock, not by a sequence. | One writer; no gaps from rolled-back transactions; the import keeps the file numbers. |
+| The audit's numbers | Assigned by the coordinator under its writers' lock, not by a sequence. | One writer; no gaps from rolled-back transactions; the import keeps the file numbers. Superseded by coordinator-multi-instance.md section 6. |
 | Audit retention | Keep every row; the rotation flags stay with the file store. | The history is small in rows, and keeping it removes the "pruned before" cases. |
 | The audit's actor | Derived from `by_name`, not stored twice. | One column cannot disagree with itself. |
 | `audit_unavailable` | Kept in the proto, not returned by the Postgres store; an enrollment change's line still lands after it, repaired at start. | For every other change the line and the change are one transaction; there is no case to name. |
 | The marker | A file, `--halt-marker-file`, listing the pending audit numbers; removed at start when they all landed. | It must be writable when the database is not, and a crash after the commit needs no person. |
-| A commit of unknown outcome | Settled by the `lease.commits` counter after the reconnect. | One read tells whether the lost commit landed. |
+| A commit of unknown outcome | Settled by inserting the transaction's `tx_ledger` id again after the reconnect. | The insert waits for the first transaction while it is in progress, so the database says whether it landed. Superseded by coordinator-multi-instance.md section 4. |
 | Retry of memory-first changes | Every heartbeat, for all of them, not only halts. | One rule; a pause that failed to write no longer waits for an unrelated change. |
-| Losing the writing session | Order nothing, retry the lock at each heartbeat, resume on the same epoch, exit on another. | Safe whether or not a standby exists; a blip of the database does not need a person. |
+| Losing the writing session | Order nothing, retry the lock at each heartbeat, resume. | A blip of the database does not need a person; another coordinator having started meanwhile deposes nobody. |
 | A database not up at start | Refuse to start; the supervisor starts it again. | No wait loop in the code (rule B20). |
 | A newer schema | Refused when a newer migration says `refuse`, the default; started when all say `may-run`. | A release must not run on a schema whose newer parts it cannot work with, and must not be refused over a harmless addition such as an index. |
 | Migrations | Run by `serve` at start, under the lock. | One writer, so no installer race; the farm has no installer step for the coordinator. |

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+hostkeeper-bootstrap = { path = "../hostkeeper-bootstrap" }
 hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
@@ -17,6 +18,7 @@ hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
+hostkeeper-wire = { path = "../hostkeeper-wire" }
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

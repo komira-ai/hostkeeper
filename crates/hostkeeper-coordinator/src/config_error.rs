@@ -14,8 +14,10 @@ use crate::enrollment::SetupError;
 use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
 use crate::layout::LayoutError;
+use crate::operator_keys::OperatorKeysError;
 use crate::ops::OpsError;
 use crate::origin_https::OriginTlsError;
+use crate::prerequisites::PrerequisitesError;
 use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
 use crate::ui::UiDirError;
@@ -30,6 +32,15 @@ pub enum StartError {
     /// The tokens file is refused.
     #[error(transparent)]
     Tokens(#[from] TokensError),
+    /// The operator keys file is refused.
+    #[error(transparent)]
+    OperatorKeys(#[from] OperatorKeysError),
+    /// The host prerequisites file is refused.
+    #[error(transparent)]
+    Prerequisites(#[from] PrerequisitesError),
+    /// A console file is refused.
+    #[error(transparent)]
+    Console(#[from] crate::console::ConsoleFilesError),
     /// `--tokens-file` and `--operator-token-file` are both given.
     #[error(
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
@@ -67,9 +78,9 @@ pub enum StartError {
         /// Why it is refused.
         reason: &'static str,
     },
-    /// `--health-listen` is not a loopback address.
+    /// `--health-listen` is a wildcard address, and `--health-listen-wildcard` is not given.
     #[error(
-        "--health-listen: {0} is not a loopback address; the health listener answers with no token and no TLS, so name an address of 127.0.0.0/8 or ::1"
+        "--health-listen: {0} is a wildcard address; the health listener answers with no token and no TLS, so name a loopback address or the address of one interface, or give --health-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
     )]
     HealthListen(SocketAddr),
     /// The allow-list of CI's OIDC token is refused.
@@ -117,6 +128,9 @@ pub enum StartError {
     /// `--record-approve-for` is longer than `--record-approve-max`.
     #[error(transparent)]
     RecordWindow(#[from] WindowAboveMax),
+    /// `--xcode-dir` is not a directory the store could be opened in.
+    #[error("--xcode-dir: {0}")]
+    XcodeDir(String),
     /// A socket, the runtime or the signal handlers failed.
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -209,18 +223,10 @@ pub enum StartError {
         "--ca-key-file needs --enrollment-dir, or --database-dsn-file, to keep the enrollment store"
     )]
     NoEnrollmentStore,
+    /// The SSH user CA's flags or files are refused.
+    #[error(transparent)]
+    Ssh(#[from] super::SshStartError),
     /// The database could not be opened, or holds what this build refuses.
     #[error(transparent)]
     Database(#[from] DatabaseError),
-    /// The database's session was lost and, once it was back, another coordinator had led the
-    /// database meanwhile: this coordinator's memory is stale, and it stops.
-    #[error(
-        "another coordinator led the database while this one's session was lost (epoch {found}, this one's {epoch}): this coordinator stops, and its supervisor starts it again on the database as that one left it"
-    )]
-    Deposed {
-        /// The epoch this coordinator held.
-        epoch: u64,
-        /// The epoch it found.
-        found: u64,
-    },
 }

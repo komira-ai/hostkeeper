@@ -38,6 +38,7 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         at_unix: Some(1_800_000_000),
         by_name: Some("alice".to_owned()),
         host_group: None,
+        api_token: None,
     }
 }
 
@@ -87,6 +88,11 @@ fn alert() -> op::Alert {
         first_observed_unix: 1_800_000_000,
         request_id: "ab".repeat(32),
         other_host_id: "db-1".to_owned(),
+        host_group: "db-hosts".to_owned(),
+        reason: "config_missing".to_owned(),
+        detail: "there is no configuration file".to_owned(),
+        tries: 2,
+        since_unix: 1_799_999_000,
     }
 }
 
@@ -97,6 +103,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
         (
             "hostkeeper.agent.v1.EnrollRequest",
             round_trip(&EnrollRequest {
+                host_key_fingerprints: Vec::new(),
                 csr_der: vec![0x30, 0x82, 1, 2],
                 claims: Some(claims()),
                 image: "boot-1".to_owned(),

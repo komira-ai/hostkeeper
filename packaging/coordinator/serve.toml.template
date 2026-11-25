@@ -21,6 +21,45 @@ client-ca = "/etc/hostkeeper-coordinator/client-ca.pem"
 oidc-config = "/etc/hostkeeper-coordinator/oidc.toml"
 tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
 
+# The operator's SSH public keys for each host group (public keys only, no secret; root's, readable by the
+# group), written by each host's daemon into its login account's authorized_keys; read again every
+# tls-reload-secs. Without it no host is sent keys.
+# operator-keys-file = "/etc/hostkeeper-coordinator/operator-keys.toml"
+
+# The host prerequisites of each host group (no secret; root's, readable by the group): today the one
+# name xcode-command-line-tools, which the daemon of a Mac installs when the Mac lacks Apple's Command
+# Line Tools; read again every tls-reload-secs. Without it no host is sent a set.
+# host-prerequisites-file = "/etc/hostkeeper-coordinator/host-prerequisites.toml"
+
+# The list of Xcode releases the coordinator reads once a day, to alert when a release newer than any
+# its Xcode store holds exists: the Xcode Releases site's data.json. Without it (the default) the
+# coordinator reads no third party.
+# xcode-feed-url = "https://xcodereleases.com/data.json"
+
+# The coordinator's private Xcode store: the directory where the Xcode archives an operator pushes are
+# kept, exactly as Apple ships them, for the coordinator's own Macs to read. The directory must exist
+# (owned by hostkeeper-coordinator, closed to other users) and the coordinator does not start without it; with
+# several coordinators, every instance mounts the same directory. Without it (the default) there is no
+# store. xcode-max-bytes (default 21474836480, 20 GiB; at least 1) is the most bytes of one archive.
+# xcode-dir = "/var/lib/hostkeeper-coordinator/xcode"
+# xcode-max-bytes = 21474836480
+
+# How a Mac's macOS update of a maintenance run is applied: daemon (the default), the Mac's own daemon
+# installing it, is the only value taken. apple-business is refused at start (exit 2): Apple Business
+# offers no call that installs an update on one Mac.
+# macos-update-via = "daemon"
+
+# The console (power and boot device through each Linux server's BMC): which token names may use it
+# (no secret; root's, readable by the group), the one BMC user and password (a secret: owned by
+# hostkeeper-coordinator, mode 0600 or 0400), and, optional, an address that overrides for a BMC by
+# its MAC (no secret): every other BMC is reached at the address its host's daemon reports, then
+# at the one the neighbour table holds. The operators file needs the credential file; without it
+# nobody has console access. Read again every tls-reload-secs. The coordinator runs ipmitool, installed at console-ipmitool (default
+# /usr/bin/ipmitool).
+# console-operators-file = "/etc/hostkeeper-coordinator/console-operators.toml"
+# console-targets-file = "/etc/hostkeeper-coordinator/console-targets.toml"
+# console-bmc-credential-file = "/etc/hostkeeper-coordinator/console-bmc-credential.toml"
+
 # The state: files in the coordinator's directory. For Postgres, replace this line with
 # database-dsn-file and halt-marker-file.
 state-file = "/var/lib/hostkeeper-coordinator/state.json"

@@ -8,7 +8,11 @@
 //! **hostkeeper's package.** A release of hostkeeper on a Mac is a native package, its signed
 //! `.pkg` (docs/design/packages-native.md, section 10.4): the binary of the program under test at
 //! `/usr/local/bin/hostkeeper` (the program's own path on a Mac, where the pkg's launchd plist
-//! starts it), nothing else. The test builds one `.pkg` of it for each of [`N`] and [`NEXT`] with
+//! starts it), and the plist of a job of the test's label in `/Library/LaunchDaemons`, which the
+//! manifest does not name in `run`, as hostkeeper's own package ships the daemon's plist and
+//! names no `run`: the shape whose `activate` over a kept version once marked the job disabled
+//! (`launchctl print-disabled system`, read after each install and update, says whether it is,
+//! [`MacSelfHost::assert_installed`]). The test builds one `.pkg` of it for each of [`N`] and [`NEXT`] with
 //! the Mac's `pkgbuild` and `productbuild` (`shared/pkg_build.rs`), serves it to the daemon by
 //! its pin (`shared/macos_pkg.rs` says how the daemon fetches it and how its signature is judged),
 //! and orders it by the one `macos-pkg` entry `release targets` writes ([`MacSelfHost::entry`]).
@@ -86,6 +90,10 @@ use serde_json::Value;
 
 use crate::e2e::macos_pkg::{self, PKGS_DIR, SIGNERS_FILE, signers_file_text};
 use crate::e2e::pkg_build::{self, PkgFile, PkgSource};
+
+#[path = "../shared/launchd_override.rs"]
+pub mod launchd_override;
+use launchd_override::{Override, assert_not_disabled, is_loaded, override_of};
 
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
@@ -200,6 +208,24 @@ refs = ["refs/tags/*"]
 hosted_runner = true
 "#;
 
+/// Where launchd's plists of system jobs are.
+const LAUNCH_DAEMONS: &str = "/Library/LaunchDaemons";
+
+/// The plist of the test's job as the package ships it: the one file of hostkeeper's own package
+/// besides the program, and the shape that an `activate` over a kept version once marked
+/// disabled. Its manifest names no `run`. The job it names is the one the test loads from its
+/// own plist (`load`), under the same label, and this one is never loaded: it runs nothing at
+/// load and is not kept alive.
+fn job_plist(label: &Label) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \
+         \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\"><dict>\n<key>Label</key><string>{label}</string>\n\
+         <key>ProgramArguments</key><array><string>{INSTALLED}</string></array>\n\
+         <key>RunAtLoad</key><false/>\n<key>KeepAlive</key><false/>\n</dict></plist>\n"
+    )
+}
+
 /// The directories above [`INSTALLED`] that the host may lack, outermost first.
 const PARENTS: [&str; 2] = ["/usr/local", "/usr/local/bin"];
 
@@ -247,6 +273,7 @@ impl Drop for MacSelfHost {
         let forget = ["--forget".to_owned(), IDENTIFIER.to_owned()];
         let _ = LaunchctlProcess::new(Path::new("/usr/sbin/pkgutil"), TOOL_DEADLINE).run(&forget);
         let _ = fs::remove_file(INSTALLED);
+        let _ = fs::remove_file(self.job_plist_path());
         for parent in self.made.iter().rev() {
             let _ = fs::remove_dir(parent);
         }
@@ -386,11 +413,20 @@ impl MacSelfHost {
         let source = PkgSource {
             identifier: IDENTIFIER.to_owned(),
             version: version.to_owned(),
-            files: vec![PkgFile::new(
-                INSTALLED.trim_start_matches('/'),
-                fs::read(DAEMON).unwrap_or_else(|e| panic!("read {DAEMON}: {e}")),
-                0o755,
-            )],
+            files: vec![
+                PkgFile::new(
+                    INSTALLED.trim_start_matches('/'),
+                    fs::read(DAEMON).unwrap_or_else(|e| panic!("read {DAEMON}: {e}")),
+                    0o755,
+                ),
+                PkgFile::new(
+                    self.job_plist_path()
+                        .to_string_lossy()
+                        .trim_start_matches('/'),
+                    job_plist(&self.label),
+                    0o644,
+                ),
+            ],
             postinstall: None,
         };
         let pkg = pkg_build::build(&self.path(&format!("build-{version}")), &source);
@@ -425,6 +461,12 @@ impl MacSelfHost {
 
     fn path(&self, name: &str) -> PathBuf {
         self.base.join(name)
+    }
+
+    /// Where the package installs the plist of the test's job: `/Library/LaunchDaemons`, as
+    /// hostkeeper's own package does for the daemon's.
+    fn job_plist_path(&self) -> PathBuf {
+        Path::new(LAUNCH_DAEMONS).join(format!("{}.plist", self.label))
     }
 
     fn state(&self) -> PathBuf {
@@ -691,6 +733,18 @@ impl MacSelfHost {
         found.expect("a finished record")
     }
 
+    /// The test's job is not disabled in launchd's override database (no mark, or an enabling
+    /// one, so that a reboot loads it) and launchd holds it; `when` says at what point.
+    pub fn assert_job_enabled_and_loaded(&self, when: &str) {
+        assert_not_disabled(&self.label, when);
+        assert!(
+            is_loaded(&self.label),
+            "{when}: launchd no longer holds {}\n{}",
+            self.label,
+            self.logs()
+        );
+    }
+
     /// The pid of the daemon's job, while it has a process.
     pub fn pid(&self) -> Option<u32> {
         match print(&launchctl(), &self.label) {
@@ -804,6 +858,24 @@ impl MacSelfHost {
             Some(version),
             "{}",
             self.logs()
+        );
+        // The job of the package: its plist is installed, and an `activate` of the package, a
+        // first install or an update over a kept version, has not marked it disabled, which a
+        // reboot would not load (the daemon's `activate` of its own package also enables the
+        // daemon's own job, `dev.hostkeeper.hostkeeper`, a label of the shipped job that no
+        // test job has: launchd lists it enabled once an `activate` ran).
+        let plist = fs::read_to_string(self.job_plist_path()).unwrap_or_else(|e| {
+            panic!(
+                "the package's job plist {} is not installed: {e}",
+                self.job_plist_path().display()
+            )
+        });
+        assert!(plist.contains(self.label.as_str()), "{plist}");
+        self.assert_job_enabled_and_loaded(&format!("hostkeeper {version} installed"));
+        assert_eq!(
+            override_of(&Label::daemon()),
+            Override::Enabled,
+            "the daemon's activate of its own package enabled the daemon's job"
         );
         let placed = fs::read(self.fixture().join("placed/placed.json")).unwrap_or_default();
         let placed: Value = serde_json::from_slice(&placed).unwrap_or(Value::Null);

@@ -1,0 +1,12 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared. The launchctl fixture binary lives under tests/bin; the build script embeds
+# macos/Info.plist in the macOS binary.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "macos/Info.plist",
+        "tests/bin",
+    ],
+)

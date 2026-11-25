@@ -826,6 +826,8 @@ fn manifest(run: &[&str], health_url: Option<&str>) -> Manifest {
         hook: Hook {
             command: vec!["bin/tierstore".to_owned(), "update-hook".to_owned()],
             boot: None,
+            drain: None,
+            resume: None,
             verify_deadline_secs: 1600,
             promotion_ceiling_secs: None,
             cleanup_retries: 3,

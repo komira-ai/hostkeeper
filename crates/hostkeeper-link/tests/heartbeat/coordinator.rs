@@ -341,6 +341,14 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        ssh: None,
+        prerequisites: None,
+        bmc: None,
+        serial_console: None,
+        maintenance: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -360,6 +368,10 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             acknowledged: Vec::new(),
             repositories: None,
             facts: None,
+            operator_keys: None,
+            ssh: None,
+            prerequisites: None,
+            maintain: None,
         })
     );
     server.join().expect("the server").expect("a request");
@@ -391,7 +403,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
     let sent: Value = serde_json::from_slice(&request.body).expect("JSON");
     assert_eq!(sent["services"][0]["name"], "web");
     assert_eq!(sent["services"][0]["version"], "1.0");
-    assert_eq!(rig.world.halts.raises(), [("web".to_owned(), 1)]);
+    assert_eq!(rig.world.halts.heard(), [("web".to_owned(), None, 1)]);
     assert_eq!(rig.world.log.lines(), Vec::<String>::new());
     // The JSON route carries no order: the update of web is ordered over gRPC alone.
     assert_eq!(rig.world.dispatch.pending(), 0);

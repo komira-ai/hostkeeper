@@ -1,0 +1,363 @@
+// hostkeeper.operator.v1: the `Console` service of the operator API and its refusals
+// (`ConsoleRefusal`): a host's console through the coordinator (docs/design/console-broker.md).
+// A Linux server's console is its serial port over the BMC's Serial over LAN, and its power and
+// boot device are the BMC's; a Mac's is its screen. `Open` hands out a session that a WebSocket on
+// the coordinator's private listener attaches to; the other calls are answered whole. The rest of
+// the package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and
+// `AuditRefusal` among it, is operator.proto; this file is the same package and API, kept apart
+// so that each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Console` takes the operator's credential only; no CI token reaches it (see
+// operator.proto). An operator must also be named in the coordinator's console operators file,
+// and only an operator whose entry allows power may call `Power` and `SetBootDevice`; with no
+// such file nobody has console access (`no_console_access`).
+//
+// Refusals: a gRPC status whose message is exactly one token of `ConsoleRefusal`, written as the
+// value's name without the prefix, in lower case; the status code is the one each value names. A
+// refused request changes nothing and contacts no device. `Open`, `Power` and `SetBootDevice`
+// each write their audit line before any device is contacted, and a call that cannot write it
+// does nothing (`audit_unavailable`).
+//
+// Units: as operator.proto says; times are unix seconds and durations whole seconds. A host id
+// is a node id. Every `Open`, `Power` and `SetBootDevice` carries a reason of 1 to 256 bytes once
+// trimmed, with no control character; no action is exempt, `status` and `on` included. A
+// session is 256 random bits as 64 lower-case hex characters. A request is at most 4 KiB.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// A host's console. One session per host: a second `Open` of a host that has one is refused
+// `console_busy`, and `List` names who holds it. Each call that acts is audited under the
+// caller's name with the host as the entry's node: `console_open`, `console_close`,
+// `power_action` and `boot_device_set`; a refusal of an operator named in the console operators
+// file is audited as `console_denied` with its cause.
+service Console {
+  // Opens a console session on a host: takes the host's one session slot and writes the audit
+  // line, without contacting the device. The session is then attached by a WebSocket at
+  // `/console/v1/stream/<session>` on the private listener, by the same operator name, within
+  // `expires_in_secs`; an unattached session ends after that.
+  rpc Open(OpenConsoleRequest) returns (OpenConsoleResponse);
+  // Reads or changes a Linux server's power through its BMC, after checking that the BMC at the
+  // host's address has the host's BMC MAC. Answered when the BMC has acknowledged the command;
+  // the host's own state follows later (`Hosts.Get`).
+  rpc Power(ConsolePowerRequest) returns (ConsolePowerResponse);
+  // Sets the device a Linux server boots from through its BMC, after the same MAC check as
+  // `Power`, and answers with the boot flags the BMC holds afterwards, read back.
+  rpc SetBootDevice(SetBootDeviceRequest) returns (SetBootDeviceResponse);
+  // Every open console session, by host id. Changes nothing and is not audited.
+  rpc List(ListConsoleSessionsRequest) returns (ListConsoleSessionsResponse);
+  // Ends the console session of a host, whoever holds it. The closer's name is in the audit
+  // line.
+  rpc Close(CloseConsoleRequest) returns (CloseConsoleResponse);
+  // Reads a Linux server's serial console without typing and says what it saw: opens a session
+  // as `Open` does (the same checks, refusals and `console_open` line), attaches it in the
+  // coordinator, reads until `max_bytes` came, `quiet_secs` passed without a byte or
+  // `wait_secs` passed, then ends it as a stream ends (the payload deactivated, one
+  // `console_close` line). It sends the host no byte, not even a newline. A Mac is `no_bmc_mac`; a
+  // device not reached, or that fails before the host sent a byte, is refused with its cause.
+  rpc Probe(ProbeConsoleRequest) returns (ProbeConsoleResponse);
+}
+
+// Why `Console` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum ConsoleRefusal {
+  CONSOLE_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  CONSOLE_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Console` does not take.
+  CONSOLE_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a host id that is not a node id, an unspecified action or boot device, or a
+  // reason with a control character.
+  CONSOLE_REFUSAL_INVALID_REQUEST = 3;
+  // INVALID_ARGUMENT: `Open`, `Power` or `SetBootDevice` without a reason, or with one that is
+  // empty once trimmed.
+  CONSOLE_REFUSAL_REASON_REQUIRED = 4;
+  // INVALID_ARGUMENT: a reason over 256 bytes once trimmed.
+  CONSOLE_REFUSAL_REASON_TOO_LONG = 5;
+  // PERMISSION_DENIED: the operator is not named in the console operators file, or the
+  // coordinator has no such file.
+  CONSOLE_REFUSAL_NO_CONSOLE_ACCESS = 6;
+  // PERMISSION_DENIED: `Power` or `SetBootDevice` by an operator whose entry in the console
+  // operators file does not allow power.
+  CONSOLE_REFUSAL_POWER_NOT_PERMITTED = 7;
+  // NOT_FOUND: no host has the id.
+  CONSOLE_REFUSAL_HOST_NOT_FOUND = 8;
+  // FAILED_PRECONDITION: no address is known for the host's device: for a Linux server, the
+  // console targets file names none for its BMC MAC, its daemon never reported its BMC
+  // (`hostkeeper.agent.v1.HeartbeatRequest.bmc`) and the coordinator's neighbour table has no
+  // entry for the MAC; for a Mac, the console targets file names none of its data MACs.
+  CONSOLE_REFUSAL_NO_ADDRESS = 9;
+  // FAILED_PRECONDITION: `Power` or `SetBootDevice` of a host whose inventory record has no BMC
+  // MAC; a Mac has none.
+  CONSOLE_REFUSAL_NO_BMC_MAC = 10;
+  // FAILED_PRECONDITION: more than one inventory record matches the host.
+  CONSOLE_REFUSAL_AMBIGUOUS_RECORD = 11;
+  // FAILED_PRECONDITION: the BMC at the host's address reports another MAC than the host's
+  // record, at every address known for it. Nothing was sent to it.
+  CONSOLE_REFUSAL_ADDRESS_MISMATCH = 12;
+  // ALREADY_EXISTS: `Open` of a host that already has a session; `List` names its holder.
+  CONSOLE_REFUSAL_CONSOLE_BUSY = 13;
+  // RESOURCE_EXHAUSTED: `Open` when the coordinator holds as many sessions as it allows.
+  CONSOLE_REFUSAL_TOO_MANY_SESSIONS = 14;
+  // UNAVAILABLE: the device did not answer at the host's address (for a BMC, at any address
+  // known for it).
+  CONSOLE_REFUSAL_DEVICE_UNREACHABLE = 15;
+  // UNAVAILABLE: the BMC has no free session. Asking again later may succeed.
+  CONSOLE_REFUSAL_BMC_BUSY = 16;
+  // FAILED_PRECONDITION: the BMC refused the coordinator's BMC credential.
+  CONSOLE_REFUSAL_BMC_AUTH_FAILED = 17;
+  // NOT_FOUND: `Close` of a host that has no session.
+  CONSOLE_REFUSAL_NO_SESSION = 18;
+  // UNAVAILABLE: the audit entry could not be written. Nothing was done.
+  CONSOLE_REFUSAL_AUDIT_UNAVAILABLE = 19;
+  // UNAVAILABLE: the coordinator could not run the BMC tool, or could not read the BMC's answer
+  // to a command, or the BMC did not acknowledge it. The tool's text is in no answer.
+  CONSOLE_REFUSAL_BMC_FAILED = 20;
+  // INTERNAL: the coordinator could not read its enrollment store, draw a session's id, or finish
+  // the call.
+  CONSOLE_REFUSAL_STORE_FAILED = 21;
+  // UNAVAILABLE: `Probe` found the BMC's Serial over LAN payload held by another session, which
+  // is never taken from it.
+  CONSOLE_REFUSAL_BMC_SOL_BUSY = 22;
+}
+
+// What a console session carries.
+enum ConsoleKind {
+  CONSOLE_KIND_UNSPECIFIED = 0;
+  // A Linux server's serial port, over its BMC's Serial over LAN: a byte stream for a terminal.
+  CONSOLE_KIND_SERIAL = 1;
+  // A Mac's screen, as Screen Sharing's RFB stream for a VNC viewer.
+  CONSOLE_KIND_SCREEN = 2;
+}
+
+// A power command to a BMC.
+enum PowerAction {
+  POWER_ACTION_UNSPECIFIED = 0;
+  // Reads the power state and sends nothing.
+  POWER_ACTION_STATUS = 1;
+  // Powers the host on.
+  POWER_ACTION_ON = 2;
+  // Powers the host off at once.
+  POWER_ACTION_OFF = 3;
+  // Asks the host's system to shut down (an ACPI power button press).
+  POWER_ACTION_SOFT = 4;
+  // Powers the host off and on again; to a host that is off, `on` is sent instead.
+  POWER_ACTION_CYCLE = 5;
+  // Resets the host without powering it off.
+  POWER_ACTION_RESET = 6;
+}
+
+// A host's power as its BMC reports it.
+enum PowerState {
+  POWER_STATE_UNSPECIFIED = 0;
+  POWER_STATE_ON = 1;
+  POWER_STATE_OFF = 2;
+}
+
+// A device a BMC can boot its host from.
+enum BootDevice {
+  BOOT_DEVICE_UNSPECIFIED = 0;
+  // The network (PXE).
+  BOOT_DEVICE_PXE = 1;
+  // The first disk.
+  BOOT_DEVICE_DISK = 2;
+  // The firmware's setup screen.
+  BOOT_DEVICE_BIOS = 3;
+}
+
+message OpenConsoleRequest {
+  // The host's id.
+  string host_id = 1;
+  // Why the console is opened; the audit line carries it.
+  string reason = 2;
+}
+
+message OpenConsoleResponse {
+  // What the session carries: `serial` for a Linux server, `screen` for a Mac.
+  ConsoleKind kind = 1;
+  // The session's id, 64 lower-case hex characters, which the WebSocket's path names. It is not
+  // a credential: attaching also takes the credential of the operator name that opened it (its
+  // bearer, or a browser's sign-in), once.
+  string session = 2;
+  // How long the session waits to be attached, in seconds.
+  uint64 expires_in_secs = 3;
+  // For a serial session, how many seconds without a byte from the host the page waits before it
+  // says no output came yet (the coordinator's `--console-quiet-s`); 0 for a screen session.
+  uint64 quiet_secs = 4;
+  // The address the attach dials first, as known when the session was opened. Absent from a
+  // coordinator that predates it.
+  optional ConsoleAddress address = 5;
+}
+
+// Where the coordinator found the address of a host's device.
+enum ConsoleAddressSource {
+  CONSOLE_ADDRESS_SOURCE_UNSPECIFIED = 0;
+  // The console targets file names it for the device's MAC: it overrides every other source.
+  CONSOLE_ADDRESS_SOURCE_TARGETS_FILE = 1;
+  // The host's daemon reported it in a heartbeat (`hostkeeper.agent.v1.HeartbeatRequest.bmc`).
+  CONSOLE_ADDRESS_SOURCE_HEARTBEAT = 2;
+  // The coordinator's own neighbour (ARP) table holds an entry for the device's MAC.
+  CONSOLE_ADDRESS_SOURCE_NEIGHBOR_TABLE = 3;
+}
+
+// An address the coordinator dials for a host's device, and where it found it. Before every
+// command to a BMC, the coordinator checks at the address that the BMC has the host's BMC MAC.
+message ConsoleAddress {
+  // An IP address or a DNS name, with no port.
+  string address = 1;
+  // Where it was found.
+  ConsoleAddressSource source = 2;
+  // A heartbeat's address while the host is not heartbeating (no heartbeat in the last 45
+  // seconds that this coordinator knows of): the BMC's DHCP lease may have moved since, so it
+  // may be stale. Then the neighbour table is tried after it. Always false for another source.
+  bool stale = 3;
+  // For a heartbeat's address, when the coordinator first accepted a heartbeat that reported
+  // it, in unix seconds; 0 for another source.
+  uint64 reported_unix = 4;
+}
+
+message ConsolePowerRequest {
+  // The host's id.
+  string host_id = 1;
+  // The command.
+  PowerAction action = 2;
+  // Why; the audit line carries it.
+  string reason = 3;
+}
+
+message ConsolePowerResponse {
+  // The power state the BMC reported before the command was sent; for `status`, the answer.
+  PowerState state = 1;
+  // The command sent: the one asked for, but `on` for `cycle` of a host that was off, and
+  // `status` when nothing was sent.
+  PowerAction sent = 2;
+  // The address of the BMC that answered. Absent from a coordinator that predates it.
+  optional ConsoleAddress address = 3;
+}
+
+message SetBootDeviceRequest {
+  // The host's id.
+  string host_id = 1;
+  // The device to boot from.
+  BootDevice device = 2;
+  // Every boot from now on, not only the next one.
+  bool persistent = 3;
+  // Boot in UEFI mode; a UEFI board may ignore the device otherwise.
+  bool efi = 4;
+  // Why; the audit line carries it.
+  string reason = 5;
+}
+
+message SetBootDeviceResponse {
+  // The boot flags the BMC holds after the command, read back from it.
+  BootDevice device = 1;
+  bool persistent = 2;
+  bool efi = 3;
+  // The address of the BMC that answered. Absent from a coordinator that predates it.
+  optional ConsoleAddress address = 4;
+}
+
+// An open console session as `List` tells it. The session's id is never in it.
+message ConsoleSession {
+  // The host's id.
+  string host_id = 1;
+  // What the session carries.
+  ConsoleKind kind = 2;
+  // The operator name that opened it, which the audit's `by` is.
+  string opened_by = 3;
+  // When it was opened, in unix seconds.
+  uint64 opened_unix = 4;
+  // Whether a WebSocket is attached to it.
+  bool attached = 5;
+  // The reason it was opened with.
+  string reason = 6;
+}
+
+message ListConsoleSessionsRequest {}
+
+message ListConsoleSessionsResponse {
+  // The open sessions, by host id.
+  repeated ConsoleSession sessions = 1;
+}
+
+message CloseConsoleRequest {
+  // The host whose session ends.
+  string host_id = 1;
+}
+
+message CloseConsoleResponse {}
+
+message ProbeConsoleRequest {
+  // The host's id.
+  string host_id = 1;
+  // Why the console is probed; the `console_open` line carries it.
+  string reason = 2;
+  // The longest the read lasts, in seconds: 1 to 900 (`invalid_request` otherwise). `hk` waits
+  // this long beyond its own timeout.
+  uint32 wait_secs = 3;
+  // The read ends once this many seconds pass with no byte from the host, from its start or from
+  // the last byte; 0 is the coordinator's `--console-quiet-s`.
+  uint32 quiet_secs = 4;
+  // The read ends once this many bytes came: 0 is 65536; above 1048576 is `invalid_request`.
+  uint32 max_bytes = 5;
+}
+
+// What a probe recognized in what the host sent.
+enum ConsoleProbeClass {
+  CONSOLE_PROBE_CLASS_UNSPECIFIED = 0;
+  // No byte came before the read ended. Whether a key would bring a prompt is not known: the
+  // probe sends none.
+  CONSOLE_PROBE_CLASS_SILENT = 1;
+  // A line whose text, once trimmed, ends with `login:`.
+  CONSOLE_PROBE_CLASS_LOGIN_PROMPT = 2;
+  // A line of the kernel's log: `[` and its seconds since boot, as `[    1.234567]`.
+  CONSOLE_PROBE_CLASS_KERNEL_OUTPUT = 3;
+  // Text before the kernel's first line (`[    0.000000]`): the firmware's or GRUB's. Claimed
+  // only when that first line was read (`from_boot`); text before a later kernel line, or with
+  // no kernel line at all, is not claimed as the firmware's.
+  CONSOLE_PROBE_CLASS_FIRMWARE_OUTPUT = 4;
+  // Bytes came, and none of them is of another class: found only when no other class is.
+  CONSOLE_PROBE_CLASS_OTHER_OUTPUT = 5;
+}
+
+// A class a probe saw, and the line that showed it.
+message ConsoleProbeFinding {
+  ConsoleProbeClass class = 1;
+  // The first line that showed it, its escape sequences and control characters taken out and
+  // cut to 160 bytes; empty for `silent`.
+  string evidence = 2;
+}
+
+// Why a probe's read ended.
+enum ConsoleProbeEnd {
+  CONSOLE_PROBE_END_UNSPECIFIED = 0;
+  // `max_bytes` came.
+  CONSOLE_PROBE_END_MAX_BYTES = 1;
+  // `quiet_secs` passed with no byte.
+  CONSOLE_PROBE_END_QUIET = 2;
+  // `wait_secs` passed.
+  CONSOLE_PROBE_END_WAIT = 3;
+  // The stream ended first: the host's console ended, another session took the payload, an
+  // operator closed the session, or the coordinator is stopping; `cause` says which.
+  CONSOLE_PROBE_END_STREAM_ENDED = 4;
+}
+
+message ProbeConsoleResponse {
+  // Each class seen, in the order found; `silent` alone when no byte came. A `firmware_output` is
+  // found when the kernel's first line confirms it, just before that line's `kernel_output`.
+  repeated ConsoleProbeFinding findings = 1;
+  // The kernel's first line (`[    0.000000]`) was read: the read began before the kernel
+  // started, so a `firmware_output` finding, or none, says what the firmware and GRUB sent.
+  bool from_boot = 2;
+  // The bytes read from the host, the BMC tool's banner not counted.
+  uint64 bytes_read = 3;
+  // Why the read ended.
+  ConsoleProbeEnd ended = 4;
+  // The cause of the session's `console_close` line.
+  string cause = 5;
+}

@@ -149,7 +149,9 @@ impl Farm {
         self.world
             .coordinator()
             .set_desired_in(
-                &Setter::Operator("operator"),
+                &Setter::Operator(&crate::tokens::Operator::named(
+                    "operator".parse().expect("a token name"),
+                )),
                 body.to_string().as_bytes(),
                 &WriteAsk::default(),
                 targets,
@@ -231,6 +233,7 @@ pub(crate) fn failed(package: &str, running: &str, target: &str, phase: Phase) -
         reason: None,
         order_id: None,
         order_try: None,
+        detail: None,
     });
     one
 }

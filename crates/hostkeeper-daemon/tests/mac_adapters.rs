@@ -18,10 +18,11 @@ use hostkeeper_daemon::mac::{
     CODESIGN, HostIoreg, HostMacVerify, IOREG, NOT_SIGNED, QUARANTINE_ATTRIBUTE, TOOL_DEADLINE,
     codesign_args, codesign_verdict, has_attribute, ioreg_args,
 };
+use hostkeeper_daemon::own_job::OwnJobCheck;
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims, ManagedFile};
 use hostkeeper_install::mac_verify::{MacVerify, SignatureVerdict, VerifyIoError};
-use hostkeeper_launchd::launchctl::print_args;
+use hostkeeper_launchd::launchctl::{print_args, print_disabled_args};
 use hostkeeper_launchd::{
     FakeLaunchctl, Label, LaunchctlError, LaunchctlOutput, PidInfo, PidInfoError, Platform,
     PlatformKind,
@@ -414,12 +415,18 @@ fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
     launchctl.always(&printed, Ok(running(label, 300)));
     let print = FakeLaunchctl::new();
     print.always(&printed, Ok(running(label, 301)));
+    let own_job = FakeLaunchctl::new();
+    own_job.always(
+        &print_disabled_args(),
+        Ok(LaunchctlOutput::success("disabled services = {\n}\n")),
+    );
 
     let adapters = Adapters::macos(
         &platform,
         Arc::new(Unwired),
         launchctl.clone(),
         print.clone(),
+        own_job.clone(),
         FakePids,
     )
     .expect("the macOS set");
@@ -431,6 +438,12 @@ fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
     let state = adapters.manager.unit_state(label).expect("a state");
     assert_eq!(state.active, ActiveState::Active);
     assert_eq!(state.main_pid, Some(301));
+    assert_eq!(print.calls(), std::slice::from_ref(&printed));
+    let job = adapters.own_job.as_ref().expect("the Mac's own-job check");
+    assert_eq!(job.label(), &Label::daemon());
+    assert_eq!(job.check(), OwnJobCheck::Enabled);
+    assert_eq!(own_job.calls(), vec![print_disabled_args()]);
+    assert_eq!(launchctl.calls(), std::slice::from_ref(&printed));
     assert_eq!(print.calls(), std::slice::from_ref(&printed));
     assert_eq!(
         adapters.process.identity(9),
@@ -472,6 +485,7 @@ fn a_macos_set_that_cannot_be_built_stops_the_start() {
         Arc::new(Unwired),
         FakeLaunchctl::new(),
         FakeLaunchctl::new(),
+        FakeLaunchctl::new(),
         FakePids,
     )
     .err()
@@ -507,6 +521,7 @@ fn the_linux_adapters_are_the_systemd_set() {
     let adapters = Adapters::for_platform(&Platform::linux()).expect("the Linux set");
     assert_eq!(adapters.kind, PlatformKind::Linux);
     assert_eq!(adapters.unit_dir, Path::new("/etc/systemd/system"));
+    assert!(adapters.own_job.is_none(), "no launchd job to check");
 }
 
 /// Catches a run directory that is not the host platform's: the flags' settings name where the
@@ -514,7 +529,9 @@ fn the_linux_adapters_are_the_systemd_set() {
 /// directory is under.
 #[test]
 fn the_run_directory_of_the_settings_is_the_host_platforms() {
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
+        panic!("`hostkeeper daemon` is the daemon verb");
+    };
     assert_eq!(flags.settings().run_dir, Platform::host().run_dir);
 }
 

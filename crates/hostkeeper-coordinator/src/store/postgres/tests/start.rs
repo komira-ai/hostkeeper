@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use super::{AT, SPENT_NOW, TestDatabase, off_runtime, unix};
+use super::{AT, ID, SPENT_NOW, TestDatabase, off_runtime, unix};
 use crate::audit_file::UnixClock;
 use crate::ops::{AUDIT_RING, OpsState};
 use crate::store::conformance_tests::{desired_at, lines, normal, rich_ops, rich_verdicts};
@@ -78,17 +78,30 @@ fn a_database_with_rows_this_build_cannot_read_refuses_the_start() {
 fn a_start_reads_its_clock_and_loads_the_spent_ids_still_standing() {
     let db = TestDatabase::new();
     let far: UnixClock = Arc::new(|| u64::MAX);
-    let error = Postgres::open_with(&db.dsn(), TIMEOUTS, "far", &far, Arc::new(|| SPENT_NOW))
-        .err()
-        .expect("the clock is refused");
+    let error = Postgres::open_with(
+        &db.dsn(),
+        TIMEOUTS,
+        &super::options(),
+        "far",
+        &far,
+        Arc::new(|| SPENT_NOW),
+    )
+    .err()
+    .expect("the clock is refused");
     assert!(matches!(error, DatabaseError::Load(_)));
     assert_eq!(
         error.to_string(),
         "database:counter: 18446744073709551615 is above the largest counter the database keeps"
     );
 
-    let (store, _) = Postgres::open(&db.dsn(), "near", &unix(), Arc::new(|| SPENT_NOW))
-        .expect("the store opens");
+    let (store, _) = Postgres::open(
+        &db.dsn(),
+        &super::options(),
+        "near",
+        &unix(),
+        Arc::new(|| SPENT_NOW),
+    )
+    .expect("the store opens");
     store.spend("past", SPENT_NOW, 1).expect("an id");
     store.spend("standing", SPENT_NOW + 1, 1).expect("an id");
     store.stop();
@@ -187,7 +200,7 @@ fn read(session: &mut Session, table: &Table) -> Result<Rows, String> {
 
 fn landed(commit: &Commit<'_>) -> Landing {
     Landing {
-        number: 1,
+        id: ID.to_owned(),
         landed: true,
         change: Some(Owned::of(commit)),
     }
@@ -325,7 +338,7 @@ fn verdicts_that_landed_are_laid_over_memory() {
 #[test]
 fn a_landing_without_its_change_gives_memory_nothing() {
     let landing = Landing {
-        number: 2,
+        id: ID.to_owned(),
         landed: true,
         change: None,
     };

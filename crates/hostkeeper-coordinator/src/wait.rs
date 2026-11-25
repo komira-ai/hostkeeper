@@ -9,8 +9,9 @@
 //! `hostkeeper ci` of older releases makes it), `CONVERGED` when the state is converged, and
 //! `HALTED` when the service is halted; `BLOCKED` and `IN_PROGRESS` keep it waiting. At
 //! `wait_secs` it is read once more and answered with what that read says, `DEADLINE` when it is
-//! still `BLOCKED` or `IN_PROGRESS`. A wait reads memory only and writes nothing, no audit line
-//! among it.
+//! still `BLOCKED` or `IN_PROGRESS`; so is it at the stop, once `--drain-delay-secs` is over
+//! ([`Waits::stop`]), so that no held wait keeps a stopping coordinator's connection open. A wait
+//! reads memory only and writes nothing, no audit line among it.
 //!
 //! The limits: at most [`MAX_WAIT_SECS`] a call, and at most [`MAX_WAITS`] held at once by a
 //! coordinator, which serves the operator API on its one private listener; the next is refused.
@@ -58,6 +59,8 @@ pub enum WaitRefused {
 pub(crate) struct Waits {
     /// Counts the requests answered; a held wait reads again at every count.
     changes: watch::Sender<u64>,
+    /// Whether the coordinator stops: it only moves from `false` to `true` ([`Waits::stop`]).
+    stopping: watch::Sender<bool>,
     /// One permit per held wait.
     slots: Arc<Semaphore>,
     /// Told, by a test, the state each read of a wait found when the wait goes on: a progress
@@ -70,6 +73,7 @@ impl Default for Waits {
     fn default() -> Self {
         Self {
             changes: watch::Sender::new(0),
+            stopping: watch::Sender::new(false),
             slots: Arc::new(Semaphore::new(MAX_WAITS)),
             #[cfg(test)]
             reads: std::sync::Mutex::new(None),
@@ -81,6 +85,13 @@ impl Waits {
     /// Tells every held wait to read its convergence again.
     pub(crate) fn changed(&self) {
         self.changes.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
+    /// Ends every held wait, and every wait held from now on, as its `wait_secs` would: one more
+    /// read, answered `DEADLINE` unless that read ends the wait. Called by the stop, once the
+    /// drain delay is over.
+    pub(crate) fn stop(&self) {
+        self.stopping.send_replace(true);
     }
 
     /// Tells `reads` the state each read of a wait finds when the wait goes on.
@@ -185,8 +196,8 @@ impl Coordinator {
 
     /// Waits, for at most `wait` (on tokio's clock), until a read of the convergence of the
     /// service `held` waits on ends the wait for `version` ([`outcome_of`]), and answers how it
-    /// ended with the convergence that read found. At `wait` it reads once more: `DEADLINE`
-    /// unless that read ends the wait.
+    /// ended with the convergence that read found. At `wait`, or at the stop ([`Waits::stop`]),
+    /// it reads once more: `DEADLINE` unless that read ends the wait.
     pub(crate) async fn wait_converged(
         &self,
         held: &Held<'_>,
@@ -196,6 +207,7 @@ impl Coordinator {
         let deadline = Instant::now() + wait;
         // Subscribed before the first read: a change after it is seen by the next.
         let mut changes = self.waits.changes.subscribe();
+        let mut stopping = self.waits.stopping.subscribe();
         loop {
             let (ended, convergence) = self.read_wait(held, version);
             if let Some(outcome) = ended {
@@ -203,9 +215,15 @@ impl Coordinator {
             }
             #[cfg(test)]
             self.waits.read(convergence.state);
+            let end = async {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => {}
+                    _ = stopping.wait_for(|stopping| *stopping) => {}
+                }
+            };
             tokio::select! {
                 Ok(()) = changes.changed() => {}
-                () = tokio::time::sleep_until(deadline) => {
+                () = end => {
                     let (ended, convergence) = self.read_wait(held, version);
                     return (ended.unwrap_or(WaitOutcome::Deadline), convergence);
                 }

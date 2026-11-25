@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="hostkeeper is two programs: the hostkeeper daemon on every host and the coordinator service. The protobuf API generates every client: the Rust client of the daemon's link, the bash command line hkctl used by operators and CI, and the JavaScript client with TypeScript declarations used by the operator UI. PXE and the MDM stack are service packages that hostkeeper installs.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-label="hostkeeper is two programs: the hostkeeper daemon on every host and the coordinator service. The protobuf API generates every client: the Rust client of the daemon's link, the command line hk used by operators and CI, and the JavaScript client with TypeScript declarations used by the operator UI. PXE and the MDM stack are service packages that hostkeeper installs.">
 <title>hostkeeper is two programs</title>
-<desc>Left, the protobuf API of hostkeeper-proto and the three clients generated from it. Middle, the coordinator, hostkeeper-coordinator serve, with its heartbeat listener, its private listener with gRPC and the JSON gateway, and the static UI. Right, hosts running hostkeeper daemon, which install service packages, among them pxe and mdm. Operators and the set-desired workflow call the JSON gateway through hkctl; the UI calls it through the generated client; daemons call the heartbeat listener through the Rust client. The daemon serves nothing on the host.</desc>
+<desc>Left, the protobuf API of hostkeeper-proto and the three clients generated from it. Middle, the coordinator, hostkeeper-coordinator serve, with its heartbeat listener, its private listener with gRPC and the JSON gateway, and the static UI. Right, hosts running hostkeeper daemon, which install service packages, among them pxe and mdm. Operators and the set-desired workflow call the JSON gateway through hk; the UI calls it through the generated client; daemons call the heartbeat listener through the Rust client. The daemon serves nothing on the host.</desc>
 <defs><marker id="two-programs-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="two-programs-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -26,8 +26,8 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="56" y="138" class="s">one descriptor set, one command table</text>
 
 <rect x="40" y="190" width="300" height="56" class="box"/>
-<text x="56" y="213" class="b">hkctl</text>
-<text x="56" y="233" class="s">bash and curl; operators and CI</text>
+<text x="56" y="213" class="b">hk</text>
+<text x="56" y="233" class="s">Rust, one binary; operators and CI</text>
 
 <rect x="40" y="270" width="300" height="56" class="box"/>
 <text x="56" y="293" class="b">ui/gen/client.js, client.d.ts</text>
@@ -82,6 +82,6 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 
 <rect x="40" y="470" width="1120" height="64" class="box"/>
 <text x="56" y="494" class="b">CI: set-desired.yml</text>
-<text x="56" y="516" class="s">verifies hkctl's download and attestation, then runs hkctl releases set-desired and hkctl releases wait-converged, each asking for its own OIDC token</text>
+<text x="56" y="516" class="s">verifies hk's download and attestation, then runs hk releases set-desired and hk releases wait-converged, each asking for its own OIDC token</text>
 <path d="M190,470 L190,246" class="ln-o" marker-end="url(#two-programs-ao)"/>
 </svg>

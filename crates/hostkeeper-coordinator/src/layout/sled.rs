@@ -541,6 +541,41 @@ impl Layout {
         Ok((next, (item, sled)))
     }
 
+    /// The layout with the place of `from` (its sled and slot) given to `to`, when `from` stands
+    /// on a sled and `to` on none; `None` when either is not so, and nothing moves. A host's
+    /// place goes to the inventory record the coordinator writes for it this way.
+    ///
+    /// # Errors
+    /// [`LayoutError`]: the result breaks a rule (`to`'s id).
+    pub fn with_place_moved(
+        &self,
+        from: &Subject,
+        to: &Subject,
+    ) -> Result<Option<Self>, LayoutError> {
+        let mut extras = self.extras();
+        if extras.items.contains_key(&to.key()) {
+            return Ok(None);
+        }
+        let Some(item) = extras.items.remove(&from.key()) else {
+            return Ok(None);
+        };
+        extras.items.insert(
+            to.key(),
+            SledItem {
+                subject: to.clone(),
+                ..item
+            },
+        );
+        Self::build(
+            extras,
+            self.name.clone(),
+            self.rows.clone(),
+            self.racks.clone(),
+            BTreeMap::new(),
+        )
+        .map(Some)
+    }
+
     /// The layout without the placement of `subject`; an implicit sled it leaves empty goes too.
     ///
     /// # Errors

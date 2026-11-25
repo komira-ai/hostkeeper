@@ -1,0 +1,37 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
+# declared (a unit sees its own src/, tests/ or build.rs alone). build.rs compiles the vendored REAPI protos of proto/
+# (mac-farm), which the hygiene test's pin list reads too. The fixture binaries live under tests/bin; the release code and its tests include the workflow, docs and packaging they are held to; the farm-build tests include the recorded farm logs of src/farm/cuts.
+cargo_package(
+    path = ".",
+    extra_srcs = [
+        "proto",
+        "src/coordinator_update/https_tests.rs",
+        "src/farm/cuts",
+        "src/testdir.rs",
+        "tests/bin",
+        "tests/release",
+        "//:.github/workflows/release.yml",
+        "//:docs/deploy/verify-a-release.md",
+        "//:packaging/container/Dockerfile",
+        "//:packaging/macos-bootstrap",
+        "//:packaging/netboot/pins.toml",
+        "//:packaging/pxe/deb/pxe.service",
+        "//crates/hostkeeper-ui-tests:vendor.sha256",
+        "//examples/hello:package",
+    ],
+)
+
+# Read by other members (their extra_srcs); exported by reference, so each stays at its path.
+[
+    export_file(
+        name = path,
+        src = path,
+        mode = "reference",
+        visibility = ["PUBLIC"],
+    )
+    for path in [
+        "tests/workflows/yaml.rs",
+    ]
+]

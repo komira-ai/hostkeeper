@@ -1,7 +1,8 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Repositories, HostGroups, Users, ApiTokens}` on the private one (the `Mdm` service is no longer
-//! served: a call of it is `UNIMPLEMENTED`),
+//! Repositories, HostGroups, Users, ApiTokens, Maintenance}` on the private one (the `Mdm` service
+//! is no longer served: a call of it is `UNIMPLEMENTED`; a method of an operator service with no
+//! handler yet is listed in [`PENDING`], which is empty now),
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -43,15 +44,19 @@ use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServ
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::api_tokens_server::ApiTokensServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
+use hostkeeper_proto::hostkeeper::operator::v1::console_server::ConsoleServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::layout_server::LayoutServer;
+use hostkeeper_proto::hostkeeper::operator::v1::maintenance_server::MaintenanceServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::ssh_server::SshServer;
 use hostkeeper_proto::hostkeeper::operator::v1::users_server::UsersServer;
+use hostkeeper_proto::hostkeeper::operator::v1::xcode_server::XcodeServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
 use hyper::body::Body;
@@ -67,19 +72,24 @@ use self::operator::{
     ServicesService,
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
+use self::operator_console::ConsoleService;
 use self::operator_host_groups::HostGroupsService;
 use self::operator_layout::LayoutService;
+use self::operator_maintenance::MaintenanceService;
 use self::operator_repositories::RepositoriesService;
+use self::operator_ssh::SshService;
+use self::operator_xcode::XcodeService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
-    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface,
-    bearer_in, beat_caller, error, handle,
+    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES,
+    MAX_TUNNEL_FRAME_BYTES, Peer, Surface, bearer_in, beat_caller, error, handle,
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
 use crate::repository_serve::{PREFIX, serve};
 use crate::service::{CiRefused, Coordinator, MAX_BEARER_BYTES};
+use crate::tokens::Operator;
 use crate::wait::CallLimit;
 
 pub(crate) mod agent;
@@ -87,9 +97,13 @@ mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
+mod operator_console;
 mod operator_host_groups;
 mod operator_layout;
+mod operator_maintenance;
 mod operator_repositories;
+mod operator_ssh;
+mod operator_xcode;
 pub(crate) mod refusal;
 pub(crate) mod report;
 
@@ -102,7 +116,8 @@ pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
 /// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. A method
-/// added to a proto is listed here until its handler lands. None is.
+/// added to a proto is listed here until its handler lands, and the router answers it before it
+/// reads any credential ([`admit_via`]). Every method has its handler now: the list is empty.
 pub const PENDING: &[&str] = &[];
 
 /// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response or the
@@ -135,6 +150,14 @@ const USERS: &str = "hostkeeper.operator.v1.Users";
 const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 /// The full name of the operator API's `Layout`.
 const LAYOUT: &str = "hostkeeper.operator.v1.Layout";
+/// The full name of the operator API's `Ssh`.
+const SSH: &str = "hostkeeper.operator.v1.Ssh";
+/// The full name of the operator API's `Console`.
+const CONSOLE: &str = "hostkeeper.operator.v1.Console";
+/// The full name of the operator API's `Xcode`.
+const XCODE: &str = "hostkeeper.operator.v1.Xcode";
+/// The full name of the operator API's `Maintenance`.
+const MAINTENANCE: &str = "hostkeeper.operator.v1.Maintenance";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -142,6 +165,8 @@ const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 const REPOSITORIES_PUT: &str = "/hostkeeper.operator.v1.Repositories/Put";
 /// The path of `HostGroups.Put`, which takes the operator's token and a body of up to 64 KiB.
 const HOST_GROUPS_PUT: &str = "/hostkeeper.operator.v1.HostGroups/Put";
+/// The path of `Ssh.Tunnel`, whose frames carry up to 16 KiB of data.
+const SSH_TUNNEL: &str = "/hostkeeper.operator.v1.Ssh/Tunnel";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
@@ -275,7 +300,8 @@ pub(crate) async fn admit(
 /// with `password_change_required` while the session's user must choose a new password. A
 /// request with an `Authorization` header never has its cookie read, and a cookie that names no
 /// live session is no credential. A method of `session_only` refuses a bearer
-/// `PERMISSION_DENIED` `session_required`.
+/// `PERMISSION_DENIED` `session_required`. A method of [`PENDING`] is `UNIMPLEMENTED`, with no
+/// message, before anything else is read.
 ///
 /// # Errors
 /// As [`admit`], and the two refusals of a session's call.
@@ -288,13 +314,16 @@ pub(crate) async fn admit_via(
     transport: Transport<'_>,
     session_only: &[&str],
 ) -> Result<Admitted, Status> {
+    if PENDING.contains(&path) {
+        return Err(Status::unimplemented(""));
+    }
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
         (
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE | XCODE | MAINTENANCE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -370,7 +399,7 @@ fn session_call(
         .parse()
         .ok()
         .map(|name| Admitted::Operator {
-            caller: Caller::Operator(name),
+            caller: Caller::Operator(Operator::named(name)),
         }))
 }
 
@@ -412,12 +441,15 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// [`MAX_OPERATOR_BYTES`] for every other method.
+/// [`MAX_TUNNEL_FRAME_BYTES`] for each frame of `Ssh.Tunnel`, [`MAX_OPERATOR_BYTES`] for every
+/// other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
     } else if path == HOST_GROUPS_PUT {
         MAX_HOST_GROUPS_PUT_BYTES
+    } else if path == SSH_TUNNEL {
+        MAX_TUNNEL_FRAME_BYTES
     } else {
         MAX_OPERATOR_BYTES
     }
@@ -426,8 +458,8 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`
-/// ([`operator_limit`]), 4 KiB for every other operator's call. A path of a
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 16 KiB and 64 bytes for each
+/// frame of `Ssh.Tunnel` ([`operator_limit`]), 4 KiB for every other operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
@@ -512,6 +544,26 @@ where
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
+        Some(SSH) => {
+            let server = SshServer::new(SshService::new(coordinator))
+                .max_decoding_message_size(operator_limit(path));
+            call(server, request).await
+        }
+        Some(CONSOLE) => {
+            let server = ConsoleServer::new(ConsoleService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(XCODE) => {
+            let server = XcodeServer::new(XcodeService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(MAINTENANCE) => {
+            let server = MaintenanceServer::new(MaintenanceService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
         _ => Status::unimplemented("").into_http(),
     }
 }
@@ -569,8 +621,13 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 /// private listener, a `POST` of a path that names a method of the operator API is the
 /// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
 /// heartbeat listener a path under `/repositories/` is a private repository's
-/// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
-/// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
+/// ([`crate::repository_serve`]), whose body is streamed. With an Xcode store (`--xcode-dir`), a
+/// path under `/v1/xcode/` is the store's: an operator's upload on the private listener
+/// ([`crate::xcode_put`]) and a Mac's read on the heartbeat listener ([`crate::xcode_get`]), each
+/// streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
+/// bad request, or a deadline exceeded for gRPC. Before it is answered, the parts of the state
+/// another coordinator changed are read again ([`Coordinator::refresh_caches`]); once it is
+/// answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
@@ -583,6 +640,7 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
+    coordinator.refresh_caches();
     let answered = if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
         grpc(coordinator, surface, peer, request, patience)
             .await
@@ -596,6 +654,19 @@ where
         answered.map(Either::Left)
     } else if surface == Surface::Heartbeat && request.uri().path().starts_with(PREFIX) {
         serve(coordinator, peer, request).await
+    } else if let Some(store) = coordinator.xcode.store.clone()
+        && request.uri().path().starts_with(crate::xcode_store::PREFIX)
+    {
+        match surface {
+            Surface::Control => {
+                crate::xcode_put::answer(coordinator, &store, peer, request, patience)
+                    .await
+                    .map(Either::Left)
+            }
+            Surface::Heartbeat => {
+                crate::xcode_get::answer(coordinator, &store, peer, request).await
+            }
+        }
     } else {
         handle(coordinator, surface, peer, request, patience)
             .await

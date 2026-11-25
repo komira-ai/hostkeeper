@@ -5,8 +5,8 @@
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
 //!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>` and
-//!   `hostkeeper-coordinator-update X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
-//!   the commit;
+//!   `hostkeeper-coordinator-update X.Y.Z+<12 hex>` and `hk X.Y.Z+<12 hex>` ([`stamp_of`]), and
+//!   [`RELEASE_COMMIT`], the build-time input that carries the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`], on a hosted runner;
 //! - the asset names of a release ([`asset_names`], the one function that lists them; the
@@ -17,13 +17,12 @@
 //! and a release missing one is refused. macos-arm64 also ships the
 //! installer pkg of a Mac's first install ([`installer_name`]); the two Linux platforms also ship
 //! the coordinator ([`COORDINATOR`]) and the coordinator
-//! updater's ([`COORDINATOR_UPDATE`]). A release carries four
+//! updater's ([`COORDINATOR_UPDATE`]); all three ship the operator's command line ([`HK`]). A release carries four
 //! kinds of package ([`Package`]): hostkeeper's own, `hello`, the example service of
 //! `examples/hello`, hello's failing build, and `pxe`, the boot server of network install, a `.deb` for the
 //! two Linux platforms; each is a native package ([`Package::native_name`]) and the
 //! failing build has none. It also carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
-//! platforms, and `hkctl-<version>` ([`hkctl_name`]), the command line, one script for every
-//! platform.
+//! platforms. The command line is a tarball `hk-<version>-<platform>.tar.gz` of the program `hk`, its one member.
 
 use std::fmt;
 use std::str::FromStr;
@@ -48,16 +47,51 @@ pub(crate) const ARTIFACTS_WORKFLOW: &str = "artifacts.yml";
 /// The workflow file that lints and tests.
 pub(crate) const CI_WORKFLOW: &str = "ci.yml";
 
-/// The workflow file that runs the privileged tests (real systemd, root).
+/// The workflow file that runs the privileged tests (real systemd, root). No release waits for
+/// it: a red run of it on [`MAIN`] opens a `RELEASE-RED` issue (`release red`).
 pub(crate) const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
 /// The workflow file that releases (`release.yml`), whose runs `release plan` reads to resume a
-/// release whose run did not succeed.
+/// release whose deploy did not succeed.
 pub(crate) const RELEASE_WORKFLOW: &str = "release.yml";
 
-/// The three workflows a commit needs a successful push run of on [`MAIN`] to be released.
-pub(crate) const REQUIRED_WORKFLOWS: [&str; 3] =
-    [CI_WORKFLOW, PRIVILEGED_WORKFLOW, ARTIFACTS_WORKFLOW];
+/// The two workflows a commit needs a successful push run of on [`MAIN`] to be released: the
+/// unit tests and the build. The slower suites (the privileged tests, the Mac's beta stage, the
+/// package channels' install checks) run beside or after the deploy and hold no release.
+pub(crate) const REQUIRED_WORKFLOWS: [&str; 2] = [CI_WORKFLOW, ARTIFACTS_WORKFLOW];
+
+/// The jobs of `release.yml` that deploy a release: the files checked and published, the
+/// coordinator's image pushed and deployed, the package channels the hosts install from, and the
+/// desired version set. A release run counts as failed for `release plan` (which releases it
+/// again) only when one of these did not succeed; a failure of any other job of the run (the
+/// Mac's beta stage, the install checks, the promotion to stable) is reported by `release red`
+/// and releases nothing again. A job is named here by the name before its matrix values
+/// (`publish (0.1.2, v0.1.2, <commit>)`) or its called workflow's job (`cp-deploy / deploy`).
+/// They are exactly `set-desired` and every job it waits for, at any depth (a test reads
+/// `release.yml` and holds the two the same).
+pub(crate) const DEPLOY_JOBS: [&str; 21] = [
+    "plan",
+    "verify",
+    "publish",
+    "image",
+    "targets",
+    "newest",
+    "cp-deploy-digest",
+    "cp-deploy",
+    "coordinator",
+    "testing-apt-read",
+    "testing-apt-index",
+    "testing-apt-write",
+    "testing-apt-read-2",
+    "testing-apt-index-2",
+    "testing-apt-write-2",
+    "testing-apt-read-3",
+    "testing-apt-index-3",
+    "testing-apt-write-3",
+    "testing-pkg-upload",
+    "no-downgrade",
+    "set-desired",
+];
 
 /// The name of the build-time input that carries the full commit into a shipped binary, which
 /// prints its first [`SHORT_COMMIT`] digits in [`stamp_string`]. The release notes name it.
@@ -78,6 +112,11 @@ pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 /// tarball with its SBOM.
 pub(crate) const COORDINATOR_UPDATE: &str = "hostkeeper-coordinator-update";
 
+/// The asset stem of the operator's command line, and the name of its binary: `hk`, the command
+/// line of the coordinator with the SSH tunnel built in. Released for every platform as a
+/// tarball with its SBOM; the tarball holds the one file `hk`.
+pub(crate) const HK: &str = "hk";
+
 /// The name of the boot server's service package (docs/design/two-programs.md section 6.1): its
 /// package name and its program `pxe`, which prints `pxe X.Y.Z` for `--version` (no commit
 /// stamp). Built for both Linux platforms, as a `.deb` alone.
@@ -88,18 +127,13 @@ pub(crate) const PXE_SERVICE: &str = "pxe";
 /// coordinator's `serve` (`hostkeeper_coordinator::config::DEFAULT_UI_DIR`).
 pub(crate) const IMAGE_UI_DIR: &str = "/usr/share/hostkeeper-coordinator/ui";
 
-/// The command line's program name and the stem of its asset, `hkctl-<version>`: one bash
-/// script for every platform, which prints `hkctl X.Y.Z+<12 hex>` for `--version`
-/// (`release hkctl`).
-pub(crate) const HKCTL: &str = hostkeeper_hkctl::PROGRAM;
-
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
-pub(crate) const PROGRAMS: [&str; 3] = [PROGRAM, COORDINATOR, COORDINATOR_UPDATE];
+pub(crate) const PROGRAMS: [&str; 4] = [PROGRAM, COORDINATOR, COORDINATOR_UPDATE, HK];
 
 /// The binaries `release check-binary` holds to their stamp ([`stamp_of`]): the shipped binaries
 /// of [`PROGRAMS`].
-pub(crate) const STAMPED: [&str; 3] = PROGRAMS;
+pub(crate) const STAMPED: [&str; 4] = PROGRAMS;
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
@@ -343,7 +377,7 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
 
 /// The text the shipped binary `program` (one of [`STAMPED`]) prints for `--version`:
 /// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the coordinator updater's
-/// `hostkeeper-coordinator-update X.Y.Z+<12 hex>`.
+/// `hostkeeper-coordinator-update X.Y.Z+<12 hex>`, the command line's `hk X.Y.Z+<12 hex>`.
 pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
     format!("{program} {version}+{}", commit.short())
 }
@@ -564,11 +598,6 @@ pub(crate) fn bootstrap_installer_name(version: &Version) -> String {
     )
 }
 
-/// The file name of the command line of `version`, `hkctl-<v>`.
-pub(crate) fn hkctl_name(version: &Version) -> String {
-    format!("{HKCTL}-{version}")
-}
-
 /// The file name of the bundle of the asset `name`.
 pub(crate) fn bundle_of(name: &str) -> String {
     format!("{name}{BUNDLE_SUFFIX}")
@@ -585,6 +614,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// - `hostkeeper-<v>-<p>.tar.gz`, the binary;
 /// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
+/// - `hk-<v>-<p>.tar.gz`, the operator's command line (the one file `hk`), and
+///   `hk-<v>-<p>.cdx.json`, its SBOM;
 ///
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
 ///
@@ -606,20 +637,12 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// `pxe_<v>_<deb>.deb` on each Linux platform (attested);
 /// hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
-/// the bundle of each binary tarball (the three programs'), Linux package, installer, native
+/// the bundle of each binary tarball (the four programs'), Linux package, installer, native
 /// package and image; when both Linux platforms are given, once, the coordinator's image index
 /// `hostkeeper-coordinator-<v>.image.json` ([`super::image_index`]) and its bundle; and once,
-/// [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>` (the command line,
-/// [`hkctl_name`]) and its bundle, and `SHA256SUMS`.
+/// [`NETBOOT`] (the boot sets of network install) and its bundle, and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
-    let hkctl = hkctl_name(version);
-    let mut names = vec![
-        SUMS.to_owned(),
-        NETBOOT.to_owned(),
-        bundle_of(NETBOOT),
-        bundle_of(&hkctl),
-        hkctl,
-    ];
+    let mut names = vec![SUMS.to_owned(), NETBOOT.to_owned(), bundle_of(NETBOOT)];
     let linux = [Platform::LinuxX86_64, Platform::LinuxArm64];
     if linux.iter().all(|p| platforms.contains(p)) {
         let index = super::image_index::index_name(version);
@@ -628,12 +651,16 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
     }
     for &platform in platforms {
         let p = platform.name();
-        let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz")];
+        let mut attested = vec![
+            format!("{PROGRAM}-{version}-{p}.tar.gz"),
+            format!("{HK}-{version}-{p}.tar.gz"),
+        ];
         // hostkeeper's native packages are its `.deb` and its installer, listed below.
         for kind in Package::ALL.iter().filter(|k| **k != Package::Hostkeeper) {
             attested.extend(kind.native_name(version, platform));
         }
         names.push(format!("{PROGRAM}-{version}-{p}.cdx.json"));
+        names.push(format!("{HK}-{version}-{p}.cdx.json"));
         if let Some((deb, rpm)) = platform.linux_arches() {
             attested.extend([
                 format!("{COORDINATOR}-{version}-{p}.tar.gz"),

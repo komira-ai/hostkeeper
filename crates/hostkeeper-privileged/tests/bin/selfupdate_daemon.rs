@@ -144,7 +144,9 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    let Command::Daemon(flags) = cli.command;
+    let Command::Daemon(flags) = cli.command else {
+        return usage("`daemon` is the only verb of this program");
+    };
     daemon_verb(&fixture, &flags)
 }
 
@@ -357,6 +359,8 @@ fn run_daemon(
             files.pki = dir.join("pki");
         }
         let mut ports: Ports = cli::host_ports(&config, &settings, &files, own, adapters)?;
+        // The fixture's daemon is not the host's own job: it never enables `dev.hostkeeper.hostkeeper`.
+        ports.own_job = None;
         let mut repository = (*ports.repository).clone();
         repository.dirs.root = dir.join("root");
         #[cfg(target_os = "macos")]
@@ -386,13 +390,22 @@ fn run_daemon(
         );
         let started = start::startup_notifying(&settings, ports, own, notifier.as_ref())?;
         let links = if coordinator_link {
-            cli::host_links(
+            let mut links = cli::host_links(
                 started.daemon(),
                 &files,
                 flags.link.heartbeat_secs,
                 platform.kind,
+                flags.maintenance_linux_scope,
+                hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::from_flag(
+                    flags.maintenance_macos_major,
+                ),
                 watchdog,
-            )
+            );
+            // The shipped loops keep the host identity copy under the real
+            // /var/lib/hostkeeper/identity and make its group with the real group tool; this
+            // fixture's host must not.
+            links.identity = None;
+            links
         } else {
             file_links(
                 started.daemon(),
@@ -438,9 +451,17 @@ fn file_links(
         renewal: hostkeeper_daemon::links::RenewalState::default(),
         watchdog,
         console: None,
+        identity: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        prerequisites: None,
+        maintenance: None,
         period,
         dispatch: Arc::new(ThreadDispatch),
         stop,
+        bmc: None,
+        serial_console: None,
     }
 }
 

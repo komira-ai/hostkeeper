@@ -16,15 +16,17 @@ default-run = "xtask"
 base64.workspace = true
 clap.workspace = true
 flate2.workspace = true
+# `mac-farm`: its uploads in flight at once, and the messages of a streamed upload.
+futures.workspace = true
 hex.workspace = true
 # The platforms and the service grammar of `release targets`, and the daemon config's signer
 # type of the release contract. The packaging test (tests/packaging) also loads the config
 # template with the daemon config's loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
-# The release asset `hkctl-<version>` (`release hkctl`): the script the emitter makes from the
-# command table of the protos. The operator docs' test (tests/enrollment_doc.rs) reads hkctl's
-# global flags from its docs/cli.md text, its command table, and the protos' descriptors.
-hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
+# The operator docs' test (tests/enrollment_doc.rs) reads hk's global flags from its docs/cli.md
+# text, its command table, and the protos' descriptors; the workflow lint reads which commands hk
+# serves.
+hostkeeper-hk = { path = "../hostkeeper-hk" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The checks of a release's targets and their manifests (`release targets`), the coordinator's own
 # and the daemon's for an `apt` entry, run on the entries before CI sends them.
@@ -57,17 +59,32 @@ plist.workspace = true
 # their proto3 canonical JSON through the descriptors (`serde`), as the coordinator reads them.
 prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
+# `mac-farm`: an Action's timeout is a protobuf Duration, and an operation's metadata and
+# response are `Any`s.
+prost-types.workspace = true
 serde.workspace = true
 # The JSON `gh` prints: workflow runs, issues, releases and verified attestations.
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
+# `mac-farm`: the runtime its calls to the farm run on.
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+# `mac-farm`: the farm's REAPI services, over TLS with the system's roots when the farm serves
+# TLS; the generated clients' codec.
+tonic = { workspace = true, features = ["channel", "tls-ring", "tls-native-roots"] }
+tonic-prost.workspace = true
 # The OIDC token request of `channels assume` (the runner's, over HTTPS); the release list and
 # assets `hostkeeper-coordinator-update` reads from GitHub's public URLs.
 ureq.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
+
+# The REAPI protos `mac-farm` speaks (proto/third_party, pinned in its PINS), compiled into
+# OUT_DIR by build.rs; pure Rust, no `protoc`.
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
 
 [[bin]]
 name = "xtask"
@@ -121,6 +138,13 @@ name = "xtask-apt-fixture"
 path = "tests/bin/apt_fixture.rs"
 required-features = ["test-support"]
 
+# The `buck2` the farm-build tests (tests/farm_build_cli.rs) hand `farm-build`: it answers from
+# files beside it and records its calls. A program of the tests, not shipped.
+[[bin]]
+name = "xtask-buck2-fixture"
+path = "tests/bin/buck2_fixture.rs"
+required-features = ["test-support"]
+
 [features]
 # Builds the test fixture programs and `xtask::test_support`. Off for everything else.
 test-support = []
@@ -128,8 +152,12 @@ test-support = []
 [dev-dependencies]
 # Its own tests turn on `test-support`.
 xtask = { path = ".", features = ["test-support"] }
+# The maintenance runbook's test (tests/enrollment_doc/maintenance_runbook.rs) holds its table of
+# the update account's keys to the bootstrap's `update_account::KEYS`.
+hostkeeper-bootstrap = { path = "../hostkeeper-bootstrap" }
 # The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
-# binary's own flag parser and reads its default paths.
+# binary's own flag parser and reads its default paths; the maintenance runbook's test holds its
+# list of device-management settings to `maintenance_mdm::reported`.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 # The installer's list for hostkeeper's own macOS package (`macos_pkg::own::list`), which the pkg
 # test (`release macos-pkg`) holds to the payload it builds.
@@ -153,6 +181,9 @@ jaq-core.workspace = true
 jaq-json.workspace = true
 jaq-std.workspace = true
 saphyr-parser.workspace = true
+# `mac-farm`'s tests serve a fake farm on loopback (port 0) in this process.
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+tonic = { workspace = true, features = ["router", "server"] }
 # The coordinator updater's tests serve the release over HTTPS on loopback, with a CA and a
 # server certificate made at run time.
 rcgen.workspace = true
@@ -162,3 +193,11 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The farm lane's `//:ci` (docs/farm.md) checks the format of, builds and lints this package but does not run its tests.
+# Its tests read the git checkout (the workflows, AGENTS.md, every Cargo.toml) and run git, cargo, bash and jq,
+# none of which a farm action has: they run in ci.yml alone (docs/farm.md).
+
+[package.metadata.buildrules.actions]
+ci = ["fmt", "lint"]

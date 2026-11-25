@@ -815,3 +815,42 @@ fn a_sled_declares_its_slots_and_cannot_shrink_under_a_subject() {
         serde_json::from_slice(&encode_file(&read).expect("encodes")).expect("json");
     assert_eq!(json["sleds"]["sled-1"].get("slots"), None);
 }
+
+/// Proves: `with_place_moved` gives the place of a host (`host:<id>`) on a sled to its record
+/// (`inventory:<id>`), on the same sled and slot, the host's place gone; it moves nothing (`None`)
+/// when the host stands nowhere, or when the record stands somewhere already.
+///
+/// Catches: a move that drops the subject, puts it on another slot, keeps both places, or
+/// overwrites a place the record already holds.
+#[test]
+fn a_place_moved_to_another_subject_keeps_its_sled_and_slot() {
+    let host = Subject {
+        kind: Kind::Host,
+        id: "mac-1".to_owned(),
+    };
+    let record = subject("mac-1");
+    let placed = sledded()
+        .with_sled_placement(&host, "sled-1", Some(2))
+        .expect("placed")
+        .0;
+
+    let moved = placed
+        .with_place_moved(&host, &record)
+        .expect("a layout")
+        .expect("moved");
+    let (item, sled) = moved.placement(&record).expect("the record is placed");
+    assert_eq!((sled.id.as_str(), item.slot), ("sled-1", 2));
+    assert!(moved.placement(&host).is_none());
+
+    assert_eq!(
+        sledded()
+            .with_place_moved(&host, &record)
+            .expect("a layout"),
+        None
+    );
+    let both = on(&placed, "mac-1", "sled-1", 4);
+    assert_eq!(
+        both.with_place_moved(&host, &record).expect("a layout"),
+        None
+    );
+}

@@ -25,8 +25,6 @@
 //!   platforms, rendered from the committed pins (`packaging/netboot/pins.toml`), which it
 //!   refuses unless each platform has its ISO, shim, GRUB, kernel and initrd, each pinned well
 //!   formed.
-//! - `hkctl` ([`hkctl`]): `hkctl-<version>`, the command line of the coordinator, one bash
-//!   script for every platform, generated from the protos' command table.
 //! - `macos-pkg` and `check-macos-pkg` ([`macos_pkg`]): the installer pkg of a Mac's first
 //!   install, and the check of its payload read back from the built pkg; with `--service hello`,
 //!   hello's `.pkg` ([`native::pkg`]), with no script and its jobs disabled.
@@ -34,6 +32,10 @@
 //!   that Apple Business installs on a new Mac (docs/design/mac-bootstrap.md): the bootstrap
 //!   program, its launchd plist and a postinstall that loads the job, and the check of the pkg
 //!   read back.
+//! - `check-code-signature` ([`code_signature`]): a built Mach-O program is signed by the Developer
+//!   ID Application identity under its stable identifier, with the hardened runtime and a trusted
+//!   timestamp, and has the designated requirement of [`mac_programs`]'s table, read back from
+//!   `codesign`.
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
@@ -47,6 +49,9 @@
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
 //!   under which versions.
 //! - `locate` ([`locate`]): the commit is on `main` and its runs exist; the id of its build run.
+//! - `red` ([`red`]): the `RELEASE-RED` issue of a completed run of `release.yml` or
+//!   `privileged.yml` on `main`: opened or brought up to date when it failed, closed by a later
+//!   success.
 //! - `check` ([`check`]): every asset against `SHA256SUMS`, every attestation and bundle against
 //!   the signer identity of [`contract`] and the commit.
 //! - `publish` ([`publish`]): the GitHub release of a checked directory, idempotent.
@@ -65,6 +70,7 @@
 pub(crate) mod check;
 mod check_binary;
 mod check_image_ui;
+mod code_signature;
 pub(crate) mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
@@ -74,10 +80,10 @@ pub(crate) mod fakes;
 mod files;
 pub(crate) mod git;
 pub(crate) mod github;
-mod hkctl;
 pub(crate) mod image_index;
 mod image_push;
 mod locate;
+mod mac_programs;
 mod macos_bootstrap;
 mod macos_pkg;
 pub(crate) mod native;
@@ -90,6 +96,7 @@ mod plan;
 pub(crate) mod ports;
 mod publish;
 pub(crate) mod real;
+mod red;
 mod run_state;
 mod set_version;
 mod targets;
@@ -279,19 +286,6 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Write `hkctl-<version>` (0755), the command line of the coordinator: one bash script
-    /// for every platform, generated from the command table of the protos, whose `--version`
-    /// prints `hkctl <version>+<first 12 hex digits of the commit>`.
-    Hkctl {
-        #[arg(long)]
-        version: Version,
-        /// The commit built.
-        #[arg(long)]
-        commit: Commit,
-        /// The directory of the release's assets, made if missing; the script is written there.
-        #[arg(long)]
-        out: PathBuf,
-    },
     /// Build the installer pkg of a Mac's first install: `pkgbuild` builds a component pkg of the
     /// daemon binary, its launchd plist, its log directory and newsyslog file, the pinned `gh`
     /// and the Sigstore trusted root, nothing else, and one script, a postinstall that loads the
@@ -407,6 +401,17 @@ pub(crate) enum Verb {
         #[arg(long)]
         identity: String,
     },
+    /// Refuse a Mach-O program unless `codesign` says it is signed by the Developer ID Application
+    /// identity under the stable identifier of `--program` (a binary name of the release's table),
+    /// with the hardened runtime and a secure timestamp, verifies strictly, and has the program's
+    /// designated requirement exactly. Every problem is named.
+    CheckCodeSignature {
+        /// The program to read.
+        binary: PathBuf,
+        /// The program's name in the table: hostkeeper, hk, hello or hostkeeper-bootstrap.
+        #[arg(long)]
+        program: String,
+    },
     /// Refuse two OCI image tarballs unless they are byte for byte equal.
     CompareImages { a: PathBuf, b: PathBuf },
     /// Write hostkeeper-coordinator-<version>.image.json into `dir`: the OCI image index
@@ -498,6 +503,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Open, bring up to date or close the `RELEASE-RED` issue of a completed run of
+    /// `release.yml` or `privileged.yml` on `main`: one issue per workflow, opened when a run
+    /// fails, closed by a later run that succeeds on a commit after the red one.
+    Red {
+        #[arg(long)]
+        repo: Repo,
+        /// The run's workflow file, by name or path.
+        #[arg(long)]
+        workflow: String,
+        /// The run's id.
+        #[arg(long)]
+        run_id: u64,
+        /// The run's head commit.
+        #[arg(long)]
+        commit: Commit,
+    },
     /// Check a directory of assets: the sums, then every attestation online and from its bundle.
     Check {
         dir: PathBuf,
@@ -573,11 +594,6 @@ pub(crate) fn run<A: Adapters>(
         } => image_index::deploy_inputs(&dir, &version, &repo, output.as_deref()),
         Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Netboot { pins, version, dir } => netboot::write_netboot(&pins, &version, &dir),
-        Verb::Hkctl {
-            version,
-            commit,
-            out,
-        } => hkctl::write(hostkeeper_proto::ctl::COMMANDS, &version, &commit, &out),
         Verb::NfpmStage {
             arch,
             gh_version,
@@ -679,6 +695,9 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         Verb::CheckPkgSignature { pkg, identity } => {
             pkg_signature::check(ports.pkgbuild, &pkg, &identity)
         }
+        Verb::CheckCodeSignature { binary, program } => {
+            code_signature::check(ports.codesign, &binary, &program)
+        }
         Verb::MacosPkg {
             service,
             fail_ready,
@@ -768,6 +787,20 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             commit,
             output,
         } => locate::locate(ports.runs, &repo, &commit, output.as_deref()),
+        Verb::Red {
+            repo,
+            workflow,
+            run_id,
+            commit,
+        } => red::red(
+            ports,
+            &red::Request {
+                repo,
+                workflow,
+                run_id,
+                commit,
+            },
+        ),
         Verb::Check {
             dir,
             version,
@@ -800,7 +833,6 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::ImageDigest { .. }
         | Verb::CheckImageUi { .. }
         | Verb::Netboot { .. }
-        | Verb::Hkctl { .. }
         | Verb::NfpmStage { .. }
         | Verb::CheckLinuxPkg { .. }
         | Verb::CheckMacosPkg { .. }

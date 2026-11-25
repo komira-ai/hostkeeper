@@ -111,7 +111,10 @@ observer's service manager and process probe, and the unit control over `launchc
 step launcher, observer and unit control (`systemctl`), and no package check. Each set names the
 unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
 daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
-(docs/service-observation.md, "The daemon's own service"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
+(docs/service-observation.md, "The daemon's own service"). For the same reason an `activate` of
+that package disables no job (a job is disabled only when the previous version's `run` named it and its plist is gone)
+and enables the daemon's job itself, so a self-update leaves the job loadable after a reboot; the daemon also checks at each start and heartbeat that its job is not marked disabled
+and enables it again when it is ("The daemon keeps its own job enabled"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
 
 #### One daemon, run by launchd
 
@@ -134,6 +137,39 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 
 The daemon's plist runs `hostkeeper daemon` at load and keeps it alive. It names no user, no
 sandbox profile and no environment.
+
+#### The daemon keeps its own job enabled
+
+launchd keeps an override database for the system domain, and a job marked disabled there is not
+loaded at boot: a Mac whose daemon's job is marked disabled comes back from a reboot with no
+daemon, and nothing on the host says why. The mark is not in the job's plist and a restart does not
+clear it. An installer, an operator's `launchctl disable` or an earlier release's self-update can
+leave it.
+
+The Mac's daemon (`hostkeeper_daemon::own_job`) therefore checks its own job,
+`dev.hostkeeper.hostkeeper`, once at its start and after every heartbeat:
+
+1. It runs `launchctl print-disabled system` and reads the line of its label
+   (`"dev.hostkeeper.hostkeeper" => disabled`, or `=> true` before macOS 13;
+   `hostkeeper_launchd::launchctl::parse_disabled`). A label the output does not list, one it
+   lists as enabled, and a line that is not of that shape count as not disabled, and nothing else
+   is run.
+2. A job marked disabled gets `launchctl enable system/dev.hostkeeper.hostkeeper`, and the daemon
+   writes one line to `daemon.err.log`:
+   `hostkeeper daemon: level=error alert=own_job_disabled the launchd job ... was marked disabled, so it would not have started after a reboot; it was enabled again`.
+   The job stays enabled, so the line is written once per mark and the next check says nothing. An
+   `enable` that fails writes the same alert with the failure (`... is marked disabled, ... and it
+   could not be enabled: <why>`), and the next check tries again.
+3. A `print-disabled` that fails (it did not start, did not end within its deadline, exited
+   non-zero, or wrote text that is not UTF-8) writes
+   `level=error alert=own_job_check ...` with the failure, at every check that fails.
+
+A check never stops the daemon or its heartbeat: the heartbeat and the watchdog notice are sent
+first, each `launchctl` command has its own deadline (5 seconds), and every failure is a line and
+a return. The alerts are lines of the daemon's log, as every alert the daemon raises
+(`own_package`, `start_incomplete`, ...): the coordinator is not told and shows no alert row for
+them, so a fleet watches `alert=own_job_disabled` in `daemon.err.log`. Linux (systemd and OpenRC)
+has no such check and runs no `launchctl`.
 
 #### The daemon's logs
 
@@ -189,9 +225,10 @@ One run of a step:
    standard output is the step's report; the job is booted out (unloaded) and its directory
    removed.
 
-A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step)
-runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by its
-timeout (a timeout of 0 is no bound). The unit of a `[hook] boot` step is
+A step that is not one of the five of an update (the hook's `uninstall`, a `[hook] boot` step, and the `drain` and `resume` steps a maintenance run will run)
+runs the same way, as one job: `<hook> <hook args> <step> --params <file>`, bounded by the bound
+it is given: a number of seconds, or no bound (a `drain` whose run names no deadline), and then
+the job is never booted out for its time. The unit of a `[hook] boot` step is
 `updater-<service>-boot-<generation>`, whatever the step's name, and its label
 `<prefix>.hostkeeper.step.<service>.boot.<generation>`.
 
@@ -323,21 +360,245 @@ made at each start of the daemon, not watched in between; the heartbeat does not
 A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
 what ships, so a Mac needs nothing but hostkeeper.
 
+### Full Disk Access
+
+Full Disk Access is a privacy grant that an administrator gives the daemon with a configuration
+profile (docs/operations/mac-full-disk-access.md). The daemon
+(`crates/hostkeeper-daemon/src/full_disk_access.rs`) tells whether the grant is in force, and the
+coordinator shows it; nothing decides on it yet, and the daemon does not read the profile store,
+which is itself guarded.
+
+What is checked: the daemon lists one directory only the grant allows,
+`/Library/Application Support/com.apple.TCC`. It opens the directory and reads one entry; it opens
+no file inside it, so the privacy database is never read. The listing is behind a port, so the
+logic is tested on Linux against fakes and scratch directories.
+
+The states, as the daemon reports them in `HeartbeatRequest.full_disk_access`:
+
+| State | When |
+|---|---|
+| `GRANTED` | the directory could be listed |
+| `NOT_GRANTED` | the system refused the listing for want of permission (`EPERM` or `EACCES`) |
+| `UNDETERMINED` | the listing failed in any other way; the error is logged |
+| `NOT_APPLICABLE` | the host is not a Mac (a Linux daemon runs no check) |
+| `UNSPECIFIED` | not reported: a daemon that predates the field, or a heartbeat by the JSON route, which carries none |
+
+When: once at the start of the daemon, and again when a heartbeat reads the state and the last
+check is 60 seconds old or more (`RECHECK_SECS`, on the daemon's unix clock), so a profile
+installed or removed shows at the first heartbeat 60 seconds or more after the last check, with no restart. The daemon logs one line at the
+start (`full disk access: granted`) and one line whenever the state changes
+(`full disk access: not_granted -> granted`); a check that finds the same state logs nothing.
+
+Where it shows: the coordinator keeps the last state of each host in memory (a restart forgets it
+until the host's next heartbeat; a number it does not know reads as `UNSPECIFIED`), and
+`hk hosts get --node-id <host>` answers it as `host.fullDiskAccess` (`hosts list` too). A host
+reporting `NOT_GRANTED` or `UNDETERMINED` is shown as that. The Host page's Overview has a
+"Full Disk Access" row for a Mac (`granted`, `not granted`, `not determined`, or `not reported`
+for a Mac whose last heartbeat the coordinator holds but which carries no state), and a warning line naming the profile's document while the
+grant is not granted; a host that is not a Mac, or whose heartbeat the coordinator does not hold (since its start), shows no row.
+
+### The Remote Login probe
+
+Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple
+(docs/design/ssh-through-coordinator.md, section 3). The daemon answered it itself, on the three
+build Macs on 0.1.337: `systemsetup -setremotelogin on` is refused without Full Disk Access, and
+`launchctl enable` and `bootstrap` of sshd's job turn Remote Login on without it, so the SSH design
+uses `launchctl` and the daemon needs no Full Disk Access for Remote Login and no Developer ID
+Application signature for it (the design's section 3 has the table of results). The daemon now
+checks whether it holds the grant for other operations ([Full Disk Access](#full-disk-access)).
+
+At each start of a Mac's daemon, a thread of its own (`crates/hostkeeper-daemon/src/remote_login_probe.rs`) runs,
+as the daemon (root under launchd, with whatever privacy grants the daemon has), these steps in
+order and keeps the exit code, standard output and standard error of each, or why it could not be
+done:
+
+| step | what it runs or reads |
+|---|---|
+| `remote_login_get_before` | `systemsetup -getremotelogin` |
+| `sshd_print_before` | `launchctl print system/com.openssh.sshd` |
+| `ssh_banner_before` | a connect to `127.0.0.1:22`, and the banner sshd writes |
+| `remote_login_set_on` | `systemsetup -setremotelogin on` |
+| `remote_login_get_after_set` | `systemsetup -getremotelogin` |
+| `sshd_enable` | `launchctl enable system/com.openssh.sshd` |
+| `sshd_bootstrap` | `launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist` |
+| `sshd_print_after` | `launchctl print system/com.openssh.sshd` |
+| `remote_login_get_after` | `systemsetup -getremotelogin` |
+| `ssh_banner_after` | the connect and banner again |
+| `sshd_config_include` | the `Include` lines of `/etc/ssh/sshd_config` |
+| `access_ssh_group` | `dscl . -read /Groups/com.apple.access_ssh` |
+| `tcc_db_open` | whether `/Library/Application Support/com.apple.TCC/TCC.db` opens for reading |
+| `tcc_full_disk_access` | `sqlite3 -readonly` on it: the rows of `kTCCServiceSystemPolicyAllFiles` |
+| `codesign_running` | `codesign -dvv` of the running binary (ad hoc or a Team ID) |
+| `codesign_installed_requirement` | `codesign -dr -` of `/usr/local/bin/hostkeeper` |
+| `power_custom` | `pmset -g custom` |
+| `power_settings` | `pmset -g` |
+| `power_assertions` | `pmset -g assertions` |
+| `power_log_sleep_wake` | the newest `Sleep` and `Wake` lines of `pmset -g log` that start or end a system sleep, with their cause, read line by line as it is written; a sleeping Mac's maintenance wakes (`DarkWake`, `Wake Requests` and a sleep due to `'Maintenance Sleep'`) are left out |
+| `keep_awake_log` | the newest `keep_awake:` lines of `/var/log/hostkeeper/daemon.err.log`, what the daemon's power settings said at its starts |
+
+`remote_login_set_on`, `sshd_enable` and `sshd_bootstrap` may turn Remote Login on, and nothing
+turns it off again; the steps before them show whether it was on already. A command's output is
+cut to its first 1024 bytes and the two log steps keep their newest lines, to 3072 and 1024 bytes
+(`truncated` says so); when the whole probe is still over 10 KiB as JSON, the power log, then the
+assertions, the `keep_awake` lines, the two `launchctl print` and `codesign -dvv` are cut further,
+in that order. Every gRPC heartbeat after the probe is done carries it
+(`HeartbeatRequest.remote_login_probe`); it is the first fact a heartbeat drops when it would not
+fit 16 KiB. The coordinator keeps the last one in memory and shows it in the host's heartbeat:
+`hk hosts get --node-id <host>` answers it as `host.heartbeat.remoteLoginProbe`. Nothing decides
+on it; a restart of the daemon (an update included) runs it again.
+
+### Operator SSH keys and Remote Login
+
+A Mac's daemon announces `operator-keys-v1` like every other host's
+([design/operator-keys.md](design/operator-keys.md)). When the coordinator sends the keys of the
+Mac's host group, the daemon (`crates/hostkeeper-daemon/src/operator_keys.rs`) finds the one local
+administrator account with `dscl` (uid 501 or more, a member of `admin`, not hidden), writes the
+keys into the managed block of that account's `~/.ssh/authorized_keys` (mode 0600, owned by the
+account), and, when the set is not empty, makes sure the account can log in: Remote Login by
+`launchctl enable` and `bootstrap` of `system/com.openssh.sshd` when `launchctl print` does not find
+it loaded (never `systemsetup`, which needs Full Disk Access, and never a step that turns it off),
+then `dseditgroup -o edit -a <account> -t user com.apple.access_ssh` when that group exists and the
+account is not in it. A Mac with no administrator account, or with several, is refused and left as
+it is; the report in the heartbeat says so. Nothing here needs Full Disk Access, a privacy profile
+or a password, whether or not the Mac holds the grant ([Full Disk Access](#full-disk-access)).
+
+### Command Line Tools
+
+A Mac's daemon announces `prerequisites-v1` like every other host's
+([design/host-prerequisites.md](design/host-prerequisites.md)). When the coordinator sends a set
+that lists `xcode-command-line-tools`, the daemon (`crates/hostkeeper-daemon/src/xcode_clt.rs`)
+looks with `pkgutil --pkg-info=com.apple.pkg.CLTools_Executables` and `xcode-select -p` (and, with
+no receipt, counts the tools present when their compiler is on disk, or when the selected
+developer directory is an Xcode whose licence is accepted and whose first launch ran), and, when
+it finds none, makes the marker file
+`/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress`, takes the highest version
+`softwareupdate --list` names and installs it with `softwareupdate --install`, then removes the
+marker. It runs as root under launchd, so no password, account name or sudoers rule is needed on
+the Mac. It looks again every hour and after every start, installs the tools again when they are
+gone, and never removes them. A failed try is repeated after 30 minutes, then after twice as long
+each time, at most 24 hours, and the coordinator raises `prerequisite_failed` meanwhile. A
+listing that exits non-zero or offers no tools says in the reason the macOS version and build, the first line of
+each of `softwareupdate`'s streams and the labels it listed that hold `Command Line Tools`. The
+report is `host.heartbeat.prerequisites` in `hk hosts get`
+([operations/host-prerequisites.md](operations/host-prerequisites.md)).
+
+### Maintenance facts
+
+A Mac's daemon looks at its Mac for maintenance after every start and every hour (sooner after a
+look that failed: 5 minutes after it, doubled for each further failure in a row, at most the
+hour), on a worker that
+never holds up a heartbeat, and reports what it found to a coordinator that advertises
+`maintenance-v1` ([design/maintenance-updates.md](design/maintenance-updates.md) sections 1 and
+4.1), as a Linux host does. Five collectors read it, in this order, each program as root with an
+empty environment, no standard input, a deadline and capped output:
+
+- `macos` (`crates/hostkeeper-daemon/src/maintenance_macos.rs`): `macOS`, its version and build
+  from `sw_vers`, the hardware serial from `ioreg`, and the macOS updates `softwareupdate --list`
+  names. The listing is read by one parser, `parse_softwareupdate_list`
+  (`maintenance_softwareupdate.rs`), pinned by fixtures; a line it does not know is counted in the
+  report's `unparsed_lines`. A macOS update of the running major version is due, with a reboot when
+  it says `Action: restart`. A major upgrade is never due unless the daemon runs with
+  `--maintenance-macos-major`; then `softwareupdate --list-full-installers` is listed too and the
+  newest major upgrade of either listing is due.
+- `mac` (`maintenance_mac.rs`): FileVault's state (`fdesetup status`) and whether it can restart
+  authenticated (`fdesetup supportsauthrestart`), the free bytes of `/System/Volumes/Data`
+  (`statvfs`), and the Command Line Tools: their receipt and its version (`pkgutil --pkg-info`) and
+  whether their compiler is on disk.
+- `xcode` (`maintenance_xcode.rs`): each `/Applications/Xcode*.app`, its version and build from
+  `Contents/version.plist`, whether `xcode-select -p` names it, and `foreign` when its directory
+  is not `Xcode-<version>.app`. The daemon reports no Xcode due; the coordinator decides.
+- `update-account` (`maintenance_account.rs`): the update account's name from its root-only file,
+  then whether it exists, is hidden and is an administrator (`dscl`) and holds a Secure Token
+  (`sysadminctl -secureTokenStatus`). Its password is never kept, passed or reported.
+- `mdm` (`maintenance_mdm.rs`): the device-management settings of the design's section 5.8 found
+  in `/Library/Managed Preferences`, in the software-update declarations the Mac holds, and an
+  Xcode the App Store installed, each by name in `mdm_conflicts`.
+
+Nothing is installed or downloaded. A program that does not run, exits non-zero or does not end by
+its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look: the report keeps what the last look
+that succeeded found and names the collector and the step in `look_failed`.
+
+The coordinator orders a Mac a `macos` update only while its last report allows it
+(`crates/hostkeeper-coordinator/src/maintenance_mac.rs`), read when `Maintenance.Schedule` takes the
+Mac in a run and again at the heartbeat that would start its turn. The first that applies is the
+reason, shown as the host's `skipped_because` by `Schedule` and `Get`:
+
+| Reason | When |
+|---|---|
+| `mdm_conflict` | `mdm_conflicts` names anything |
+| `no_update_account` | the update account is absent, not an administrator or without a Secure Token, or the report carries no Mac facts |
+| `filevault_not_ready` | FileVault is not reported off: the report does not yet say whether the update account is a FileVault user, so a Mac with FileVault on is not ordered `macos` even when it can restart authenticated |
+
+Only `macos` is left out: the Mac's other kinds of the same run, an `xcode` install, still go, and
+the Mac is shown `skipped` only when `macos` was all its turn held. A major upgrade the Mac reports
+counts as due only when its group's `macos_major` is true, and the `maintain` order carries that
+setting, so the daemon stages a major upgrade only for such a group.
+
+### The Xcode install
+
+A run's `xcode` kind (`crates/hostkeeper-daemon/src/maintenance_hook/xcode/`, design
+[maintenance-updates.md](design/maintenance-updates.md) sections 2.4 and 5.6) stages each Xcode of
+the order in `/Applications/.hostkeeper-staging/` while the Mac serves, and, on the drained Mac,
+moves each staged one to `/Applications/Xcode-<version>.app` beside the others, runs its own
+`xcodebuild -license accept` and then `xcodebuild -runFirstLaunch`, points `xcode-select -s` at the
+order's default, and only then removes each `Xcode-<version>.app` the order names to remove that is
+older than every Xcode it keeps. An Xcode whose directory is not `Xcode-<version>.app` of its own
+version is never removed (the look reports it `foreign`), and an installed Xcode whose `xcodebuild`
+or any directory down to it is not root's alone is refused, never run. The check before the Mac is put back
+fails unless each Xcode of the order is at its path with its build, its `xcodebuild -version` runs
+and names that build, its licence is accepted (`xcodebuild -license check`) and `xcode-select -p`
+names the default. Xcode needs no reboot. Simulator platforms are not imported yet.
+
+### The update account
+
+At every start, once its config is loaded, a Mac's daemon makes the update account of its
+root-only update-account file (`/Library/Application Support/hostkeeper/update-account`, written by
+the bootstrap) when it is missing, and leaves it a hidden administrator holding a Secure Token
+(`crates/hostkeeper-daemon/src/update_account_make.rs`, design
+[maintenance-updates.md](design/maintenance-updates.md) section 5.5). A Mac without the file runs
+nothing. Each step looks first and changes only what is not so:
+
+1. `dscl` reads the account's user record; when it is not there, `sysadminctl -addUser <name>
+   -password - -admin` makes it, the account's password on its standard input, and the record must
+   then be there.
+2. Before anything else, the account is hidden (`dscl . -create` of `IsHidden 1`), so it is never
+   the login account that takes the operator keys, and its login shell is set to `/usr/bin/false`.
+3. When `com.apple.access_ssh` exists and holds the account, `dseditgroup -o edit -d` takes it out.
+4. When `sysadminctl -secureTokenStatus` says DISABLED, the administrator made at Setup Assistant
+   gives it a token: its name and password are read then from the bootstrap's settings (the managed
+   preferences of `dev.hostkeeper.config`, else `bootstrap.toml`, under the bootstrap's trust rule)
+   and `sysadminctl -secureTokenOn <name> -password - -adminUser <admin> -adminPassword -` runs, the
+   account's password then the administrator's on its standard input. The status must then say
+   ENABLED. An answer that says neither makes no call.
+
+The passwords go to `sysadminctl`'s standard input alone, a pipe, with an empty environment; none
+is in an argument, a log line or an error, and the administrator's password is dropped once its
+call returns. Each change is written to the daemon's standard error as it is made; a step that fails
+is written once, naming the step and the exit code, and the start goes on: the next start tries
+again. Whether `sysadminctl` reads `-` from a pipe is for the Mac proof to show
+([operations/mac-proof.md](operations/mac-proof.md) MP-A2 and MP-A3).
+
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
 `hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, and the installer pkg
 `hostkeeper-<v>-macos-arm64.pkg`. It also ships hello's `.pkg`, `hello-<v>-macos-arm64.pkg`, for
-the example service of `examples/hello`: `hello` carries the same ad-hoc code signature as the
-hostkeeper binary, and the plists of its two slots are rendered by
-`hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
-silicon runner, on each push to `main` and by hand, never on a pull request.
+the example service of `examples/hello`: `hello` is signed like the other programs
+([The programs' signature](#the-programs-signature)), and the plists of its two slots are
+rendered by `hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a
+GitHub-hosted Apple silicon runner, on each push to `main` and by hand, never on a pull request.
+The four Mach-O programs (`hostkeeper`, `hk`, `hello` and `hostkeeper-bootstrap`) are compiled by
+`compile-macos` (or, where the build farm is configured, on a farm Mac by `compile-macos-farm`:
+[design/mac-farm.md](design/mac-farm.md)) and, on a push to `main` or in a signing run
+([The signing run](#the-signing-run)), signed by `sign-code` before `build-macos` packages them;
+any other run by hand packages the linker's ad hoc signatures.
 
 The release also ships the bootstrap pkg, `hostkeeper-bootstrap-<v>-macos-arm64.pkg`, which Apple
 Business installs on a new Mac: the program `hostkeeper-bootstrap` at
 `/usr/local/lib/hostkeeper-bootstrap/`, its launchd plist and a postinstall that loads the job. It
 fetches hostkeeper's own pkg, checks it against its Team ID and installs it, and the daemon then
-enrolls ([design/mac-bootstrap.md](design/mac-bootstrap.md),
+enrolls; on a Mac that already has hostkeeper it installs nothing and only enables and loads the
+daemon's job when launchd does not have it loaded ([design/mac-bootstrap.md](design/mac-bootstrap.md),
 [operations/mac-bootstrap.md](operations/mac-bootstrap.md)). It is built, signed and checked in the
 same jobs as the other pkgs.
 
@@ -377,7 +638,7 @@ exists.)
 The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
 pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
 component and nothing else (no installer script, no installation check, no volume check). The
-installer runs the component's one script, a `postinstall` of two lines, as root once the
+installer runs the component's one script, a `postinstall` of three command lines, as root once the
 files are in place. The bootstrap's status is the script's own, which fails the install when the
 job is not loaded and cannot be:
 
@@ -387,8 +648,10 @@ job is not loaded and cannot be:
 # not have it loaded, and leave it alone when it does. An installer the daemon
 # itself runs (its self-update) must not boot the running daemon out, so the job is
 # never booted out here; its new plist takes effect at the next boot. A first
-# install, or a host where the job is not loaded, gets it loaded.
+# install, or a host where the job is not loaded, gets it enabled (a job marked
+# disabled is not loaded by bootstrap) and then loaded.
 '/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0
+'/bin/launchctl' enable 'system/dev.hostkeeper.hostkeeper'
 exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
@@ -397,8 +660,12 @@ output is discarded. A loaded job is left alone: the script exits 0 and never ru
 `launchctl bootout`, because an `installer -pkg` that the daemon itself runs (its self-update
 through the `macos-pkg` installer) must not boot the running daemon out in the middle of its
 update. The plist's new text then takes effect at the next boot. When the job is not loaded (a
-first install, or a host that booted it out) `launchctl bootstrap` loads it, and `RunAtLoad`
-starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+first install, or a host that booted it out) the script runs `launchctl enable` of the job and
+then `launchctl bootstrap`, which loads it, and `RunAtLoad` starts it. The `enable` is there
+because launchd keeps a mark for a job that is disabled in its override database, and
+`launchctl bootstrap` fails for a job that carries it; `enable` clears the mark and changes
+nothing for a job that has none. Its status is not the script's. The script runs the bootstrap
+with `exec`, so its status is the install's.
 
 The script no longer seeds the binary directory or writes the config; the daemon's start does
 both, each time it starts.
@@ -460,8 +727,9 @@ install the pkg. The daemon's start keeps that file, and the postinstall loads t
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
 with the pkg identifier and the version and no signature; only the product goes to `--out`, and
-the digest line is its digest. The binary in it keeps the ad-hoc code signature the linker gives
-it, which the package verification above accepts.
+the digest line is its digest. The binary in it is the one given as `--binary`: on a push to
+`main` or in a signing run the one `sign-code` signed ([The programs' signature](#the-programs-signature)), otherwise
+the linker's ad-hoc signature, which the package verification above accepts.
 `cargo xtask release check-macos-pkg` reads back the product
 archive that `pkgutil --expand` expanded, layer by layer.
 
@@ -485,7 +753,11 @@ Since no pull request runs the macOS build, the unit tests of the check read fix
 `crates/hostkeeper-launchd/` or `.github/workflows/artifacts.yml` therefore links, before it
 merges, a green run of the artifacts workflow started by hand on its branch (`gh workflow run
 artifacts.yml --ref <branch>`), which builds, expands and checks the pkg on the macOS runner and
-signs and publishes nothing.
+signs and publishes nothing. A pull request that changes the signing (the jobs `sign-code`,
+`sign-pkg` or `check-pkg`, the signature checks of `build-macos`, or
+`crates/xtask/src/release/code_signature*`, `pkg_signature*` or `mac_programs*`) links a green
+signing run on its branch instead ([The signing run](#the-signing-run)), which does all of that
+and signs and checks too.
 
 hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are the service name
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
@@ -501,9 +773,10 @@ must be signed. hello's `.pkg`
 (`hostkeeper-bootstrap-<version>-macos-arm64.pkg`); each step below is done for all three. It is not notarized: nothing Apple
 states asks a pkg that device management installs for notarization, and the release adds it
 only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
-on a push to `main` only, in three jobs:
+on a push to `main` and in a signing run ([The signing run](#the-signing-run)), in three jobs:
 
-1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+1. `build-macos` builds the unsigned pkgs into `pkg/` from the programs `sign-code` signed
+   ([The programs' signature](#the-programs-signature)) and checks them (above); they are never
    release files, only the artifact `pkg-unsigned-macos-arm64`.
 2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
    so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
@@ -518,13 +791,14 @@ on a push to `main` only, in three jobs:
    trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
    Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
    signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
-   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `check-macos-pkg` checked, and expands each signed pkg with its payload (`pkgutil
+   --expand-full`) to run `release check-code-signature` on the program inside it. Only then is each signed pkg the release file
    `hostkeeper-<version>-macos-arm64.pkg`, `hostkeeper-bootstrap-<version>-macos-arm64.pkg` or
    `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
    the attestation and the release are of its bytes.
 
-A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
-them.
+A run by hand that is not a signing run signs nothing: it builds and checks the unsigned pkgs and
+makes the sums without them.
 The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
 steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
 secrets named in that job alone; the checks of both pkgs before the one upload of them; and
@@ -533,6 +807,161 @@ secrets named in that job alone; the checks of both pkgs before the one upload o
 On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
 `hello-<version>-macos-arm64.pkg`) shows the signature.
 The digest of the release's pkg is the line of `SHA256SUMS`, the signed file's.
+
+### The programs' signature
+
+Each Mach-O program the release ships for macOS is signed with the Developer ID Application
+identity `Developer ID Application: Komira AI, Inc. (U7RTX4XD3X)` (the Team ID is
+`U7RTX4XD3X`, the installer's), under a stable identifier, with the hardened runtime and a trusted
+timestamp. The identifiers are in one table, `crates/xtask/src/release/mac_programs.rs`:
+
+| Program | Identifier |
+| --- | --- |
+| `hostkeeper` | `dev.hostkeeper.hostkeeper` |
+| `hk` | `dev.hostkeeper.hk` |
+| `hello` | `dev.hostkeeper.hello` |
+| `hostkeeper-bootstrap` | `dev.hostkeeper.bootstrap` |
+
+The `gh` the installer pkg also carries is not in the table: it is GitHub's program, shipped with
+GitHub's own signature, byte for byte as its pinned SHA-256 says.
+
+The designated requirement of such a signature names the identifier and the team and no hash of
+the program, so it is the same for every release; the privacy profile that grants hostkeeper Full
+Disk Access ([operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)) names the
+program by it. For `hostkeeper` it is, as `codesign --display --requirements - <program>` prints
+it after `designated => `:
+
+```
+identifier "dev.hostkeeper.hostkeeper" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = U7RTX4XD3X
+```
+
+The `hostkeeper` binary embeds `crates/hostkeeper/macos/Info.plist` on macOS (its build script
+passes `-sectcreate __TEXT __info_plist` to the linker), so the program has the bundle identifier
+`dev.hostkeeper.hostkeeper`, equal to its signing identifier; the privacy profile grants by bundle
+identifier. A unit test of xtask holds the plist's identifier to the table's.
+
+The signing is in `.github/workflows/artifacts.yml`, on a push to `main` and in a signing run
+([The signing run](#the-signing-run)), in three jobs before the pkgs are built:
+
+1. `compile-macos`, with no secret, compiles the four programs (`cargo build --locked --release`,
+   with the release's version and commit) and uploads them as the artifact
+   `macho-unsigned-macos-arm64`. Where the build farm is configured (the organisation's variable
+   `FARM_ADDRESS` is set), `compile-macos-farm` compiles them on a farm Mac instead, through
+   `mac-farm.yml`, and uploads the same artifact; exactly one of the two runs
+   ([design/mac-farm.md](design/mac-farm.md)).
+2. `sign-code`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
+   so no build script or dependency runs where the key is. A secret that is not set stops it by
+   its name (the organisation secrets `MACOS_APPLICATION_P12`, the PKCS#12 of the identity's key
+   and certificate, and `MACOS_APPLICATION_P12_PASSWORD`; see
+   [operations/mac-full-disk-access.md](operations/mac-full-disk-access.md)). It imports the
+   identity into a keychain of the job (`code-signing.keychain-db` in `$RUNNER_TEMP`, never the
+   login keychain), adds Apple's Developer ID intermediate (G2), downloaded from Apple and held to
+   its pinned SHA-256 (a hosted runner may hold that intermediate already, outside the job's
+   keychain, and `security import` then answers `The specified item already exists in the
+   keychain.`: that answer exactly passes, any other failure stops the job with what `security`
+   said), stops (at the step named for it) unless `security find-identity -v -p codesigning`
+   lists the identity as a valid code-signing identity of the job's keychain (its chain builds to
+   Apple's root, wherever the intermediate is), stops by name when the identity expires within 30 days (it is valid until
+   2027-12-21), then runs `codesign --force --sign <identity> --keychain <it> --identifier
+   <identifier> --options runtime --timestamp` on a copy of each program, deletes the keychain and
+   the PKCS#12 file whether the signing worked or not, and uploads the copies as
+   `macho-signed-macos-arm64`.
+3. `build-macos` downloads the unsigned programs, then (on a push to `main` or in a signing run)
+   the signed ones over them, and sets their modes (an artifact does not keep them); the tarballs
+   and the pkgs are made from them. Then it prints what `codesign --display --verbose=2` and
+   `codesign --display --requirements -` show of the packaged `hostkeeper`, for the record (the
+   real output the check's unit tests are held to), and runs `cargo xtask release
+   check-code-signature` on `hostkeeper` and `hk` as unpacked from their tarballs; `check-pkg`
+   does so on the program at its payload path in each signed pkg.
+
+`cargo xtask release check-code-signature <binary> --program <name>` (`name` is a binary name of
+the table; any other is refused before a tool runs) refuses a program, naming every problem with
+one line prefixed by the binary's path, unless:
+
+- `codesign --verify --strict --verbose=2` exits 0;
+- `codesign --display --verbose=2` shows `Identifier=` the program's identifier,
+  `TeamIdentifier=U7RTX4XD3X`, the `Authority=` chain exactly the identity, `Developer ID
+  Certification Authority` and `Apple Root CA`, a `Timestamp=` line (a trusted timestamp) and
+  the `runtime` flag in the `CodeDirectory` flags (`flags=0x10000(runtime)`); so an ad hoc
+  signature, another identifier, another team, no hardened runtime and no timestamp each fail by
+  name;
+- `codesign --display --requirements -` has the line `designated => <the requirement above>`
+  exactly, so a requirement that pins a `cdhash` fails.
+
+The workflow lint (`crates/xtask/tests/workflows/code_signing.rs`) holds the three jobs: the
+compile job's needs, runner and upload, the signing job's exact steps (each program signed under
+its identifier with `--options runtime --timestamp`, each secret checked by name, the cleanup under
+`always()`), the secrets named in the signing jobs alone, and `build-macos`'s needs, condition and
+downloads. A unit test of xtask reads the workflow and holds each identifier of the table to the
+signing step of its program.
+
+### The signing run
+
+A run of the artifacts workflow started by hand with the input `sign` signs and checks exactly as
+a push to `main` does, so a change to the signing is proved on its branch before it merges:
+
+```
+gh workflow run artifacts.yml --ref <branch> -f sign=true
+```
+
+It runs `sign-code`, `sign-pkg`, `check-pkg` and the signature checks of `build-macos` with the
+same steps, secrets and environment as a push to `main`. It attests nothing (`attest` and
+`verify` run on a push to `main` alone) and releases nothing (`release.yml` plans only the
+completion of a push run on `main`): its signed files stay artifacts of the run. A signing run on a
+tag, or in a fork's copy of the workflow, stops at its first step (the job `version`'s refusal,
+named for why it stops), instead of going green unsigned; a run by hand without the input signs nothing, as
+before. The workflow lint (`crates/xtask/tests/workflows/signing_run.rs`) holds the one boolean
+input, its default `false`, the refusal as the first step of `version`, the condition of every job
+and step that signs or checks the signature, and that nothing else of the file reads the input.
+
+Who can start one: whoever can push a branch of this repository, who can already start a run by
+hand of any workflow file of that branch, which may name the same environment and secrets. The
+input gives them no reach they do not have; what it adds is that the run that proves the signing
+is the one the lint holds to the release's steps.
+
+The programs are not notarized: no notarization step is in the release. A Mac does not assess with
+Gatekeeper a daemon that an installer installs when the file has no quarantine attribute, which a
+pkg's payload does not get from the installer; that is an expectation, not a measurement
+([operations/mac-full-disk-access.md](operations/mac-full-disk-access.md) lists the measurement
+that settles it).
+
+### Remote Login for ssh through the coordinator
+
+A Mac's daemon announces `ssh-v1` and takes up the coordinator's SSH access with the same
+`SshSetup` flow as a Linux host (docs/design/ssh-through-coordinator.md, section 3): the same
+three files (`/etc/ssh/sshd_config.d/10-hostkeeper.conf`, and `user_ca.pub` and
+`principals.<login user>` in `/etc/ssh/hostkeeper`) and the same rules. What a Mac does differently
+is `ssh_host_mac::MacHost`. Before any file is written, in this order:
+
+1. `/etc/ssh/sshd_config` has an `Include` of `/etc/ssh/sshd_config.d/*` before any `Match` line,
+   checked at each apply. The daemon never edits the file, which Apple owns; without it the state
+   is `no_include` and the Mac stays untrusted.
+2. The login user: the one the coordinator names (`--ssh-login-user-macos`, which must be an
+   account), else the single local administrator (user id of 501 or more, member of `admin`, not
+   hidden, the rule of the operator keys); with none or more than one, or a named user that does
+   not exist, the state is `no_login_user`. A name that is not a plain account name (letters,
+   digits, `.`, `_`, `-`) is `config_invalid`, since it becomes the name of a file.
+3. When the group `com.apple.access_ssh` exists, the login user is in it, or the group nests
+   `admin` and the login user is an administrator; otherwise the state is
+   `blocked_by_access_group`. The daemon never edits a group: add the account to the group by
+   hand (or by device management) and the next record is taken up.
+4. `password_auth = off` is `unsupported`: a Mac has no shadow file to prove that no account is
+   left without another way in.
+
+Remote Login is then ensured, by `launchctl` and not by `systemsetup`, which needs Full Disk
+Access: `launchctl print system/com.openssh.sshd`, and only when the job is not loaded, `enable`
+and `bootstrap` of `/System/Library/LaunchDaemons/ssh.plist` and `print` again. When that fails
+the state is `reload_failed` with `remote_login` as the detail, and no file is written. It runs at
+each apply, and so when the daemon starts and takes up the coordinator's record again: a Mac that
+lost Remote Login gets it back, with no file rewritten when the files are already as asked. launchd
+starts sshd per connection, so there is no reload: sshd reads the files at each start, and the
+check is `sshd -t` and the banner.
+
+A revert (`enabled = false`) removes the files and leaves Remote Login on, since turning it off
+could cut a login that came by `authorized_keys`; the daemon never runs `launchctl disable` or
+`bootout`. The test `device_mac` of `hostkeeper-privileged` (the `macos-device` job of
+`release.yml`) applies a CA through this flow on the Mac, logs in over ssh with a certificate
+for the administrator account, and reverts.
 
 ### Boot id
 
@@ -611,7 +1040,22 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
     rollout asks two healthy heartbeats of a host at its version), orders the update: the daemon
     restarts into the next version, the new binary reports the update's `Succeeded` under the
     coordinator's order id and its own job running, healthy and at the new version, and the
-    coordinator reads the host baked and hostkeeper converged.
+    coordinator reads the host baked and hostkeeper converged;
+  - each of these tests that finds the package installed also reads launchd's override database:
+    the package ships the plist of the test's job in `/Library/LaunchDaemons` and names no `run`
+    (as hostkeeper's own package ships the daemon's plist), and after each install and update,
+    the update over the kept first version included, `launchctl print-disabled system` does not
+    list the job disabled and `launchctl print system/<label>` finds it loaded, and lists the
+    daemon's own job, `dev.hostkeeper.hostkeeper`, enabled (the daemon's `activate` of its own
+    package enables it). A reboot cannot be done on the runner; the proof with one on a farm
+    Mac is section 6a of [operations/mac-proof.md](operations/mac-proof.md).
+- install and update a package of hostkeeper's own shape with the `macos-pkg` installer's real
+  tools (`install_macos_pkg.rs`, `install_macos_pkg/own_shape.rs`): a package whose payload ships
+  a job's plist and whose manifest names no `run` is installed, updated twice over the kept
+  previous version and rolled back twice, and after each step the job (of a label of the test's
+  own) is not disabled and is loaded; a job an earlier release left disabled stays so across the
+  `activate` until `MacosPkg::enable` makes it enabled; and a job the kept version's `run` named
+  and the new one's does not is disabled.
 - update hostkeeper itself from the published release `previous-release.toml` pins to this build
   (`self_update_across_releases.rs`, the cross-release rig, which runs on Linux too; CONTRIBUTING.md
   says how the pin moves): the released daemon is the job `dev.hostkeeper.hostkeeper` of the

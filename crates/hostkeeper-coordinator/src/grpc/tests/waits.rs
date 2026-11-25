@@ -374,6 +374,47 @@ async fn a_wait_reads_again_at_its_deadline() {
     );
 }
 
+/// Proves: at the stop ([`crate::wait::Waits::stop`], once the drain delay is over) a wait held
+/// for 1800 seconds is answered at once, as at its `wait_secs`: one more read, `DEADLINE` with the
+/// convergence it found, `IN_PROGRESS`; a wait asked for after the stop is answered so at once
+/// too, after its first read; and a wait whose read at the stop ends it is answered what that read
+/// says, `CONVERGED`.
+///
+/// Catches: a held wait that keeps a stopping coordinator's connection open for up to half an
+/// hour, past any stop grace period, and one held after the stop that nothing ends.
+#[tokio::test(start_paused = true)]
+async fn the_stop_answers_every_held_wait_as_its_deadline_would() {
+    let stopping = world("wait-stop").await;
+    beat(&stopping, "s1", "storage", &at("1.0")).await;
+    let mut told = reads(&stopping);
+    let wait = waiting(&stopping, &mut told, State::InProgress).await;
+    stopping.coordinator.waits.stop();
+    let ended = (
+        proto::WaitOutcome::Deadline,
+        proto::ConvergenceState::InProgress,
+    );
+    assert_eq!(answered(at_once(wait).await), ended);
+    let late = held(&stopping, 1800, OPERATOR, CLIENT_PATIENCE);
+    assert_eq!(answered(at_once(late).await), ended);
+
+    let converging = world("wait-stop-read").await;
+    beat(&converging, "f1", "frontend", &at("1.0")).await;
+    converging.rig.at(1_140);
+    beat(&converging, "s1", "storage", &at("2.0")).await;
+    let mut told = reads(&converging);
+    let wait = waiting(&converging, &mut told, State::InProgress).await;
+    // f1 was last heard at 1100: by 1150 it is down, and no request told the wait.
+    converging.rig.at(1_150);
+    converging.coordinator.waits.stop();
+    assert_eq!(
+        answered(at_once(wait).await),
+        (
+            proto::WaitOutcome::Converged,
+            proto::ConvergenceState::Converged
+        )
+    );
+}
+
 /// Proves: a gRPC wait is held past the call's patience (three patiences, on the paused clock)
 /// and answered when a heartbeat converges the service.
 ///

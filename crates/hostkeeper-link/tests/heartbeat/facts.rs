@@ -52,6 +52,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         features: ANNOUNCED.to_vec(),
         services: vec![
             ServiceFacts {
+                local_halt: None,
                 name: service("x"),
                 version: version("1.0"),
                 health: Health::Unhealthy,
@@ -68,6 +69,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 drift: None,
             },
             ServiceFacts {
+                local_halt: None,
                 name: service("y"),
                 version: version("2.0"),
                 health: Health::Healthy,
@@ -90,6 +92,14 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        ssh: None,
+        prerequisites: None,
+        bmc: None,
+        serial_console: None,
+        maintenance: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 

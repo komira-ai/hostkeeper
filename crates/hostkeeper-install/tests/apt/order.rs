@@ -175,8 +175,8 @@ fn a_bad_pin_is_refused() {
 
 /// Proves each manifest rule of a repository entry is `manifest_invalid`: no manifest, no
 /// package, a package or a version outside dpkg's grammar, a hook command led by a relative path, `place` entries,
-/// containers, no run unit and 65 of them, and missing or zero installer bounds; 1 and 64 run
-/// units are accepted.
+/// containers, no run unit with no hook command and 65 of them, and missing or zero installer
+/// bounds; 1 and 64 run units are accepted.
 #[test]
 fn each_manifest_rule_is_manifest_invalid() {
     type Edit = Box<dyn Fn(&mut Target)>;
@@ -223,7 +223,10 @@ fn each_manifest_rule_is_manifest_invalid() {
             "a container",
             Box::new(|t| manifest(t).containers = vec![Container::default()]),
         ),
-        ("no run unit", Box::new(|t| manifest(t).run.clear())),
+        (
+            "no run unit and no hook command",
+            Box::new(|t| manifest(t).run.clear()),
+        ),
         (
             "65 run units",
             Box::new(|t| {
@@ -312,4 +315,83 @@ fn an_artifact_entry_names_no_repository() {
         );
     }
     judge_kind(Installer::Apt, &entry()).expect("a repository entry");
+}
+
+/// The entry of a config package (hostgroups.md section 6.1): a hook command, and `run` units
+/// `n` of them.
+fn config_entry(units: usize) -> Target {
+    let mut target = entry();
+    manifest(&mut target).hook = Some(Hook {
+        command: vec![
+            "/usr/lib/mdm/config-hook".to_owned(),
+            "update-hook".to_owned(),
+        ],
+        ..Hook::default()
+    });
+    manifest(&mut target).run = (0..units).map(|n| format!("mdm-{n}.service")).collect();
+    target
+}
+
+/// Proves an entry whose manifest names a hook command and no `run` unit, a config package's, is
+/// an order with no run unit and the hook's program, and that 1 and 64 units with a hook command
+/// are accepted too.
+///
+/// Catches: a config package refused `manifest_invalid` at the stage for its 0 run units.
+#[test]
+fn a_hook_command_with_no_run_unit_is_an_order() {
+    let order = order(&config_entry(0)).expect("accepted");
+    assert_eq!(order.run, Vec::<String>::new());
+    assert_eq!(order.hook.as_deref(), Some("/usr/lib/mdm/config-hook"));
+    for count in [1, 64] {
+        assert_eq!(
+            self::order(&config_entry(count))
+                .expect("accepted")
+                .run
+                .len(),
+            count
+        );
+    }
+}
+
+/// Proves an entry with no `run` unit and no hook command, which would change files and restart
+/// nothing, is still refused `manifest_invalid`, failed, release, and says why; so is one whose
+/// hook has an empty command, which names no program.
+///
+/// Catches: 0 run units accepted for every entry, not only one with a hook command.
+#[test]
+fn no_run_unit_and_no_hook_command_is_refused() {
+    for hook in [None, Some(Hook::default())] {
+        let mut target = config_entry(0);
+        manifest(&mut target).hook = hook;
+        let failure = refused(&target, Reason::ManifestInvalid);
+        assert_failure(
+            &failure,
+            Reason::ManifestInvalid,
+            Class::Release,
+            Outcome::Failed,
+        );
+        assert_eq!(
+            failure.to_string(),
+            "manifest_invalid: the manifest has 0 run units and no hook command, not 1 to 64"
+        );
+    }
+}
+
+/// Proves 65 `run` units are refused `manifest_invalid` with a hook command as without one: the
+/// hook lowers the least count to 0, never the most.
+///
+/// Catches: a hook command that lifts the bound of 64 units.
+#[test]
+fn sixty_five_run_units_with_a_hook_command_are_refused() {
+    let failure = refused(&config_entry(65), Reason::ManifestInvalid);
+    assert_eq!(
+        failure.to_string(),
+        "manifest_invalid: the manifest has 65 run units, not 0 to 64"
+    );
+    let mut plain = config_entry(65);
+    manifest(&mut plain).hook = None;
+    assert_eq!(
+        refused(&plain, Reason::ManifestInvalid).to_string(),
+        "manifest_invalid: the manifest has 65 run units, not 1 to 64"
+    );
 }

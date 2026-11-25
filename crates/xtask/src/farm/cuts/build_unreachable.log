@@ -1,0 +1,29 @@
+[2026-11-22T06:46:58.365+00:00] Build ID: 00000000-0000-0000-0000-000000000000
+[2026-11-22T06:49:14.365+00:00] [2m2026-11-22T06:49:14.341966Z[0m [33m WARN[0m [2mbuck2_execute::re::client[0m[2m:[0m Failed to connect to RE, retrying after sleeping 1 seconds: Remote Execution Error on REClientBuilder for ReSession <none>
+[2026-11-22T06:49:14.365+00:00] Error: (Failed to query capabilities of remote: code: 'The service is currently unavailable', message: "tcp connect error", source: tonic::transport::Error(Transport, ConnectError(ConnectError("tcp connect error", 192.0.2.1:8980, Os { code: 110, kind: TimedOut, message: "Connection timed out" }))): transport error: tcp connect error: tcp connect error: Connection timed out (os error 110))
+[2026-11-22T06:51:29.564+00:00] [2m2026-11-22T06:51:29.510046Z[0m [33m WARN[0m [2mbuck2_execute::re::client[0m[2m:[0m Failed to connect to RE, retrying after sleeping 2 seconds: Remote Execution Error on REClientBuilder for ReSession <none>
+[2026-11-22T06:51:29.564+00:00] Error: (Failed to query capabilities of remote: code: 'The service is currently unavailable', message: "tcp connect error", source: tonic::transport::Error(Transport, ConnectError(ConnectError("tcp connect error", 192.0.2.1:8980, Os { code: 110, kind: TimedOut, message: "Connection timed out" }))): transport error: tcp connect error: tcp connect error: Connection timed out (os error 110))
+[2026-11-22T06:53:44.765+00:00] [2m2026-11-22T06:53:44.677986Z[0m [33m WARN[0m [2mbuck2_execute::re::client[0m[2m:[0m Failed to connect to RE, retrying after sleeping 3 seconds: Remote Execution Error on REClientBuilder for ReSession <none>
+[2026-11-22T06:53:44.765+00:00] Error: (Failed to query capabilities of remote: code: 'The service is currently unavailable', message: "tcp connect error", source: tonic::transport::Error(Transport, ConnectError(ConnectError("tcp connect error", 192.0.2.1:8980, Os { code: 110, kind: TimedOut, message: "Connection timed out" }))): transport error: tcp connect error: tcp connect error: Connection timed out (os error 110))
+[2026-11-22T06:53:47.923+00:00] RE Session: GRPC-SESSION-ID
+[2026-11-22T07:03:28.334+00:00] Action failed: hostkeeper//crates/xtask:xtask-0.1.0_5cb138ecbc_lint (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc xtask-0.1.0_5cb138ecbc_lint)
+[2026-11-22T07:03:28.334+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-22T07:03:28.334+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-22T07:03:28.334+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-22T07:03:28.334+00:00] Stdout: <empty>
+[2026-11-22T07:03:28.334+00:00] Stderr: <empty>
+
+[2026-11-22T07:03:28.334+00:00] Action failed: hostkeeper//crates/xtask:xtask-0.1.0_06c7f9e0fc (buildrules//platforms:linux_x86_64#27db57317ae2fec7) (rustc xtask-0.1.0_06c7f9e0fc)
+[2026-11-22T07:03:28.334+00:00] Internal error (stage: remote_call_error): Remote Execution Error on Execute with digest 0000000000000000000000000000000000000000000000000000000000000000:143 for ReSession GRPC-SESSION-ID
+[2026-11-22T07:03:28.334+00:00] Error: (Error was returned on the stream by RE: RE channel error: code: 'Unknown error', message: "h2 protocol error: error reading a body from connection", source: hyper::Error(Body, Error { kind: Io(Custom { kind: BrokenPipe, error: "stream closed because of a broken pipe" }) }): error reading a body from connection: stream closed because of a broken pipe)
+[2026-11-22T07:03:28.334+00:00] Remote action digest: '0000000000000000000000000000000000000000000000000000000000000000:143'
+[2026-11-22T07:03:28.334+00:00] Stdout: <empty>
+[2026-11-22T07:03:28.334+00:00] Stderr: <empty>
+
+[2026-11-22T07:03:28.336+00:00] Cache hits: 0%
+[2026-11-22T07:03:28.336+00:00] Commands: 27 (cached: 0, remote: 27, local: 0)
+[2026-11-22T07:03:28.336+00:00] Network: up 121KiB  down 117KiB  session GRPC-SESSION-ID
+[2026-11-22T07:03:28.337+00:00]
+
+[2026-11-22T07:03:28.337+00:00]
+BUILD FAILED

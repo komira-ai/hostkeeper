@@ -8,8 +8,9 @@
 //!   deploy is off until they are set), or has a key outside its list ([`DIGEST_KEYS`],
 //!   [`JOB_KEYS`]): no `continue-on-error`, no `secrets`, no `strategy`, no `environment` of its
 //!   own;
-//! - [`DIGEST_JOB`] does not need exactly `plan` and `newest` (the newest release of the run,
-//!   after every publish and image of it), does not run on [`RUNNER`] within
+//! - [`DIGEST_JOB`] does not need exactly `plan`, `newest` (the newest release of the run),
+//!   `publish` and `image` (the deploy downloads the image tarball from the published release,
+//!   and `newest` no longer waits for either), does not run on [`RUNNER`] within
 //!   [`TIMEOUT_MINUTES`], holds other token rights than exactly `contents: read`, has a step with
 //!   a key outside [`STEP_KEYS`] (an `if:` that could skip it, a `continue-on-error`), or its
 //!   steps are not exactly [`DIGEST_STEPS`], in that order, with their `with`, `env` and
@@ -196,9 +197,9 @@ fn digest_problems(digest: Option<&Node>) -> Vec<String> {
     };
     let mut problems = Vec::new();
     let got = needs(Some(digest));
-    if got != ["newest", "plan"] {
+    if got != ["image", "newest", "plan", "publish"] {
         problems.push(format!(
-            "{FILE}: job {DIGEST_JOB} needs {got:?}, not [\"newest\", \"plan\"]"
+            "{FILE}: job {DIGEST_JOB} needs {got:?}, not [\"image\", \"newest\", \"plan\", \"publish\"]"
         ));
     }
     if text(Some(digest), "runs-on") != Some(RUNNER) {

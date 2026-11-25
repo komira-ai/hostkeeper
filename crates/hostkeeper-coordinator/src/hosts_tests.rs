@@ -228,6 +228,7 @@ fn a_host_is_what_the_status_holds_of_it() {
         live: true,
         last_heartbeat_unix: UNIX + 2_000,
         heartbeat: Some(agent::HeartbeatRequest {
+            ssh: None,
             installers: Vec::new(),
             repositories: None,
             platform: agent::Platform::LinuxX8664.into(),
@@ -248,6 +249,13 @@ fn a_host_is_what_the_status_holds_of_it() {
             trusted_root_age_secs: None,
             trusted_root_reason: 0,
             facts_generation: None,
+            remote_login_probe: None,
+            full_disk_access: 0,
+            operator_keys: None,
+            prerequisites: None,
+            bmc: None,
+            serial_console: None,
+            maintenance: None,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {
@@ -277,6 +285,7 @@ fn a_host_is_what_the_status_holds_of_it() {
         // A heartbeat answered as the JSON route answers it says nothing of the trusted root: unknown.
         trusted_root_age_secs: None,
         trusted_root_reason: agent::TrustedRootReason::Unspecified.into(),
+        full_disk_access: agent::FullDiskAccess::Unspecified.into(),
         // A daemon that does not announce `target-v1` runs every service from archives.
         running: [DB, WEB]
             .into_iter()
@@ -289,6 +298,9 @@ fn a_host_is_what_the_status_holds_of_it() {
         running_unix: Some(UNIX + 2_000),
         repositories: None,
         host_group: String::new(),
+        maintenance: None,
+        maintenance_look_age_secs: None,
+        maintenance_stale: false,
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

@@ -56,6 +56,9 @@ pub(crate) struct GroupScope {
     /// How many hosts of the group may hold a slot of one package at once: the policy's
     /// `max_updating`, which an uninstall of a package the group no longer lists takes a slot of.
     pub(crate) max_updating: u32,
+    /// What a host that failed the desired version does to the rest of its stage: the policy's
+    /// `failed_hosts` ([`crate::failed_hosts`]).
+    pub(crate) failed_hosts: crate::failed_hosts::FailedHosts,
 }
 
 impl ServiceDef {
@@ -109,6 +112,7 @@ fn def_of(
             group: group.clone(),
             live_rollouts: policy.live_rollouts.map(|n| n as usize),
             max_updating: policy.max_updating,
+            failed_hosts: policy.failed_hosts,
         }),
     }
 }
@@ -159,6 +163,7 @@ fn leaving_def(
             group: group.clone(),
             live_rollouts: listed.policy.live_rollouts.map(|n| n as usize),
             max_updating: listed.policy.max_updating,
+            failed_hosts: listed.policy.failed_hosts,
         }),
     }
 }
@@ -283,18 +288,24 @@ impl Coordinator {
             .keys()
             .map(|name| (name, self.desired.group_desireds(name)))
             .collect();
+        let seqs: BTreeMap<&GroupName, BTreeMap<String, i64>> = groups
+            .0
+            .keys()
+            .map(|name| (name, self.desired.group_set_seqs(name)))
+            .collect();
         self.ops.read(|state| {
             groups
                 .0
                 .iter()
                 .flat_map(|(name, group)| {
-                    let wants = &wants[name];
+                    let (wants, seqs) = (&wants[name], &seqs[name]);
                     group.packages.iter().filter_map(|package| {
                         let def = package_def(name, group, &self.services, state, package)?;
                         Some(Entry {
                             want: wants.get(package).cloned(),
                             def,
                             at_unix: group.at_unix,
+                            set_seq: seqs.get(package).copied(),
                         })
                     })
                 })

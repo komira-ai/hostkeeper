@@ -1,9 +1,15 @@
-//! Pruning a package directory to two versions (docs/design/hostkeeper-design.md, section 4.7).
+//! Pruning a package directory to the versions a host keeps (docs/design/hostkeeper-design.md,
+//! section 4.7, and Q14).
 //!
-//! A host keeps two versions of a service: the one `current` names and the one `previous`
-//! names, so that a rollback to `previous` is a local switch with no fetch. After a confirmed
-//! switch every other version directory of the service is deleted, with its seal, except the
-//! versions the caller protects ([`Protected`]).
+//! A host keeps the version `current` names and the one `previous` names, so that a rollback to
+//! `previous` is a local switch with no fetch; the version its pin names; and the newest
+//! [`Protected::newest`] others, so that a switch to any of them needs no fetch either. After a
+//! confirmed switch every other version directory of the service is deleted, with its seal,
+//! except the versions the caller protects ([`Protected`]). Of the others, only a whole version
+//! (its directory and its seal) is kept for being new, and the newest is the one whose seal was
+//! written last: the seal is written once, when the version is staged, so its time is the time
+//! the version came to the host, whatever its name says. Two seals of the same time are ordered
+//! by the version's name, the greater first.
 //!
 //! The rule is a pure function, [`prune_plan`], of what the directory holds ([`PruneInputs`]);
 //! [`Layout::prune`] reads the directory, plans, and deletes. It takes no lock: the caller holds
@@ -15,7 +21,7 @@
 //!
 //! 1. `<version>/` is opened to its owner (0700) and renamed to `.stage-prune-<16 hex>` beside
 //!    it, so the version is gone in one step: no reader ever sees a half-deleted `<version>/`.
-//!    The version is read-only (0555) as an unpack leaves it, and macOS refuses to rename a
+//!    A version an earlier release published is read-only (0555), and macOS refuses to rename a
 //!    directory its caller cannot write, even to a new name in the same parent (it rewrites the
 //!    directory's `..` entry); Linux makes that check only when the parent changes. The mode of
 //!    the top directory is not part of the tree digest;
@@ -30,11 +36,13 @@
 //! next prune, which deletes all three.
 //! Every step is idempotent.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Permissions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
+use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
 
@@ -45,7 +53,8 @@ use crate::selfupdate::Layout;
 /// orphan pass removes what a crashed prune leaves.
 pub const PRUNE_PREFIX: &str = ".stage-prune-";
 
-/// The versions a prune keeps whatever `current` and `previous` name. The caller builds it.
+/// The versions a prune keeps besides the ones `current` and `previous` name. The caller builds
+/// it; its default keeps nothing more.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Protected {
     /// The release an unfinished step record replaces (`updater.previous_release`): an update
@@ -56,14 +65,24 @@ pub struct Protected {
     pub switch_targets: BTreeSet<String>,
     /// A version staged and not yet switched to that the caller keeps.
     pub staged: BTreeSet<String>,
+    /// The version the service's pin names: kept whatever its age.
+    pub pinned: BTreeSet<String>,
+    /// How many whole versions are kept besides all of the above, the newest first.
+    pub newest: usize,
 }
 
 impl Protected {
-    /// Whether `version` is protected.
+    /// Whether `version` is protected by name: one of the sets names it. The newest are not
+    /// named; [`prune_plan`] chooses them.
     pub fn contains(&self, version: &str) -> bool {
-        [&self.previous_releases, &self.switch_targets, &self.staged]
-            .iter()
-            .any(|set| set.contains(version))
+        [
+            &self.previous_releases,
+            &self.switch_targets,
+            &self.staged,
+            &self.pinned,
+        ]
+        .iter()
+        .any(|set| set.contains(version))
     }
 }
 
@@ -72,8 +91,9 @@ impl Protected {
 pub struct PruneInputs {
     /// The version directories: real directories (not links) named as a version.
     pub versions: BTreeSet<String>,
-    /// The versions with a seal `<version>.seal`, with or without a directory.
-    pub seals: BTreeSet<String>,
+    /// The versions with a seal `<version>.seal`, with or without a directory, each with the time
+    /// its seal was last written: the time the version was staged.
+    pub seals: BTreeMap<String, SystemTime>,
     /// The directories a crashed prune left (`.stage-prune-*`).
     pub leftovers: BTreeSet<String>,
     /// What the link `current` holds when it is a link to one plain name; `None` when it is
@@ -124,12 +144,19 @@ pub enum PruneStep<'a> {
 }
 
 /// The rule of design section 4.7, in order: keep the versions `current` and `previous` name;
-/// keep every protected version; delete every other version, its directory and its seal,
-/// whichever of the two is there (a seal with no directory and a directory with no seal are
-/// deleted alike); remove the leftovers of a crashed prune. When `current` or `previous` is
-/// missing or names no version directory, nothing is deleted and the plan is `unresolved`.
+/// keep every protected version; keep the [`Protected::newest`] newest of the other whole
+/// versions (a directory and a seal), newest by the time of the seal, then by the greater name;
+/// delete every other version, its directory and its seal, whichever of the two is there (a seal
+/// with no directory and a directory with no seal are deleted alike); remove the leftovers of a
+/// crashed prune. When `current` or `previous` is missing or names no version directory,
+/// nothing is deleted and the plan is `unresolved`.
 pub fn prune_plan(inputs: &PruneInputs) -> PrunePlan {
-    let present: BTreeSet<String> = inputs.versions.union(&inputs.seals).cloned().collect();
+    let present: BTreeSet<String> = inputs
+        .versions
+        .iter()
+        .chain(inputs.seals.keys())
+        .cloned()
+        .collect();
     let resolved = |link: &Option<String>| {
         link.as_ref()
             .filter(|version| inputs.versions.contains(*version))
@@ -143,10 +170,26 @@ pub fn prune_plan(inputs: &PruneInputs) -> PrunePlan {
             ..PrunePlan::default()
         };
     };
-    let (keep, delete): (BTreeSet<String>, BTreeSet<String>) =
+    let (mut keep, rest): (BTreeSet<String>, BTreeSet<String>) =
         present.into_iter().partition(|version| {
             (*version == current) | (*version == previous) | inputs.protected.contains(version)
         });
+    let mut whole: Vec<(Reverse<SystemTime>, Reverse<&String>)> = rest
+        .iter()
+        .filter(|version| inputs.versions.contains(*version))
+        .filter_map(|version| {
+            let sealed = inputs.seals.get(version)?;
+            Some((Reverse(*sealed), Reverse(version)))
+        })
+        .collect();
+    whole.sort();
+    keep.extend(
+        whole
+            .into_iter()
+            .take(inputs.protected.newest)
+            .map(|(_, Reverse(version))| version.clone()),
+    );
+    let delete: BTreeSet<String> = rest.difference(&keep).cloned().collect();
     PrunePlan {
         keep,
         delete,
@@ -156,8 +199,8 @@ pub fn prune_plan(inputs: &PruneInputs) -> PrunePlan {
 }
 
 impl Layout {
-    /// Deletes every version of this package directory but those `current` and `previous` name
-    /// and those `protect` names ([`prune_plan`]). A version that cannot be removed is in the
+    /// Deletes every version of this package directory but those `current` and `previous` name,
+    /// those `protect` names and the newest it keeps ([`prune_plan`]). A version that cannot be removed is in the
     /// report's `failed`, and the others are still deleted; an error is only a directory that
     /// cannot be listed, with nothing deleted. For a package directory only
     /// ([`io::ErrorKind::InvalidInput`] otherwise). The caller holds the service's lock.
@@ -197,9 +240,10 @@ impl Layout {
         Ok(report)
     }
 
-    /// What this package directory holds, with `protect`, as [`prune_plan`] reads it. Entries
-    /// of any other name (`current.tmp`, an unpack's `.stage-*` or `.<version>.seal.tmp`, a link
-    /// or a file named as a version) are not read and never touched.
+    /// What this package directory holds, with `protect`, as [`prune_plan`] reads it: an error
+    /// when the directory cannot be listed, or the time of a seal cannot be read. Entries of any
+    /// other name (`current.tmp`, an unpack's `.stage-*` or `.<version>.seal.tmp`, a link or a
+    /// file named as a version) are not read and never touched.
     pub fn prune_inputs(&self, protect: &Protected) -> io::Result<PruneInputs> {
         self.expect_package()?;
         let mut inputs = PruneInputs {
@@ -222,7 +266,8 @@ impl Layout {
             }
             if let Some(version) = name.strip_suffix(".seal") {
                 if !is_dir & self.check_name(version).is_ok() {
-                    inputs.seals.insert(version.to_owned());
+                    let sealed = entry.metadata()?.modified()?;
+                    inputs.seals.insert(version.to_owned(), sealed);
                 }
                 continue;
             }

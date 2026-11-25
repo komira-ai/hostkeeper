@@ -9,13 +9,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
+use crate::bmc::BmcReport;
 use crate::host_facts::PushedFacts;
+use crate::host_ssh::{PushedSsh, SshReport};
 use crate::names::Reason;
-use crate::order::{Order, OrderRef, OrderResult, Reply};
+use crate::operator_keys::{KeysReport, PushedKeys};
+use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Reply};
+use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
+use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+use crate::serial_console::SerialConsoleReport;
 
 /// What a reply was refused for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -163,6 +170,24 @@ pub trait TrustedRootSource: Send + Sync {
     fn trusted_root(&self) -> Option<TrustedRootFacts>;
 }
 
+/// The host's BMC, as the daemon read it from the BMC, read at every heartbeat: none from a host
+/// with no BMC it can read.
+pub trait BmcSource: Send + Sync {
+    fn bmc(&self) -> Option<BmcReport>;
+}
+
+/// The serial console baseline the daemon keeps on the host's port, read at every heartbeat:
+/// none from a daemon whose config names no port.
+pub trait SerialConsoleSource: Send + Sync {
+    fn report(&self) -> Option<SerialConsoleReport>;
+}
+
+/// The Remote Login probe a Mac's daemon ran at its start, read at every heartbeat: none until it
+/// is done.
+pub trait RemoteLoginProbeSource: Send + Sync {
+    fn remote_login_probe(&self) -> Option<RemoteLoginProbe>;
+}
+
 /// One installed service, as its step record says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordedService {
@@ -270,6 +295,61 @@ pub trait FactsSink: Send + Sync {
     fn apply(&self, facts: &PushedFacts) -> bool;
 }
 
+/// The managed block of the host's login account's `authorized_keys`, which the coordinator's
+/// operator keys replace (`operator-keys-v1`). A daemon that has one announces the feature and
+/// reports what it holds.
+pub trait OperatorKeysSink: Send + Sync {
+    /// What the managed block holds, the last set refused and the last failure: sent in every
+    /// heartbeat.
+    fn report(&self) -> KeysReport;
+
+    /// Puts `keys` in force when they pass the sink's checks, or keeps what is in force. It says
+    /// nothing back: the next report does.
+    fn apply(&self, keys: &PushedKeys);
+}
+
+/// The host's sshd setup, which the coordinator's SSH access replaces (`ssh-v1`). A daemon that
+/// has one announces the feature and reports what its last setup came to.
+pub trait SshSink: Send + Sync {
+    /// What the setup has come to, or none until it has been asked to do anything. Sent in
+    /// every heartbeat.
+    fn report(&self) -> Option<SshReport>;
+
+    /// Sets sshd up as `access` says. It says nothing back: the next report does.
+    fn apply(&self, access: &PushedSsh);
+}
+
+/// The daemon's runner of `maintain` orders (docs/design/maintenance-updates.md, sections 5.2 to
+/// 5.7). The loop calls it on a worker of its [`Dispatch`], once per reply that carries the order,
+/// so a resend of an order the daemon already holds is given again: the daemon recognises it by
+/// its id and try and starts nothing twice. It answers nothing: how the host's turn goes is the
+/// run state of the maintenance report ([`MaintenanceSource`]).
+pub trait MaintainSink: Send + Sync {
+    fn maintain(&self, order: &MaintainOrder);
+}
+
+/// What the daemon last found of the host's maintenance (`maintenance-v1`): what runs, what is
+/// due and why a look failed.
+pub trait MaintenanceSource: Send + Sync {
+    /// What the daemon last found, as the heartbeat carries it: asked only for a heartbeat to a
+    /// coordinator that advertises `maintenance-v1`. It may start a look on a worker of its own
+    /// and never waits for it.
+    fn report(&self) -> pb::MaintenanceReport;
+}
+
+/// The host prerequisites of the host's group, which the coordinator sends (`prerequisites-v1`).
+/// A daemon that has one announces the feature and reports what it holds and where each stands.
+pub trait PrerequisitesSink: Send + Sync {
+    /// The digest of the set held, the last set refused and the state of each prerequisite: sent
+    /// in every heartbeat. It may also start the work that is due (a look, an install) on a
+    /// worker of the sink's own; it never waits for it.
+    fn report(&self) -> PrerequisitesReport;
+
+    /// Holds `set` when it passes the sink's checks, or keeps the set held. It says nothing back
+    /// and never waits for an install: the next reports do.
+    fn apply(&self, set: &PushedPrerequisites);
+}
+
 /// One job for a worker.
 pub type Job = Box<dyn FnOnce() + Send>;
 
@@ -293,16 +373,35 @@ impl Dispatch for ThreadDispatch {
     }
 }
 
-/// The halt generations the daemon holds, persisted beside the step records (design 10, "Held
-/// halt generation"), and shared with the executor and `clear_halt`.
+/// The halts the daemon holds, each under the halt generation persisted beside the step records
+/// while the halt stands (design 10, "Held halt generation"), shared with the executor and
+/// `clear_halt`.
 pub trait HeldHalts: Send + Sync {
-    /// The generation held for `service`; `0` when none is.
-    fn held(&self, service: &ServiceName) -> u64;
-    /// Raise the generation held for `service` to `generation`; never lowers it.
+    /// A reply named `generation` as the halt generation of `service`, and the reply before it
+    /// named `before` (0 when it named none; `None` for the first reply since the loop started):
+    /// a halt the daemon holds under no generation yet is held under `before`, or lifted when
+    /// `generation` is above it; one held under a smaller generation is lifted; a service that
+    /// holds no halt keeps no generation.
     ///
     /// # Errors
     /// The store does not take it; the loop logs it and the next reply tries again.
-    fn raise(&self, service: &ServiceName, generation: u64) -> io::Result<()>;
+    fn heard(&self, service: &ServiceName, before: Option<u64>, generation: u64) -> io::Result<()>;
+    /// The halt the daemon holds of `service` now, which every heartbeat reports
+    /// ([`crate::beat::LocalHalt`]); `None` while it holds none, or cannot tell.
+    fn holding(&self, service: &ServiceName) -> Option<HeldHalt>;
+}
+
+/// A halt the daemon holds of a service: the service's step record ended in a halt, and every
+/// order of it is refused until a halt generation above `generation` comes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldHalt {
+    /// The halt's reason; none when the record names none, or one that is no token.
+    pub reason: Option<Reason>,
+    /// The halt generation held.
+    pub generation: u64,
+    /// When that generation was written, in unix seconds; none when no generation is written
+    /// yet (it is 0), or the time cannot be read.
+    pub written_unix: Option<u64>,
 }
 
 /// Unix seconds, for the retry time of a deferral, which must outlive a restart and so cannot be

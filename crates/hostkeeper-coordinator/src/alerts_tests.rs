@@ -7,10 +7,14 @@ use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::{Claims, RecordedApproval, RequestState, RequestView};
 use hostkeeper_enrollment::names::{HostId as EnrolledId, KeyHash};
+use hostkeeper_proto::hostkeeper::agent::v1::{
+    PrerequisiteState, PrerequisiteStatus, PrerequisitesReport,
+};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_wire::Platform;
-use hostkeeper_wire::wire::Health;
+use hostkeeper_wire::wire::{Health, Outcome, UpdateResult};
+use hostkeeper_wire::{HostId, Platform};
 
+use super::Said;
 use super::{
     Alert, At, EnrollmentFacts, Kind, Subject, Thresholds, Waiting, collides_with, derive,
 };
@@ -45,6 +49,7 @@ fn node(seen: u64) -> Node {
         last_renew_error: None,
         trusted_root: crate::trusted_root::TrustedRootSaid::default(),
         skewed_beats: 0,
+        maintenance: None,
     }
 }
 
@@ -93,6 +98,7 @@ fn subject(kind: Kind, service: &str, host: &str, version: &str) -> Subject {
         version: version.to_owned(),
         request: String::new(),
         other_host: String::new(),
+        group: String::new(),
     }
 }
 
@@ -162,6 +168,7 @@ fn a_halted_service_is_a_halt() {
             message: "kbf is halted at 2.0 by d1, check disk_full: nothing is ordered for it \
                       until an operator clears the halt"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
 
@@ -182,6 +189,7 @@ fn a_halted_service_is_a_halt() {
             message: "kbf is halted at 2.0 by an operator: nothing is ordered for it until an \
                       operator clears the halt"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
 
@@ -190,6 +198,48 @@ fn a_halted_service_is_a_halt() {
         ..ServiceOps::default()
     });
     assert_eq!(derived(&fleet, &unhalted, &quiet_store()), Vec::new());
+}
+
+/// Proves: a halt whose report carries the hook's detail says it after the check, in quotes, a
+/// quote or a line break of it escaped; a report with an empty detail, or none, gives the message
+/// as before.
+///
+/// Catches: a halt an operator cannot act on because the alert names only the check
+/// (`state_invalid`) and not what the hook said of it.
+#[test]
+fn a_halt_says_what_the_hook_said_of_its_check() {
+    let fleet = fleet_of(&["d1"], 990);
+    let halted = |detail: Option<&str>| {
+        let mut report = UpdateResult::new(version("2.0"), Outcome::Failed);
+        report.detail = detail.map(str::to_owned);
+        let ops = marked(ServiceOps {
+            halt: Some(Halt {
+                node_id: "d1".to_owned(),
+                check: "state_invalid".to_owned(),
+                target: version("2.0"),
+                report: Some(report),
+                origin: HaltOrigin::Hook,
+            }),
+            ..ServiceOps::default()
+        });
+        let alerts = derived(&fleet, &ops, &quiet_store());
+        assert_eq!(alerts.len(), 1, "{alerts:?}");
+        alerts[0].message.clone()
+    };
+    assert_eq!(
+        halted(Some("state_root: owned by uid 501")),
+        "kbf is halted at 2.0 by d1, check state_invalid (\"state_root: owned by uid 501\"): \
+         nothing is ordered for it until an operator clears the halt"
+    );
+    assert_eq!(
+        halted(Some("owner \"js\"\nmode 0755")),
+        "kbf is halted at 2.0 by d1, check state_invalid (\"owner \\\"js\\\"\\nmode 0755\"): \
+         nothing is ordered for it until an operator clears the halt"
+    );
+    let plain = "kbf is halted at 2.0 by d1, check state_invalid: nothing is ordered for it \
+                 until an operator clears the halt";
+    assert_eq!(halted(Some("")), plain);
+    assert_eq!(halted(None), plain);
 }
 
 /// Proves: a pending request that is no duplicate claim is `waiting_for_operator`, naming the
@@ -217,6 +267,7 @@ fn a_pending_request_waits_for_an_operator() {
                     "ab".repeat(32),
                     UNIX + 10
                 ),
+                said: Said::default(),
             },
             Alert {
                 subject: Subject {
@@ -229,6 +280,7 @@ fn a_pending_request_waits_for_an_operator() {
                     "cd".repeat(32),
                     UNIX + 10
                 ),
+                said: Said::default(),
             },
         ]
     );
@@ -249,6 +301,7 @@ fn a_host_two_daemons_report_is_a_duplicate() {
             message: "two live daemons report the identity of d1 (a cloned disk): it is \
                       ordered nothing until a new key replaces it"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
     assert_eq!(
@@ -282,6 +335,7 @@ fn a_pending_duplicate_claim_names_both_hosts() {
                      leave it",
                     "ab".repeat(32)
                 ),
+                said: Said::default(),
             },
             Alert {
                 subject: Subject {
@@ -293,6 +347,7 @@ fn a_pending_duplicate_claim_names_both_hosts() {
                      only with replace, or leave it",
                     "cd".repeat(32)
                 ),
+                said: Said::default(),
             },
         ]
     );
@@ -317,6 +372,7 @@ fn a_failed_canary_names_its_host_while_its_version_is_bad() {
         vec![Alert {
             subject: subject(Kind::FailedCanary, "kbf", "d1", "2.0"),
             message: "d1, a canary of kbf, failed 2.0: it is marked bad and rolled back".to_owned(),
+            said: Said::default(),
         }]
     );
     let unmarked = marked(ServiceOps::default());
@@ -363,6 +419,7 @@ fn a_held_host_on_a_bad_version_is_held_on_bad_version() {
             message: "an operator holds d1 on kbf 2.0, which is marked bad: it is not ordered \
                       off it until the hold is released"
                 .to_owned(),
+            said: Said::default(),
         }]
     );
 }
@@ -433,6 +490,7 @@ fn a_host_abandoned_while_updating_stands_while_excluded() {
                           gone; possibly_mid_update): its update slot was freed, and it stays \
                           excluded until included"
                     .to_owned(),
+                said: Said::default(),
             },
             Alert {
                 subject: subject(Kind::AbandonedWhileUpdating, "kbf", "d2", ""),
@@ -440,6 +498,7 @@ fn a_host_abandoned_while_updating_stands_while_excluded() {
                           reason): its update slot was freed, and it stays excluded until \
                           included"
                     .to_owned(),
+                said: Said::default(),
             },
         ]
     );
@@ -473,6 +532,7 @@ fn a_host_silent_for_the_threshold_is_silent_and_one_just_inside_is_not() {
         vec![Alert {
             subject: subject(Kind::SilentHost, "", "d1", ""),
             message: "d1 has not heartbeated for 300 s (the threshold is 300 s)".to_owned(),
+            said: Said::default(),
         }]
     );
     let earlier = derive(
@@ -523,6 +583,7 @@ fn a_cert_inside_the_window_is_near_expiry_and_one_outside_is_not() {
                  its renewal is failing (see the coordinator's log)",
                 now + 599
             ),
+            said: Said::default(),
         }]
     );
     assert_eq!(cert_alerts(Some(now + 600)), Vec::new());
@@ -534,6 +595,7 @@ fn a_cert_inside_the_window_is_near_expiry_and_one_outside_is_not() {
                 "the certificate the coordinator serves its hosts expired at unix {now}: its \
                  renewal is failing (see the coordinator's log)"
             ),
+            said: Said::default(),
         }]
     );
     assert_eq!(cert_alerts(None), Vec::new());
@@ -588,6 +650,14 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::CertNearExpiry,
         Kind::StoreUnreachable,
         Kind::TrustedRoot,
+        Kind::PrerequisiteFailed,
+        Kind::XcodeReleaseWaiting,
+        Kind::XcodeVersionTaken,
+        Kind::UpdatesDue,
+        Kind::FailedUpdate,
+        Kind::HostHalt,
+        Kind::MaintenanceHalted,
+        Kind::MaintenanceNotBack,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -603,11 +673,21 @@ fn alerts_come_by_kind_then_service_and_host() {
             "cert_near_expiry",
             "store_unreachable",
             "trusted_root",
+            "prerequisite_failed",
+            "xcode_release_waiting",
+            "xcode_version_taken",
+            "updates_due",
+            "failed_update",
+            "host_halt",
+            "maintenance_halted",
+            "maintenance_not_back",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21, 22, 23
+        ]
     );
     let critical: Vec<Kind> = all
         .into_iter()
@@ -619,7 +699,11 @@ fn alerts_come_by_kind_then_service_and_host() {
             Kind::Halt,
             Kind::Duplicate,
             Kind::FailedCanary,
-            Kind::StoreUnreachable
+            Kind::StoreUnreachable,
+            Kind::FailedUpdate,
+            Kind::HostHalt,
+            Kind::MaintenanceHalted,
+            Kind::MaintenanceNotBack
         ]
     );
 }
@@ -686,6 +770,171 @@ fn trusted_root_names_each_host_whose_root_needs_attention() {
             ),
         ]
     );
+}
+
+/// A prerequisite state named `name` with `status`, as a daemon reports it.
+fn state(name: &str, status: PrerequisiteStatus) -> PrerequisiteState {
+    PrerequisiteState {
+        name: name.to_owned(),
+        status: status as i32,
+        ..PrerequisiteState::default()
+    }
+}
+
+/// A failed state of `name` with `failures` in a row, the next try at `next` and `reason`.
+fn failed(name: &str, failures: u32, next: u64, reason: &str) -> PrerequisiteState {
+    PrerequisiteState {
+        failures,
+        next_try_unix: next,
+        reason: reason.to_owned(),
+        ..state(name, PrerequisiteStatus::Failed)
+    }
+}
+
+/// The alerts of kbf's coordinator at 1000 over `reports`, with nothing else standing.
+/// The alerts of `reports` over a fleet of d1, d2 and d3 whose daemons announce
+/// `prerequisites-v1`, but the hosts named in `silent_on_it`, which announce no feature.
+fn derived_over(
+    reports: &BTreeMap<HostId, PrerequisitesReport>,
+    silent_on_it: &[&str],
+) -> Vec<Alert> {
+    let mut fleet = Fleet::new(Duration::ZERO, QUIET_START);
+    for host in ["d1", "d2", "d3"] {
+        let features = if silent_on_it.contains(&host) {
+            Vec::new()
+        } else {
+            vec![crate::prerequisites::FEATURE.to_owned()]
+        };
+        fleet.note_node(
+            id(host),
+            Node {
+                features,
+                ..node(990)
+            },
+            UNIX,
+        );
+        fleet.record_named_in(LEGACY, id(host), "daemon", beat("1.0"), secs(990));
+    }
+    let enrollment = EnrollmentFacts {
+        prerequisites: reports.clone(),
+        ..quiet_store()
+    };
+    derived(&fleet, &OpsState::default(), &enrollment)
+}
+
+/// Catches a `prerequisite_failed` alert for a host whose prerequisites are present, being
+/// installed, pending, not applicable or unknown, one that does not name its host, the
+/// prerequisite, the failures in a row, the next try and the reason, one alert for each failed
+/// prerequisite instead of one for the host, and one that stands after the host's last report no
+/// longer holds a failed state: of three hosts, the one whose report holds one failed state and
+/// the one whose report holds two raise one warning each, in host order, and the one whose states
+/// are not failed raises none; the same host's next report with its state present raises none.
+#[test]
+fn prerequisite_failed_names_each_host_whose_last_report_holds_a_failed_state() {
+    let report = |states: Vec<PrerequisiteState>| PrerequisitesReport {
+        states,
+        ..PrerequisitesReport::default()
+    };
+    let mut reports = BTreeMap::from([
+        (
+            id("d1"),
+            report(vec![failed(
+                "xcode-command-line-tools",
+                3,
+                UNIX + 7_200,
+                "softwareupdate --install exited 1: no space",
+            )]),
+        ),
+        (
+            id("d2"),
+            report(vec![
+                failed("xcode-command-line-tools", 1, UNIX + 60, "pkgutil exited 2"),
+                failed("another-one", 2, UNIX + 90, "it broke"),
+            ]),
+        ),
+        (
+            id("d3"),
+            report(vec![
+                state("a", PrerequisiteStatus::Pending),
+                state("b", PrerequisiteStatus::Present),
+                state("c", PrerequisiteStatus::Installing),
+                state("d", PrerequisiteStatus::NotApplicable),
+                state("e", PrerequisiteStatus::Unknown),
+                PrerequisiteState {
+                    status: 99,
+                    ..state("f", PrerequisiteStatus::Unspecified)
+                },
+            ]),
+        ),
+    ]);
+    let alerts: Vec<(Subject, proto::AlertSeverity, String)> = derived_over(&reports, &[])
+        .into_iter()
+        .map(|alert| {
+            let severity = alert.subject.kind.severity();
+            (alert.subject, severity, alert.message)
+        })
+        .collect();
+    let then = "its daemon tries again by itself, and until it succeeds the host lacks what its \
+                host group needs";
+    assert_eq!(
+        alerts,
+        [
+            (
+                subject(Kind::PrerequisiteFailed, "", "d1", ""),
+                proto::AlertSeverity::Warning,
+                format!(
+                    "d1 cannot make sure of its host prerequisites (xcode-command-line-tools \
+                     failed 3 in a row, next try at unix 1800007200: softwareupdate --install \
+                     exited 1: no space); {then}"
+                ),
+            ),
+            (
+                subject(Kind::PrerequisiteFailed, "", "d2", ""),
+                proto::AlertSeverity::Warning,
+                format!(
+                    "d2 cannot make sure of its host prerequisites (xcode-command-line-tools \
+                     failed 1 in a row, next try at unix 1800000060: pkgutil exited 2; \
+                     another-one failed 2 in a row, next try at unix 1800000090: it broke); {then}"
+                ),
+            ),
+        ]
+    );
+
+    reports.insert(
+        id("d1"),
+        report(vec![state(
+            "xcode-command-line-tools",
+            PrerequisiteStatus::Present,
+        )]),
+    );
+    reports.remove(&id("d2"));
+    assert_eq!(derived_over(&reports, &[]), []);
+}
+
+/// Catches a `prerequisite_failed` alert kept standing by a report the coordinator still holds
+/// for a host that left the fleet (retired) or whose daemon no longer announces
+/// `prerequisites-v1` (rolled back): a failed report of a host the fleet does not hold, and one
+/// of a host whose last heartbeat announced no such feature, raise none, while the same report of
+/// a host that announces it raises its alert.
+#[test]
+fn prerequisite_failed_is_raised_only_for_a_host_of_the_fleet_that_announces_the_feature() {
+    let failing = PrerequisitesReport {
+        states: vec![failed("xcode-command-line-tools", 1, UNIX + 60, "it broke")],
+        ..PrerequisitesReport::default()
+    };
+    let reports = BTreeMap::from([
+        (id("d1"), failing.clone()),
+        (id("d2"), failing.clone()),
+        (id("gone"), failing),
+    ]);
+    let hosts: Vec<String> = derived_over(&reports, &["d2"])
+        .into_iter()
+        .map(|alert| {
+            assert_eq!(alert.subject.kind, Kind::PrerequisiteFailed);
+            alert.subject.host
+        })
+        .collect();
+    assert_eq!(hosts, ["d1"]);
 }
 
 // ---- whom a duplicate claim collides with -----------------------------------------------

@@ -29,16 +29,29 @@ use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_cloc
 use crate::backup::{migrate_marker, ops_path, restore_marker};
 use crate::enrollment::os_random;
 use crate::initial_admin::InitialAdmin;
+use crate::jobs::Jobs;
 use crate::jti_file::jti_path;
 use crate::layout::layout_path;
 use crate::lock::{LockError, LockGuard, StateLock, lock_path};
 use crate::login::Login;
 use crate::ops::{Marker, OpsState, unlanded};
 use crate::service::Coordinator;
+use crate::ssh_book::Book;
+use crate::ssh_ledger::Ledger;
+use crate::store::postgres::admin_rows::PgAdmin;
+use crate::store::postgres::alert_rows::PgAlerts;
+use crate::store::postgres::login_rows::PgLoginRows;
+use crate::store::postgres::periodic::PgJobs;
+use crate::store::postgres::ssh::PgLedger;
+use crate::store::postgres::ssh_book::PgBook;
+use crate::store::postgres::xcode_rows::PgReleases;
 use crate::store::postgres::{DatabaseError, Dsn, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
 use crate::tokens::OperatorTokens;
 use crate::verdict_file::verdicts_path;
+use crate::xcode_feed::KnownReleases;
+use crate::xcode_files::{FileReleases, xcode_releases_path};
+use crate::xcode_store::XcodeStore;
 
 /// The store a start opened: the backend under the three stores and CI's spent ids, what it
 /// loaded, the marker of changes not yet committed, what holds the store for this process, and
@@ -50,6 +63,13 @@ pub(super) struct Opened {
     pub(super) marker: PathBuf,
     pub(super) held: LockGuard,
     pub(super) records: Option<Arc<dyn Records>>,
+    /// The ledger of the SSH certificates, which only the database keeps.
+    pub(super) ledger: Option<Arc<dyn Ledger>>,
+    /// The book of the SSH tunnels, which only the database keeps.
+    pub(super) book: Option<Arc<dyn Book>>,
+    /// The database, when the store is one: the sign-in's rows, the periodic jobs, the alerts'
+    /// rows and the initial-admin file's are kept there.
+    pub(super) database: Option<Postgres>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -80,6 +100,9 @@ pub(super) fn open_store(
             marker: crate::ops_file::unfinished_path(&ops),
             held,
             records: None,
+            ledger: None,
+            book: None,
+            database: None,
         });
     };
     let file_flags = [
@@ -110,22 +133,39 @@ pub(super) fn open_store(
         .server_names
         .first()
         .map_or("coordinator", String::as_str);
-    let (store, loaded) = Postgres::open(&dsn, holder, &wall_clock(), Arc::clone(oidc_clock))?;
+    let listen = super::database::listen_of(
+        flags.heartbeat_listen,
+        flags.private_listen,
+        flags.lan_listen,
+    );
+    let options = flags
+        .database
+        .options(crate::stamp::version(), &listen, flags.quiet_secs);
+    let (store, loaded) = Postgres::open(
+        &dsn,
+        &options,
+        holder,
+        &wall_clock(),
+        Arc::clone(oidc_clock),
+    )?;
     if let Some(numbers) = listed {
         settle_in_database(&store, marker, &numbers)?;
     }
     let records: Option<Arc<dyn Records>> = match flags.ca_key_file {
-        Some(_) => Some(Arc::new(
-            PgRecords::over(&store).map_err(|e| DatabaseError::Load(e.to_string()))?,
-        )),
+        Some(_) => Some(Arc::new(PgRecords::over(&store))),
         None => None,
     };
+    let ledger: Option<Arc<dyn Ledger>> = Some(Arc::new(PgLedger::new(store.clone())));
+    let book: Option<Arc<dyn Book>> = Some(Arc::new(PgBook::new(store.clone())));
     Ok(Opened {
         backend: Arc::new(store.clone()),
         loaded,
         marker: marker.clone(),
-        held: LockGuard::new(store),
+        held: LockGuard::new(store.clone()),
         records,
+        ledger,
+        book,
+        database: Some(store),
     })
 }
 
@@ -352,9 +392,13 @@ pub(super) fn initial_admin(flags: &Serve) -> Result<Option<InitialAdmin>, Start
 pub(super) fn with_initial_admin(
     coordinator: Coordinator,
     flags: &Serve,
+    database: Option<&Postgres>,
 ) -> Result<Coordinator, StartError> {
     let coordinator = match initial_admin(flags)? {
-        Some(file) => coordinator.with_initial_admin(file),
+        Some(file) => coordinator.with_initial_admin(match database {
+            Some(store) => file.over(PgAdmin::new(store.clone())),
+            None => file,
+        }),
         None => coordinator,
     };
     coordinator.look_at_initial_admin()?;
@@ -369,13 +413,63 @@ pub(super) fn with_initial_admin(
 pub(super) fn with_login(
     coordinator: Coordinator,
     flags: &Serve,
+    database: Option<&Postgres>,
 ) -> Result<Coordinator, StartError> {
-    let login = Login::new(
-        flags.login.login_settings(),
-        Arc::new(SystemClock),
-        os_random(),
-    )?;
-    Ok(coordinator.with_login(login))
+    let settings = flags.login.login_settings();
+    let login = Login::new(settings, Arc::new(SystemClock), os_random())?;
+    let Some(store) = database else {
+        return Ok(coordinator.with_login(login));
+    };
+    let rows = PgLoginRows::new(
+        store.clone(),
+        settings.sessions,
+        settings.limiter,
+        flags.database.session_touch_secs,
+    );
+    let jobs = PgJobs::start(
+        store.clone(),
+        flags.database.job_periods(flags.xcode.feed().is_some()),
+        &rows,
+    )
+    .map_err(DatabaseError::Refused)?;
+    Ok(coordinator
+        .with_login(login.with_rows(Arc::new(rows)))
+        .with_jobs(
+            Jobs::new(jobs, flags.database.job_tick()),
+            PgAlerts::new(store.clone()),
+        ))
+}
+
+/// `coordinator` reading the list of Xcode releases at `--xcode-feed-url` (none: not at all) and
+/// keeping it in the database's table, or, over files, in the file beside the state file; and,
+/// with `--xcode-dir`, keeping Xcode archives in that directory.
+///
+/// # Errors
+/// [`StartError::XcodeDir`]: `--xcode-dir` is not a directory that can be read, or an upload a
+/// stopped coordinator left in it could not be removed.
+pub(super) fn with_xcode(
+    coordinator: Coordinator,
+    flags: &Serve,
+    database: Option<&Postgres>,
+) -> Result<Coordinator, StartError> {
+    let known: Arc<dyn KnownReleases> = match database {
+        Some(store) => Arc::new(PgReleases::new(store.clone())),
+        None => Arc::new(FileReleases::new(xcode_releases_path(
+            &flags.state_file.clone().unwrap_or_default(),
+        ))),
+    };
+    let coordinator = coordinator
+        .with_xcode_feed(flags.xcode.feed())
+        .with_known_xcode_releases(known);
+    match &flags.xcode.xcode_dir {
+        None => Ok(coordinator),
+        Some(dir) => {
+            let now = std::time::UNIX_EPOCH + Duration::from_secs(coordinator.ops.unix_now());
+            let store = XcodeStore::open(dir, flags.xcode.xcode_max_bytes, now)
+                .map_err(|why| StartError::XcodeDir(why.to_string()))?;
+            Ok(coordinator.with_xcode_store(Arc::new(store)))
+        }
+    }
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and

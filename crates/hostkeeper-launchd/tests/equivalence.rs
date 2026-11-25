@@ -467,7 +467,7 @@ fn an_additive_step_keeps_its_exit_within_its_bound_and_is_stopped_past_it() {
         params: Path::new(PARAMS),
         executable: &hook,
         unit,
-        timeout_secs: 30,
+        bound: secs(30),
     };
     for rig in &rigs {
         let line = "{\"detail\":\"removed\"}";

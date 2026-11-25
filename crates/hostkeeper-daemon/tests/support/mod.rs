@@ -65,9 +65,17 @@ pub fn idle_links() -> Links {
         renewal: RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        prerequisites: None,
+        maintenance: None,
         period: DEFAULT_HEARTBEAT_SECS,
         dispatch: Arc::new(ManualDispatch::default()),
         stop: StopFlag::default(),
+        bmc: None,
+        serial_console: None,
     }
 }
 
@@ -329,6 +337,7 @@ impl Rig {
 
     pub fn ports(&self) -> Ports {
         Ports {
+            own_job: None,
             announcement: Default::default(),
             launcher: self.launcher.clone(),
             packages: self.pins.clone(),
@@ -439,6 +448,7 @@ impl Rig {
             run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
             package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+            keep_versions: hostkeeper_daemon::prune::DEFAULT_KEEP_VERSIONS,
         }
     }
 

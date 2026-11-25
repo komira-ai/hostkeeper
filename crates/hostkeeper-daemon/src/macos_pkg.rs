@@ -19,7 +19,7 @@
 //! | Where | What the daemon does for a `macos-pkg` version |
 //! |---|---|
 //! | the update's `prepare` ([`Repository::stage_pkg`]) | The order of the entry ([`Order::of`]); the `.pkg` fetched by its pin alone (a `macos-pkg` entry carries no attestation: [`crate::packages::Packages::pinned`]), then the installer's `stage`: the signature checked against the host's signers before anything is expanded, so an unsigned package, or one whose leaf is no signer, is `Failed`, `environment`, `signature`, with nothing staged; then sealed and published with `target.json` as an `apt` version is ([`Repository::fill_sealed`]) |
-//! | the switch before `cutover` ([`Repository::activate_pkg`]) | The installer's `activate` of the version, `from` the `macos-pkg` version `current` names when it is another, then `current` switched |
+//! | the switch before `cutover` ([`Repository::activate_pkg`]) | The installer's `activate` of the version, `from` the `macos-pkg` version `current` names when it is another (its directory and the `run` labels of its sealed manifest, the jobs it ran), then, for hostkeeper's own package, `launchctl enable` of the daemon's job, then `current` switched |
 //! | the switch before `rollback` | The previous version activated again from its sealed directory (`from` the one rolled back from); for a first install, its `run` jobs stopped, the package removed ([`Repository::remove_pkg`]) and `current` taken away |
 //! | the uninstall's step 5 ([`Repository::remove_pkg`]) | The installer's `remove` over the versions the host keeps, then the record dropped |
 //! | each heartbeat ([`Repository::drift_pkg`]) | The receipt and the recorded version's files against the record ([`observe`]), one [`Seen`] per service kept between heartbeats |
@@ -40,9 +40,10 @@ use hostkeeper_install::lock::InstallerLock as PkgLock;
 use hostkeeper_install::macos_pkg::drift::{Seen, observe};
 use hostkeeper_install::macos_pkg::record::{INSTALLER, PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::Signers;
-use hostkeeper_install::macos_pkg::{Bounds, MacosPkg, Order, announces};
+use hostkeeper_install::macos_pkg::{Bounds, MacosPkg, Order, Replaced, announces, run_of};
 use hostkeeper_install::repository::{Drift, Failure, Reason};
 use hostkeeper_install::{Announcement, StageOrder, Tools};
+use hostkeeper_launchd::Label;
 use hostkeeper_placed::InstalledEntry;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
@@ -53,6 +54,7 @@ use crate::installed::{CURRENT, PREVIOUS};
 use crate::packages::PackageError;
 use crate::repository::{PlacedRecords, REMOVE_SECS_WITHOUT_BOUNDS, Repository, StageFailure};
 use crate::target;
+use crate::verbs::force::SELF_SERVICE;
 
 /// The detail of a `macos-pkg` step on a daemon that holds no `macos-pkg` installer: one that
 /// does not announce it, which the receipt check defers before any step runs.
@@ -247,22 +249,33 @@ impl Repository {
     }
 
     /// The `macos-pkg` version `current` of `service` names when it is not `version`: the one an
-    /// `activate` of `version` replaces, or rolls back from.
+    /// `activate` of `version` replaces, or rolls back from, with the `run` labels of its sealed
+    /// manifest (the jobs it ran).
     fn replaced(
         &self,
         service: &ServiceName,
         version: &Version,
-    ) -> Result<Option<PathBuf>, Failure> {
+    ) -> Result<Option<(PathBuf, Vec<Label>)>, Failure> {
         let current = self.placer().current(service.as_str()).map_err(io)?;
         let Some(current) = current.filter(|current| current != version.as_str()) else {
             return Ok(None);
         };
         let dir = self.version_path(service, &current);
-        Ok(Self::holds_pkg(&dir)?.then_some(dir))
+        let sealed = target::read(&dir).map_err(io)?;
+        let Some(sealed) = sealed.filter(|entry| entry.installer == Installer::MacosPkg.as_str())
+        else {
+            return Ok(None);
+        };
+        let run = sealed.manifest.as_ref().map(run_of).transpose()?;
+        Ok(Some((dir, run.unwrap_or_default())))
     }
 
     /// The installer's `activate` of the `macos-pkg` version `dir` holds for `entry`, then
-    /// `current` switched to `version`.
+    /// `current` switched to `version`. The jobs disabled are those the replaced version's `run`
+    /// named and this one's does not. When the service is hostkeeper's own, whose manifest
+    /// names no `run` for the daemon's job, that job is enabled after the `activate`: an
+    /// earlier release's `activate` left it disabled, and a disabled job is not loaded after a
+    /// reboot.
     pub(crate) fn activate_pkg(
         &self,
         service: &ServiceName,
@@ -272,7 +285,17 @@ impl Repository {
     ) -> Result<(), Failure> {
         let (order, _) = Self::pkg_order(service, version, entry)?;
         let from = self.replaced(service, version)?;
-        let activated = self.with_pkg(|pkg| pkg.activate(&order, dir, from.as_deref()))?;
+        let activated = self.with_pkg(|pkg| {
+            let activated = pkg.activate(
+                &order,
+                dir,
+                from.as_ref().map(|(dir, run)| Replaced { dir, run }),
+            )?;
+            if service.as_str() == SELF_SERVICE {
+                pkg.enable(&Label::daemon(), order.bounds.activate)?;
+            }
+            Ok(activated)
+        })?;
         if let Some(found) = activated.drift {
             let mut repaired = self.repaired.lock().unwrap_or_else(PoisonError::into_inner);
             repaired.insert(

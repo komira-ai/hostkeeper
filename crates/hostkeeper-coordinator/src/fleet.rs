@@ -151,6 +151,8 @@ pub struct Node {
     /// How many of its heartbeats since the coordinator started were skewed: counted by the
     /// fleet ([`Fleet::note_node`]), which replaces what the node given to it says.
     pub skewed_beats: u64,
+    /// The host's last maintenance report that was kept, if its daemon announces `maintenance-v1`.
+    pub maintenance: Option<crate::maintenance::Kept>,
 }
 
 impl Node {
@@ -166,6 +168,8 @@ mod groups;
 pub use groups::Marks;
 #[path = "fleet_retry.rs"]
 pub mod retry;
+#[path = "fleet_shared.rs"]
+pub(crate) mod shared;
 
 /// Every host the coordinator has heard from since it started.
 #[derive(Clone, Debug)]
@@ -222,9 +226,15 @@ pub struct Fleet {
     pub(crate) moves: crate::moving::Moves,
     /// The facts generations daemons reported over gRPC ([`crate::facts`]).
     pub(crate) facts: crate::facts::Reported,
+    /// The Remote Login probes daemons reported over gRPC ([`crate::remote_login_probe`]).
+    pub(crate) remote_login_probes: crate::remote_login_probe::Probes,
+    /// The Full Disk Access states daemons reported ([`crate::full_disk_access`]).
+    pub(crate) full_disk_access: crate::full_disk_access::Reported,
     /// Every package of every group and its desired state, as of the last take of the lock: the
     /// rollouts one service waits for, across groups ([`crate::queue`]).
     cluster: crate::queue::Cluster,
+    /// What it took in of the fleet's rows of a store other coordinators share ([`shared`]).
+    shared: shared::Shared,
 }
 
 impl Fleet {
@@ -256,7 +266,10 @@ impl Fleet {
             picks: crate::picks::Picks::default(),
             moves: crate::moving::Moves::default(),
             facts: crate::facts::Reported::default(),
+            remote_login_probes: crate::remote_login_probe::Probes::default(),
+            full_disk_access: crate::full_disk_access::Reported::default(),
             cluster: crate::queue::Cluster::default(),
+            shared: shared::Shared::default(),
         }
     }
 
@@ -309,11 +322,15 @@ impl Fleet {
         })
     }
 
-    /// Whether the coordinator orders nothing at `now`: within the quiet start (the `quiet` of
-    /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
+    /// Whether the coordinator orders nothing at `now`: while the store's link is lost, and within
+    /// the quiet time: after a gap in the fleet's beats as the rows say it once they were read
+    /// ([`shared`]), else the quiet start (the `quiet` of [`Self::new`] after the start).
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        self.store_lost || now < self.started.saturating_add(self.quiet)
+        self.store_lost
+            || self
+                .quiet_by_rows(now)
+                .unwrap_or(now < self.started.saturating_add(self.quiet))
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any
@@ -429,8 +446,7 @@ impl Fleet {
         self.nodes.get(id)
     }
 
-    /// The platform the host `id` last named: its node's, else the last word of it about
-    /// `service`.
+    /// The platform the host `id` last named: its node's, else the last word of it about `service`.
     #[must_use]
     pub fn platform_of(&self, service: &str, id: &HostId) -> Option<Platform> {
         self.node(id)
@@ -488,6 +504,8 @@ impl Fleet {
         self.found.forget_host(id);
         self.nodes.remove(id);
         self.picks.forget(id);
+        self.remote_login_probes.forget(id);
+        self.full_disk_access.forget(id);
         true
     }
 
@@ -962,9 +980,7 @@ impl Fleet {
     /// order id. Taken, it is not sent again.
     pub fn take_abort(&mut self, id: &HostId) -> Option<(String, String)> {
         let key = self.aborts.keys().find(|(host, _)| host == id).cloned()?;
-        self.aborts
-            .remove_entry(&key)
-            .map(|((_, service), order_id)| (service, order_id))
+        self.aborts.remove(&key).map(|order_id| (key.1, order_id))
     }
 
     /// Forgets the host `id` for `service` altogether, its order with it, so the slot it held is
@@ -974,11 +990,9 @@ impl Fleet {
         let held = self
             .occupant(service, id)
             .is_some_and(|host| self.holds_slot(service, id, host, now));
-        self.hosts.entry(service.to_owned()).or_default().remove(id);
-        self.outside
-            .entry(service.to_owned())
-            .or_default()
-            .remove(id);
+        for hosts in [&mut self.hosts, &mut self.outside] {
+            hosts.entry(service.to_owned()).or_default().remove(id);
+        }
         self.orders.remove(&(id.clone(), service.to_owned()));
         held
     }

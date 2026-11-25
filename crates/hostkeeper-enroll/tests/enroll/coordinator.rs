@@ -26,6 +26,8 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_proto::hostkeeper::operator::v1::ApproveRequest;
 use x509_cert::Certificate;
 use x509_cert::der::{Decode, DecodePem, Encode};
+use x509_cert::ext::pkix::SubjectAltName;
+use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::name::Name;
 use x509_cert::request::CertReq;
 
@@ -133,6 +135,7 @@ impl CoordinatorEnroll for InProcess {
         let reply = self
             .enrollment
             .enroll(pb::EnrollRequest {
+                host_key_fingerprints: Vec::new(),
                 csr_der: request.csr_der.clone(),
                 claims: Some(pb::Claims {
                     machine_id: claims.machine_id.clone().unwrap_or_default(),
@@ -260,6 +263,28 @@ fn stored(identity: &Identity) -> Certificate {
     Certificate::from_pem(&text).expect("a PEM certificate")
 }
 
+/// The subjectAltNames of `certificate` as `uri:` and `dns:` entries, and whether the extension
+/// is critical. Empty and not critical for a certificate without the extension.
+fn alt_names(certificate: &Certificate) -> (Vec<String>, bool) {
+    let found = certificate
+        .tbs_certificate()
+        .get_extension::<SubjectAltName>()
+        .expect("a readable extension");
+    let Some((critical, names)) = found else {
+        return (Vec::new(), false);
+    };
+    let names = names
+        .0
+        .iter()
+        .map(|name| match name {
+            GeneralName::UniformResourceIdentifier(uri) => format!("uri:{uri}"),
+            GeneralName::DnsName(dns) => format!("dns:{dns}"),
+            other => format!("other:{other:?}"),
+        })
+        .collect();
+    (names, critical)
+}
+
 /// Asserts that `identity` is generation `generation` of `host:web-1`, signed by the
 /// coordinator's CA, and that the coordinator reads its certificate as the approved host and
 /// role. Returns the certificate's DER.
@@ -272,6 +297,18 @@ fn assert_issued(enrollment: &Enrollment, identity: &Identity, generation: u64) 
     assert_eq!(tbs.subject(), &host);
     let ca = Certificate::from_der(enrollment.ca_bundle().certificate_der()).expect("the CA");
     assert_eq!(tbs.issuer(), ca.tbs_certificate().subject());
+    // The names the CA issues now: the host role and the host id, not critical, which this
+    // daemon's verifier, shared with every released daemon, accepted to store it.
+    assert_eq!(
+        alt_names(&certificate),
+        (
+            vec![
+                "uri:urn:hostkeeper:host-role:host".to_owned(),
+                format!("dns:{HOST}")
+            ],
+            false
+        )
+    );
     let der = certificate.to_der().expect("DER");
     let known = enrollment
         .identity_of(&der)
@@ -282,8 +319,9 @@ fn assert_issued(enrollment: &Enrollment, identity: &Identity, generation: u64) 
 
 /// Catches a daemon that cannot finish enrollment with the coordinator it is built for: its
 /// `Enroll` is accepted and stays pending (also at a poll before approval), an operator approves
-/// it, the next poll brings a certificate of subject `host:web-1` from the coordinator's CA,
-/// and the renewal at half life brings the next one.
+/// it, the next poll brings a certificate of subject `host:web-1` from the coordinator's CA
+/// that names the host role and the host id as a DNS name (the verifier accepts it: the outcome
+/// is `Enrolled`), and the renewal at half life brings the next one, with the same names.
 #[test]
 fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
     let world = World::new("own-coordinator");

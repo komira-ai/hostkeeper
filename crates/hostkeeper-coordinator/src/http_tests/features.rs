@@ -152,6 +152,21 @@ async fn an_agent_that_announced_features_gets_the_supported_subset() {
     );
 }
 
+/// Proves: `maintenance-v1` is advertised, so an agent that announces it with another name is
+/// answered both, in the coordinator's order.
+///
+/// Catches: a feature that is read and kept but not advertised, which no daemon would announce.
+#[tokio::test]
+async fn maintenance_v1_is_advertised() {
+    assert!(FEATURES.contains(&crate::maintenance::FEATURE));
+    let rig = rig("http-features-maintenance", FEATURES).await;
+    let announcing = beat("2.0", r#","agent_features":["maintenance-v1","halt-v1"]"#);
+    assert_eq!(
+        beat_text(&rig, "d1", "daemon", &announcing).await,
+        r#"{"reply":"nothing","features":["halt-v1","maintenance-v1"]}"#
+    );
+}
+
 /// Catches: a coordinator that advertises nothing staying silent to a new agent: it answers
 /// `features: []`, which tells the agent this coordinator knows the field and supports none.
 #[tokio::test]
@@ -166,14 +181,25 @@ async fn a_coordinator_that_advertises_nothing_answers_an_announcing_agent_with_
 
 /// Catches: a bad announcement costing the host its heartbeat or being answered as a good one:
 /// the heartbeat is still read, and the answer carries no `features` (a bad list is no
-/// announcement). A list one name over the bound of 16 is bad.
+/// announcement). A list one name over the bound of 32 is bad; a list of seventeen, what a daemon
+/// with every port and `ssh-v1` names, is read.
 #[tokio::test]
 async fn a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent() {
     let rig = rig("http-features-bad", &["halt-v1"]).await;
+    let names = |n: usize| {
+        let list: Vec<String> = (0..n).map(|i| format!("f{i}")).collect();
+        format!(r#","agent_features":{}"#, serde_json::json!(list))
+    };
+    let seventeen = names(17).replacen("\"f0\"", "\"halt-v1\"", 1);
+    assert_eq!(
+        beat_text(&rig, "d3", "daemon", &beat("2.0", &seventeen)).await,
+        r#"{"reply":"nothing","features":["halt-v1"]}"#
+    );
+    let over = names(hostkeeper_wire::wire::MAX_FEATURES + 1);
     let bad = [
         r#","agent_features":["Halt-V1"]"#,
         r#","agent_features":["halt-v1","halt-v1"]"#,
-        r#","agent_features":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q"]"#,
+        over.as_str(),
         r#","agent_features":[""]"#,
     ];
     assert_eq!(
@@ -258,6 +284,18 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::facts::FEATURE {
             // The facts of a host go only in the answer over gRPC.
             crate::facts_tests::facts_v1_is_acted_on().await;
+        } else if *name == crate::operator_keys::FEATURE {
+            // The operator keys of a host go only in the answer over gRPC.
+            crate::operator_keys::tests::operator_keys_v1_is_acted_on();
+        } else if *name == crate::ssh_heartbeat::FEATURE {
+            // The sshd access of a host goes only in the answer over gRPC.
+            crate::ssh_heartbeat::tests::ssh_v1_is_acted_on().await;
+        } else if *name == crate::prerequisites::FEATURE {
+            // The host prerequisites of a host go only in the answer over gRPC.
+            crate::prerequisites::tests::prerequisites_v1_is_acted_on();
+        } else if *name == crate::maintenance::FEATURE {
+            // The report of a host is kept and shown, whatever the route.
+            crate::maintenance::tests::maintenance_v1_is_acted_on();
         } else if let Some(extra) = uses.get(name) {
             let without = typed_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -277,6 +315,10 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(crate::picks::TARGET_FEATURE);
     handled.push(crate::repository_push::FEATURE);
     handled.push(crate::facts::FEATURE);
+    handled.push(crate::operator_keys::FEATURE);
+    handled.push(crate::ssh_heartbeat::FEATURE);
+    handled.push(crate::prerequisites::FEATURE);
+    handled.push(crate::maintenance::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);

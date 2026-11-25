@@ -8,11 +8,11 @@
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), where
 //! each service's update plan stands (the stages entered, the hosts done, an operator's pause:
 //! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), the marks of
-//! each (host group, package) (`crate::host_groups`, all of them in this file), and a ring of
-//! the last changes made. A key this build added is written only when it holds
-//! something, so a file that never held one keeps the shape the release before reads; once it
-//! does, the release before refuses the file, as it should: it would ignore a hold, a force or an
-//! assignment.
+//! each (host group, package) (`crate::host_groups`, all of them in this file), the maintenance
+//! runs (`crate::maintenance_runs`), and a ring of the last changes made. A key this build added
+//! is written only when it holds something, so a file that never held one keeps the shape the
+//! release before reads; once it does, the release before refuses the file, as it should: it would
+//! ignore a hold, a force or an assignment.
 //! Over a file it is one JSON file, `--ops-file`, kept apart from `desired.json` so that an
 //! earlier coordinator, which refuses a key it does not know there, still reads the desired
 //! state. The file is created by the first change (a
@@ -93,9 +93,7 @@ use serde::{Deserialize, Serialize};
 use crate::assignment::ServiceAssignments;
 #[cfg(doc)]
 use crate::audit_file::AuditLog;
-use crate::audit_file::{
-    AuditLine, DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock, wall_clock,
-};
+use crate::audit_file::{DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock, wall_clock};
 use crate::desired::{Staged, StoreError};
 use crate::facts::Generations;
 use crate::force::ForceRecord;
@@ -104,7 +102,8 @@ use crate::host_groups::GroupsMarks;
 use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
-use crate::store::{BackendError, Commit, Fake, Files, Shared, commit_across};
+use crate::store::{BackendError, Fake, Files, Shared};
+use crate::tokens::Operator;
 use crate::trusted_publishers::TrustedPublisher;
 
 pub use crate::operate::OperateError;
@@ -308,7 +307,8 @@ pub struct ServiceOps {
 pub struct AuditEntry {
     /// Its number: one more than the entry before it, for the life of the file.
     pub seq: u64,
-    /// Who made it: the name of the operator's token (`operator` for `--operator-token-file`),
+    /// Who made it: the operator's name (a signed-in user, the owner of the API token in
+    /// [`Self::api_token`], or a token of the tokens file; `operator` for `--operator-token-file`),
     /// `coordinator` for the coordinator's own changes, `ci` for CI's, `mdm-nonce` for a Mac's
     /// approval by its nonce, `mdm-gate` for the MDM gate's.
     pub by: String,
@@ -325,7 +325,15 @@ pub struct AuditEntry {
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
-    /// release writes none).
+    /// release writes none; the Xcode store's `xcode_put` (an operator's upload) and `xcode_remove`
+    /// (an operator's `Xcode.Remove` or the coordinator's pruning); the maintenance runs'
+    /// `maintenance_schedule` and `maintenance_cancel` (an operator's `Maintenance` calls) and the
+    /// coordinator's `maintenance_start` and `maintenance_step` (a host's turn started, and its
+    /// step as its daemon reports it); the
+    /// console's `console_open`,
+    /// `console_close`, `console_denied`,
+    /// `power_action`, `boot_device_set` and `console_coordinator_start`, lines that change no
+    /// state and never enter the ring, [`OpsStore::append_audit_only`]).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -349,15 +357,55 @@ pub struct AuditEntry {
     /// the ops file's ring.
     #[serde(skip)]
     pub source: Option<String>,
+    /// The API token the operator `by` called with, by name, when it called with one: `by` is
+    /// then the token's owner. Kept like `subject`: not in the ops file's ring.
+    #[serde(skip)]
+    pub api_token: Option<String>,
+}
+
+/// Who an audit entry is by: a name (`coordinator`, `ci`, an operator's), or an [`Operator`],
+/// whose name is `by` and whose API token is the entry's `api_token`.
+pub trait AuditBy {
+    /// The name the entry is by.
+    fn by_name(&self) -> &str;
+    /// The API token the entry records, if any.
+    fn by_token(&self) -> Option<&str>;
+}
+
+impl AuditBy for str {
+    fn by_name(&self) -> &str {
+        self
+    }
+    fn by_token(&self) -> Option<&str> {
+        None
+    }
+}
+
+impl AuditBy for String {
+    fn by_name(&self) -> &str {
+        self
+    }
+    fn by_token(&self) -> Option<&str> {
+        None
+    }
+}
+
+impl AuditBy for Operator {
+    fn by_name(&self) -> &str {
+        self.name()
+    }
+    fn by_token(&self) -> Option<&str> {
+        self.api_token()
+    }
 }
 
 impl AuditEntry {
     /// An entry by `by` for `action`; the store numbers it.
     #[must_use]
-    pub fn new(by: &str, action: &str) -> Self {
+    pub fn new(by: &(impl AuditBy + ?Sized), action: &str) -> Self {
         Self {
             seq: 0,
-            by: by.to_owned(),
+            by: by.by_name().to_owned(),
             action: action.to_owned(),
             service: None,
             node_id: None,
@@ -365,6 +413,7 @@ impl AuditEntry {
             reason: None,
             subject: None,
             source: None,
+            api_token: by.by_token().map(str::to_owned),
         }
     }
 }
@@ -407,6 +456,10 @@ pub struct OpsState {
     /// and every other mark in this file, written only when there are any.
     #[serde(default, skip_serializing_if = "GroupsMarks::is_empty")]
     pub(crate) host_groups: GroupsMarks,
+    /// The maintenance runs (`crate::maintenance_runs`), oldest first; written only when there
+    /// are any, so a file with none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) maintenance_runs: Vec<crate::maintenance_runs::Run>,
 }
 
 impl Default for OpsState {
@@ -422,6 +475,7 @@ impl Default for OpsState {
             inventory: Vec::new(),
             rollouts: BTreeMap::new(),
             host_groups: GroupsMarks::default(),
+            maintenance_runs: Vec::new(),
         }
     }
 }
@@ -470,6 +524,16 @@ pub enum OpsError {
     /// `audit_unavailable`.
     #[error("the audit file could not be appended to, so the change is not made: {0}")]
     AuditUnavailable(#[source] io::Error),
+    /// A change staged with the desired state ([`OpsStore::decide_changes_with`]) was staged on a
+    /// copy older than the rows its edit read under their locks: a commit came between. It is
+    /// another coordinator's, or this one's own commit that took a number that only the rows
+    /// hold (the number a desired version is set under). Nothing changed. Memory now holds the
+    /// rows as read, so a change decided and staged again on them is made on the state as stored.
+    #[error(
+        "the desired state changed in the store after this change was staged on it: nothing \
+         changed, and the change is to be decided again on the state as stored"
+    )]
+    DesiredChanged,
     /// The file was written by a newer build.
     #[error(
         "{path}: schema {found} is newer than the {SCHEMA} this build reads; starting would \
@@ -531,7 +595,7 @@ pub struct OpsStore {
     current: Mutex<OpsState>,
     /// Held across a whole change, so that writers wait for each other and not readers:
     /// `current` is only locked to read or to swap, never across the backend's commit.
-    writing: Mutex<()>,
+    writing: crate::store::Writers,
     backend: Shared,
     /// The generation of each host's facts ([`crate::facts`]).
     generations: Generations,
@@ -544,11 +608,6 @@ pub struct OpsStore {
     marker: Option<PathBuf>,
     /// The changes in memory and not yet committed.
     pending: Mutex<pending::Pending>,
-    /// Told when the store is deposed: another coordinator led its database while its link was
-    /// lost, and the coordinator stops ([`OpsStore::depose`]).
-    deposed: tokio::sync::Notify,
-    /// The epoch the deposing coordinator held, once deposed.
-    deposed_by: std::sync::OnceLock<u64>,
     /// The file and rotation of a store over a file, which a test hook opens again.
     #[cfg(test)]
     files: Option<(PathBuf, Rotation)>,
@@ -629,15 +688,13 @@ impl OpsStore {
     pub(crate) fn over(backend: Shared, state: OpsState) -> Self {
         Self {
             current: Mutex::new(state),
-            writing: Mutex::new(()),
+            writing: crate::store::Writers::default(),
             generations: Generations::from(backend.last_seq()),
             backend,
             unix: wall_clock(),
             record_window: RecordWindow::default(),
             marker: None,
             pending: Mutex::new(pending::Pending::default()),
-            deposed: tokio::sync::Notify::new(),
-            deposed_by: std::sync::OnceLock::new(),
             #[cfg(test)]
             files: None,
             #[cfg(test)]
@@ -648,6 +705,17 @@ impl OpsStore {
     /// The generation of the facts of the host `node_id` ([`crate::facts`]).
     pub(crate) fn facts_generation(&self, node_id: &str) -> u64 {
         self.generations.of(node_id)
+    }
+
+    /// The store with the facts generations `facts` as loaded, over a backend that keeps them:
+    /// every other host's is 0 ([`crate::facts`]). Over one that keeps none, each host's starts at
+    /// the newest audit number.
+    #[must_use]
+    pub(crate) fn with_facts(mut self, facts: Option<crate::store::Facts>) -> Self {
+        if let Some(facts) = facts {
+            self.generations = Generations::kept(facts);
+        }
+        self
     }
 
     /// The store with `marker` as the file it lists its pending changes in.
@@ -776,6 +844,8 @@ impl OpsStore {
     ///
     /// # Errors
     /// The edit's own error, or [`OpsError`] as for [`Self::change`]: nothing changed.
+    /// [`OpsError::DesiredChanged`]: `staged` was staged on a desired state older than the rows
+    /// the edit read; memory now holds them, and the caller may decide and stage it again.
     pub(crate) fn decide_changes_with(
         &self,
         staged: Staged<'_>,
@@ -792,105 +862,6 @@ impl OpsStore {
     pub(crate) fn escape(&self, entry: AuditEntry) -> AuditEntry {
         let Ok((mut entries, _committed)) = self.held_first(|_| Ok::<_, Infallible>(vec![entry]));
         entries.swap_remove(0)
-    }
-
-    /// [`Self::decide_changes`] in the order `order`, the desired state `staged` committed with
-    /// it when there is one.
-    fn audited_changes<E: From<OpsError>>(
-        &self,
-        order: Order,
-        staged: Option<Staged<'_>>,
-        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
-    ) -> Result<Vec<AuditEntry>, E> {
-        if order == Order::StorageFirst {
-            return self.stored_first(staged, edit);
-        }
-        let (entries, committed) = self.held_first(edit)?;
-        match committed {
-            // A raise stands when only its audit line failed, as it always has; the line is
-            // committed with it later.
-            Ok(()) | Err(OpsError::AuditUnavailable(_)) => Ok(entries),
-            Err(why) => Err(why.into()),
-        }
-    }
-
-    /// A storage-first change: what is pending committed first, so that no change is committed
-    /// ahead of an earlier one, then the change (with the desired state `staged`, if any), and
-    /// memory only once it is committed.
-    fn stored_first<E: From<OpsError>>(
-        &self,
-        staged: Option<Staged<'_>>,
-        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
-    ) -> Result<Vec<AuditEntry>, E> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        self.interleaved();
-        let before = self.state();
-        let mut next = before.clone();
-        let mut entries = edit(&mut next)?;
-        self.flush()?;
-        let lines = self.numbered(&mut next, &mut entries);
-        let commit = Commit {
-            desired: staged.as_ref().and_then(Staged::part),
-            ops: Some((&before, &next)),
-            audit: &lines,
-            ..Commit::default()
-        };
-        match &staged {
-            Some(staged) => commit_across(staged.backend(), &self.backend, &commit),
-            None => self.backend.commit(&commit),
-        }
-        .map_err(OpsError::from)?;
-        *self.lock() = next;
-        self.generations.raise(&entries);
-        if let Some(staged) = staged {
-            staged.finish();
-        }
-        entries.iter().for_each(announce);
-        Ok(entries)
-    }
-
-    /// A memory-first change: in memory, then held pending under the marker and committed. Answers
-    /// the entries and how the commit went; a commit that failed leaves the change pending.
-    fn held_first<E>(
-        &self,
-        edit: impl FnOnce(&mut OpsState) -> Result<Vec<AuditEntry>, E>,
-    ) -> Result<(Vec<AuditEntry>, Result<(), OpsError>), E> {
-        let _writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
-        self.interleaved();
-        let before = self.state();
-        let mut next = before.clone();
-        let mut entries = edit(&mut next)?;
-        let lines = self.numbered(&mut next, &mut entries);
-        *self.lock() = next;
-        entries.iter().for_each(announce);
-        self.hold(before, lines);
-        let committed = self.flush();
-        if let Err(why) = &committed {
-            tracing::error!(
-                alert = "halt",
-                %why,
-                "a change stands in memory and is not yet written: its commit is tried again at every heartbeat and before the next change"
-            );
-        }
-        Ok((entries, committed))
-    }
-
-    /// Numbers `entries` on from the newest number in memory or in storage, puts them in the
-    /// ring of `next`, and answers their audit lines, stamped now.
-    fn numbered(&self, next: &mut OpsState, entries: &mut [AuditEntry]) -> Vec<AuditLine> {
-        let ringed = next.audit.last().map_or(0, |last| last.seq);
-        let mut seq = self.backend.last_seq().max(ringed);
-        for entry in entries.iter_mut() {
-            seq += 1;
-            entry.seq = seq;
-        }
-        next.audit.extend(entries.iter().cloned());
-        let surplus = next.audit.len().saturating_sub(AUDIT_RING);
-        next.audit.drain(..surplus);
-        let at = (self.unix)();
-        entries.iter().map(|e| AuditLine::of(e, at)).collect()
     }
 
     /// The page `query` asks for, from the backend: the audit files, read without reading them
@@ -942,9 +913,17 @@ impl OpsStore {
 
 /// The store's changes in memory and not yet committed, their retry and their marker.
 #[path = "ops_pending.rs"]
-mod pending;
+pub(crate) mod pending;
 
 pub(crate) use pending::{Marker, unlanded};
+
+/// The store's audit-only append: a numbered line that changes no state.
+#[path = "ops_audit_only.rs"]
+mod audit_only;
+
+/// The store's changes as edits of the backend: storage first, memory first, and the numbering.
+#[path = "ops_edit.rs"]
+mod edit;
 
 /// The store's hooks for tests: a clock, a writer and an appender put in, a rival writer's change
 /// made between a read and a change.

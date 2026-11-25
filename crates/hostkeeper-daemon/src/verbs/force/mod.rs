@@ -21,10 +21,10 @@
 //!   entry); and its manifest read for the order's service and version and this daemon's
 //!   version. A failure is the verdict `Failed` before the commit with the reason the stage or
 //!   the loader gives, and nothing is written.
-//! - The standing halt: an order whose halt generation is greater than the held one raises the
-//!   held generation and clears a `Halt` record
-//!   ([`hostkeeper_steps::StepRunner::clear_halt`]); a lower or equal one leaves the hold as it
-//!   is, and the force goes on.
+//! - The standing halt: an order whose halt generation is greater than the held one lifts it as
+//!   `clear_halt` does: a `Halt` record cleared
+//!   ([`hostkeeper_steps::StepRunner::clear_halt`]), then the held-halt file removed; a lower or
+//!   equal one leaves the hold as it is, and the force goes on.
 //! - Steps 4 to 6 ([`locked`]): a post-success watcher of the service is stopped; an unfinished
 //!   hooked update in the record is flagged `forced` under the record lock and the unit of its
 //!   running step stopped by name (tried twice; then the verdict `Failed`, `unstopped`, and
@@ -39,7 +39,11 @@
 //! target: a resend stages it again from the entry only when its directory is gone or no longer
 //! whole; the start pass, whose record keeps no entry, needs the directory and fails the force
 //! `Failed` before the commit when it is gone.
+//!
+//! `hostkeeper activate` ([`activate`]) is a force root runs on the host to a version it keeps:
+//! the same record and switch, steps 4 to 18, with no order, no entry and nothing staged.
 
+mod activate;
 mod switch;
 
 use std::fmt::Display;
@@ -62,9 +66,11 @@ use crate::locks::{Holder, Package, ServiceGuard};
 use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
+use crate::verbs::clear_halt;
 use crate::verbs::update::{last_record, while_held};
 
 pub use crate::prune::ALERT_PRUNE;
+pub use activate::{activate, kept, listing};
 pub use switch::ALERT_FORCE_FAILED;
 
 /// The service a force is refused for: hostkeeper updates itself by its own path.
@@ -235,7 +241,7 @@ fn fresh<'c>(
         Err(failed) => return failed,
     };
     let lifted = match order.halt_generation > held_halt {
-        true => lift_halt(ctx, service, order.halt_generation),
+        true => lift_halt(ctx, service),
         false => Ok(()),
     };
     if let Err(refused) = lifted {
@@ -245,7 +251,7 @@ fn fresh<'c>(
         Ok(guard) => guard,
         Err(reply) => return reply,
     };
-    let (rec, force) = match begin(ctx, order, &target) {
+    let (rec, force) = match begin(ctx, Journal::of(order), &target) {
         Ok(begun) => begun,
         Err(refused) => return refused,
     };
@@ -380,16 +386,12 @@ fn package_class(error: &PackageError) -> ManifestClass {
     }
 }
 
-/// Lifts the standing halt of `service`: its held generation raised to `generation`, and a
-/// `Halt` record cleared, as `clear_halt` does.
-fn lift_halt(ctx: &Ctx, service: &ServiceName, generation: u64) -> Result<(), Reply> {
-    ctx.halts
-        .raise(service, generation)
-        .map_err(|error| Reply::refused(Refusal::StoreFailed, error))?;
-    ctx.runner(service)
-        .clear_halt()
-        .map_err(|error| Reply::refused(Refusal::StoreFailed, error))?;
-    Ok(())
+/// Lifts the standing halt of `service` as `clear_halt` does ([`clear_halt::lift`]): a `Halt`
+/// record cleared, then its held-halt file removed.
+fn lift_halt(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
+    clear_halt::lift(ctx, service)
+        .map(drop)
+        .map_err(|refused| Reply::refused(refused.refusal, refused.detail))
 }
 
 /// Steps 4 to 6, and the service's lock: a watcher of the service is stopped; then, until the
@@ -453,14 +455,44 @@ fn stop_running(ctx: &Ctx, service: &ServiceName) -> Result<(), Reply> {
     Ok(())
 }
 
+/// What a force journals of the order it runs for, or of the `hostkeeper activate` it runs for
+/// ([`activate`]).
+struct Journal<'a> {
+    service: &'a ServiceName,
+    version: &'a Version,
+    digest: &'a PackageDigest,
+    /// The order's try; `None` for an activate, which keeps the try of the service's last record
+    /// so that the coordinator's tries go on past it.
+    order_try: Option<u64>,
+    halt_generation: u64,
+    order_id: Option<String>,
+}
+
+impl<'a> Journal<'a> {
+    /// What the force `order` journals.
+    fn of(order: &'a Forced) -> Journal<'a> {
+        Journal {
+            service: &order.package.service,
+            version: &order.package.version,
+            digest: &order.package.digest,
+            order_try: Some(order.package.order_try.get()),
+            halt_generation: order.halt_generation,
+            order_id: order.package.order_id.clone(),
+        }
+    }
+}
+
 /// Step 8's record, before it is written: a hooked update the record still holds unfinished
 /// (its runner gone, or the daemon stopped mid-step) is closed `forced_over` first, as its
 /// runner would have closed it, and its params file removed.
-fn begin(ctx: &Ctx, order: &Forced, target: &Target) -> Result<(Record, ForceRecord), Reply> {
-    let service = &order.package.service;
+fn begin(ctx: &Ctx, journal: Journal<'_>, target: &Target) -> Result<(Record, ForceRecord), Reply> {
+    let service = journal.service;
     let store = ctx.store(service);
     let last = last_record(ctx, service)?;
     let generation = last.as_ref().map_or(0, |rec| rec.generation);
+    let order_try = journal
+        .order_try
+        .or_else(|| last.as_ref().and_then(|rec| rec.order_try));
     let left =
         last.filter(|rec| rec.force.is_none() & !matches!(rec.state, State::Finished { .. }));
     if let Some(mut rec) = left {
@@ -471,21 +503,21 @@ fn begin(ctx: &Ctx, order: &Forced, target: &Target) -> Result<(Record, ForceRec
     files::make_private(&ctx.service_dir(service)).map_err(store_failed)?;
     let from = installed::linked_version(&ctx.dirs.packages, service, CURRENT);
     let force = ForceRecord {
-        target_version: order.package.version.to_string(),
-        target_digest: order.package.digest.to_string(),
+        target_version: journal.version.to_string(),
+        target_digest: journal.digest.to_string(),
         from_version: from.map(|version| version.to_string()),
         phase: ForcePhase::Started,
-        order_try: order.package.order_try.get(),
-        halt_generation: order.halt_generation,
-        order_id: order.package.order_id.clone(),
+        order_try: order_try.unwrap_or(0),
+        halt_generation: journal.halt_generation,
+        order_id: journal.order_id,
         verdict: None,
     };
     let rec = Record {
         schema: SCHEMA,
         service: service.to_string(),
-        target_version: order.package.version.to_string(),
+        target_version: journal.version.to_string(),
         artifact_digest: target.tree_digest.clone(),
-        tarball_digest: order.package.digest.to_string(),
+        tarball_digest: journal.digest.to_string(),
         previous_digest: None,
         generation,
         params: store.params_path(),
@@ -494,7 +526,7 @@ fn begin(ctx: &Ctx, order: &Forced, target: &Target) -> Result<(Record, ForceRec
         state: State::Pending,
         hook: HookSel::New,
         progress: Progress::default(),
-        order_try: Some(order.package.order_try.get()),
+        order_try,
         forced: false,
         force: None,
     };

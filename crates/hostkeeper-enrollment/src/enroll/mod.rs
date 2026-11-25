@@ -7,8 +7,9 @@
 //!   the same request. A request claiming a machine id another request has, or a MAC bound to
 //!   an enrolled host, is a duplicate claim.
 //! - [`EnrollmentStore::approve`] is the operator's decision, as a plain function: the
-//!   operator names the key hash, and the host id is checked unique under the store lock that
-//!   records the approval. [`EnrollmentStore::approve_recorded`] is the same decision with who
+//!   operator names the key hash, and the host id is checked unique by the write that records
+//!   the approval, which lands only on the records its decision read.
+//!   [`EnrollmentStore::approve_recorded`] is the same decision with who
 //!   made it, when and why written into the approval, a `duplicate_claim` request refused
 //!   unless the decision replaces, and a Mac nonce checked and consumed in the same write.
 //! - [`EnrollmentStore::post`] refuses a new request while [`EnrollmentStore::max_pending`]
@@ -38,6 +39,7 @@
 //! store's lock file). The records are the messages of
 //! `proto/hostkeeper/enrollment/store/v1/store.proto` ([`records::pb`]).
 
+mod bmc;
 mod groups;
 mod hosts;
 mod issue;
@@ -52,6 +54,7 @@ mod store;
 use std::io;
 use std::path::PathBuf;
 
+pub use bmc::{BMC_REMEMBERED_SECS, HostBmc, KeptBmc};
 pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
@@ -296,6 +299,9 @@ pub struct EnrolledHost {
     /// When the coordinator accepted the heartbeat `running` was last written from, unix
     /// seconds; `None` with it.
     pub running_unix: Option<u64>,
+    /// The host's BMC as its daemon last reported it ([`EnrollmentStore::note_bmc`]); `None`
+    /// until a heartbeat after the approval carries one.
+    pub bmc: Option<KeptBmc>,
 }
 
 /// The host group of an enrolled host, as its host record keeps it ([`EnrollmentStore::membership`],
@@ -375,6 +381,12 @@ pub enum StoreError {
     /// is named. Nothing of the commit is written.
     #[error("a {0} record whose key does not parse is not kept")]
     Unkeyed(&'static str),
+    /// A write whose decision read the record at `path` found it changed by another writer
+    /// since ([`records::Seen`]): nothing of the write is written. The store decides again once
+    /// on what that writer left, so a caller sees this only when another writer changed a
+    /// record again in between.
+    #[error("{path} was changed by another writer since it was read: nothing is written")]
+    Raced { path: PathBuf },
 }
 
 /// Why a post was refused.

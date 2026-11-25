@@ -156,6 +156,19 @@ impl Fleet {
             .and_modify(|move_| move_.admitted = Some(packages));
     }
 
+    /// [`Self::uninstalls_pending`] for a reader that holds no services ([`crate::orderable`]):
+    /// over the services the host's last heartbeat lists, since an intent stands only for a
+    /// package its group does not list.
+    pub(crate) fn uninstalls_listed(&self, id: &HostId) -> bool {
+        self.node(id).is_some_and(|node| {
+            node.announced.keys().any(|name| {
+                self.uninstall_order(name, id).is_some()
+                    && !self.is_held(name, id)
+                    && !self.is_excluded(name, id)
+            })
+        })
+    }
+
     /// Whether the host `id` has a package to uninstall in its move: an intent of the host for a
     /// package that the group does not list, that it lists, and that no hold or exclusion leaves
     /// alone.
@@ -209,10 +222,11 @@ fn needed<'a>(
 }
 
 /// Whether the plan of `def` at `want` admits the host `id`: it is neither halted, at a version
-/// marked bad nor paused, and the host is no member of it, already holds a place of it, or the
-/// plan has a free place in its current stage or has rolled every other host.
+/// marked bad nor paused, the host is not in its turn of a maintenance run (a plan does not count
+/// it then, so no place of it is checked), and the host is no member of it, already holds a place
+/// of it, or the plan has a free place in its current stage or has rolled every other host.
 fn admits(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
-    if fleet.is_stopped_in(def, &want.version) {
+    if fleet.is_stopped_in(def, &want.version) || fleet.in_maintenance(id) {
         return false;
     }
     let view = stages::current(def, want, fleet, now);

@@ -24,6 +24,7 @@ use serde::Serialize;
 
 use super::at::At;
 use super::groups;
+use super::maintenance_rows;
 use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
 use crate::assignment::{Entry, ServiceAssignments};
 use crate::desired::{self, StoreError};
@@ -84,7 +85,7 @@ pub(crate) const VERDICTS: [Table; 2] = [
 ];
 
 /// The operations state's tables, the host groups' (`0008`) last.
-pub(crate) const OPS: [Table; 18] = [
+pub(crate) const OPS: [Table; 20] = [
     Table {
         name: "services",
         keys: &[("service", KeyTy::Text)],
@@ -217,6 +218,8 @@ pub(crate) const OPS: [Table; 18] = [
     groups::SERVICES,
     groups::ROLLOUTS,
     groups::ROLLOUT_DONE,
+    maintenance_rows::RUNS,
+    maintenance_rows::HOSTS,
 ];
 
 /// Where an error of a table says it is: the table, as a path the stores' errors name.
@@ -681,6 +684,7 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
         }
     }
     groups::insert_marks(&state.host_groups, &mut tables)?;
+    maintenance_rows::insert_runs(&state.maintenance_runs, &mut tables)?;
     Ok(tables)
 }
 
@@ -944,6 +948,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             .insert(at.key(1)?);
     }
     state.host_groups = groups::marks_of(tables)?;
+    state.maintenance_runs = maintenance_rows::runs_of(tables)?;
     Ok(state)
 }
 

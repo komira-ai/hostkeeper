@@ -51,6 +51,7 @@ const OIDC_DEP: &str = "hostkeeper-oidc = { path = \"../hostkeeper-oidc\" }\n";
 const TLS_DEP: &str = "hostkeeper-tls = { path = \"../hostkeeper-tls\" }\n";
 const ENROLLMENT_DEP: &str = "hostkeeper-enrollment = { path = \"../hostkeeper-enrollment\" }\n";
 const PROTO_DEP: &str = "hostkeeper-proto = { path = \"../hostkeeper-proto\" }\n";
+const CONSOLE_DEP: &str = "hostkeeper-console = { path = \"../hostkeeper-console\" }\n";
 const RELEASE_DEP: &str = "hostkeeper-release = { path = \"../hostkeeper-release\" }\n";
 
 const KBF_CHAIN: &str = "kbf-types is a kbf package (kbf, kbf-* or kbf_*), reached through";
@@ -709,7 +710,7 @@ fn coordinator(deps: &str) -> (String, String) {
 fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
     let mut edits = bare_crate("vendored", "kbf-types");
     edits.push(coordinator(&format!(
-        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{}",
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{CONSOLE_DEP}{}",
         vendored_dep("kbf-types")
     )));
     let dir = fixture("clean", edits);
@@ -720,47 +721,47 @@ fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
 }
 
 /// The coordinator's workspace dependencies, as the layers want them.
-const COORDINATOR_DEPS: &str = "{hostkeeper-config, hostkeeper-enrollment, \
+const COORDINATOR_DEPS: &str = "{hostkeeper-config, hostkeeper-console, hostkeeper-enrollment, \
                                 hostkeeper-oidc, hostkeeper-proto, hostkeeper-release, hostkeeper-tls, \
                                 hostkeeper-wire}";
 
-/// Catches: the coordinator losing one of its seven workspace dependencies (the set must be
-/// exactly wire, oidc, tls, enrollment, proto, config and release, not a subset of
+/// Catches: the coordinator losing one of its eight workspace dependencies (the set must be
+/// exactly wire, oidc, tls, enrollment, proto, config, release and console, not a subset of
 /// them).
 #[test]
 fn a_coordinator_missing_a_workspace_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![coordinator(&format!(
-            "{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
+            "{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{CONSOLE_DEP}"
         ))],
     );
     assert_eq!(
         check(&dir),
         refused(&format!(
             "hostkeeper-coordinator depends (normal or build) on the workspace crates \
-             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-oidc, \
+             {{hostkeeper-config, hostkeeper-console, hostkeeper-enrollment, hostkeeper-oidc, \
              hostkeeper-proto, hostkeeper-release, hostkeeper-tls}}, \
              but must depend on exactly {COORDINATOR_DEPS}"
         ))
     );
 }
 
-/// Catches: the coordinator gaining an eighth workspace dependency (here the hook contract)
-/// beside wire, oidc, tls, enrollment, proto, config and release.
+/// Catches: the coordinator gaining a ninth workspace dependency (here the hook contract)
+/// beside wire, oidc, tls, enrollment, proto, config, release and console.
 #[test]
 fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![coordinator(&format!(
-            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{HOOK_DEP}"
+            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{CONSOLE_DEP}{HOOK_DEP}"
         ))],
     );
     assert_eq!(
         check(&dir),
         refused(&format!(
             "hostkeeper-coordinator depends (normal or build) on the workspace crates \
-             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-hook, \
+             {{hostkeeper-config, hostkeeper-console, hostkeeper-enrollment, hostkeeper-hook, \
              hostkeeper-oidc, hostkeeper-proto, hostkeeper-release, hostkeeper-tls, \
              hostkeeper-wire}}, but must depend \
              on exactly {COORDINATOR_DEPS}"
@@ -773,7 +774,7 @@ fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
 #[test]
 fn a_coordinator_may_have_oidc_as_a_dev_dependency_and_no_other_layer_crate() {
     let deps = format!(
-        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{CONSOLE_DEP}"
     );
     let with_dev = |dev: &str| {
         manifest_of(
@@ -781,7 +782,10 @@ fn a_coordinator_may_have_oidc_as_a_dev_dependency_and_no_other_layer_crate() {
             layered("hostkeeper-coordinator", &deps, "", dev),
         )
     };
-    let dir = fixture("clean", vec![with_dev(&format!("{TESTKIT_DEP}{OIDC_DEP}"))]);
+    let dir = fixture(
+        "clean",
+        vec![with_dev(&format!("{TESTKIT_DEP}{OIDC_DEP}{CONSOLE_DEP}"))],
+    );
     assert_eq!(check(&dir), Ok(()));
     let dir = fixture("clean", vec![with_dev(&format!("{TESTKIT_DEP}{HOOK_DEP}"))]);
     assert_eq!(
@@ -878,9 +882,9 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              hostkeeper-steps, which is neither itself nor hostkeeper-testkit"
         )
     );
-    // The coordinator, the seed generator and the boot server depend on the enrollment crate, so
-    // they lose the dependency with it.
-    let without = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{PROTO_DEP}{CONFIG_DEP}");
+    // The console library, the coordinator, the seed generator and the boot server depend on the
+    // enrollment crate, so they lose the dependency with it.
+    let without = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{PROTO_DEP}{CONFIG_DEP}{CONSOLE_DEP}");
     let seed_without = format!("{CONFIG_DEP}{WIRE_DEP}");
     let pxe_without = format!(
         "{CONFIG_DEP}{HOOK_DEP}hostkeeper-install = {{ path = \"../hostkeeper-install\" }}\n\
@@ -900,6 +904,10 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
                 "hostkeeper-pxe",
                 layered("hostkeeper-pxe", &pxe_without, "", TESTKIT_DEP),
             ),
+            manifest_of(
+                "hostkeeper-console",
+                layered("hostkeeper-console", WIRE_DEP, "", TESTKIT_DEP),
+            ),
         ],
     );
     std::fs::remove_dir_all(dir.join("crates/hostkeeper-enrollment")).expect("remove the crate");
@@ -907,9 +915,12 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
     assert_eq!(
         check(&dir),
         refused(&format!(
-            "hostkeeper-coordinator depends (normal or build) on the workspace crates \
-             {{hostkeeper-config, hostkeeper-oidc, hostkeeper-proto, hostkeeper-tls, \
-             hostkeeper-wire}}, \
+            "hostkeeper-console depends (normal or build) on the workspace crates \
+             {{hostkeeper-wire}}, but must depend on exactly \
+             {{hostkeeper-enrollment, hostkeeper-wire}}\n\
+             hostkeeper-coordinator depends (normal or build) on the workspace crates \
+             {{hostkeeper-config, hostkeeper-console, hostkeeper-oidc, hostkeeper-proto, \
+             hostkeeper-tls, hostkeeper-wire}}, \
              but must depend on exactly {COORDINATOR_DEPS}\n\
              hostkeeper-enrollment is not a workspace member\n\
              hostkeeper-pxe depends (normal or build) on the workspace crates \

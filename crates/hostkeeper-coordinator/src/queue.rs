@@ -7,11 +7,15 @@
 //! that a decision for a host of one group sees the rollouts of the packages of every other group
 //! ([`crate::live::live_elsewhere`]).
 //!
-//! The order is the time the coordinator first saw a desired version, kept in memory; among
-//! entries first seen together (after a restart every one of them) it is the group's last change
-//! (`at_unix`), then the group's name, the package's place in the group's list, and its name.
-//! Nothing new is stored, so an older release reads the same data. A coordinator that places by
-//! the rollout file (no groups) keeps no queue: it counts its services' live rollouts alone.
+//! The order is, first, the number the desired version was set under (`set_seq`), taken from the
+//! database's sequence in the transaction that set it, so every coordinator on the database
+//! orders alike (`docs/design/coordinator-multi-instance.md`, section 5.2); a row with no number
+//! ranks before every numbered one. Among entries with the same number, or none (every entry
+//! over the files), it is the time the coordinator first saw a desired version, kept in memory;
+//! among entries first seen together (after a restart every one of them) it is the group's last
+//! change (`at_unix`), then the group's name, the package's place in the group's list, and its
+//! name. A coordinator that places by the rollout file (no groups) keeps no queue: it counts its
+//! services' live rollouts alone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -20,7 +24,7 @@ use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::live::why_live;
 use crate::services::ServiceDef;
-use crate::stages::{HostState, Wait, current};
+use crate::stages::{Wait, current};
 
 /// One package of one group with its desired state.
 #[derive(Clone, Debug)]
@@ -31,6 +35,9 @@ pub(crate) struct Entry {
     pub(crate) want: Option<Desired>,
     /// The group's last change, in Unix seconds: the order of entries first seen together.
     pub(crate) at_unix: u64,
+    /// The number the desired version was set under, taken from the database's sequence in the
+    /// transaction that set it; none over the files and for a row not yet numbered.
+    pub(crate) set_seq: Option<i64>,
 }
 
 impl Entry {
@@ -58,10 +65,10 @@ pub(crate) struct Cluster {
     stamps: BTreeMap<(String, String, String), Duration>,
 }
 
-/// Where an entry stands in the queue: when its desired version was first seen; the group's last
-/// change; the group's name; its place in the group's list (the earlier listed first); and the
-/// package's name.
-type Order = (Duration, u64, String, i64, String);
+/// Where an entry stands in the queue: the number its desired version was set under (none before
+/// every number); when it was first seen; the group's last change; the group's name; its place in
+/// the group's list (the earlier listed first); and the package's name.
+pub(crate) type Order = (Option<i64>, Duration, u64, String, i64, String);
 
 impl Cluster {
     /// Whether the cluster holds no entry: a fleet nothing built a snapshot for.
@@ -99,15 +106,27 @@ impl Cluster {
         self.stamps.get(&entry.key()).copied().unwrap_or_default()
     }
 
-    fn order(&self, entry: &Entry) -> Order {
+    /// Where `entry` stands in the queue: the smaller, the earlier.
+    pub(crate) fn order(&self, entry: &Entry) -> Order {
         let key = entry.key();
         (
+            entry.set_seq,
             self.stamp_of(entry),
             entry.at_unix,
             key.0,
             -i64::from(entry.def.priority),
             key.1,
         )
+    }
+
+    /// The entries of the packages of the group `group`, in the group's order.
+    pub(crate) fn in_group<'a>(
+        &'a self,
+        group: &'a crate::host_groups::GroupName,
+    ) -> impl Iterator<Item = &'a Entry> {
+        self.entries
+            .iter()
+            .filter(move |e| e.def.group() == Some(group))
     }
 
     /// The entries of the service `name`.
@@ -142,15 +161,21 @@ impl Cluster {
 
     /// The services queued ahead of `name`, first in line first, each once: those with work left
     /// whose rollout is not live and that something can still order (a service that is halted, at
-    /// a version marked bad, paused, held by a failed host, waiting for an Advance or for `min_up`, or whose every host that has not
-    /// started defers, takes no place), that were set before `name`. Empty when `name` has no
+    /// a version marked bad, paused, held by its failed hosts ([`crate::failed_hosts`]), waiting for an Advance or for `min_up`,
+    /// or whose every host that has not started defers or is held by a rule before the plan's gate,
+    /// [`crate::orderable`], takes no place), that were set before `name`. Empty when `name` has no
     /// entry.
     pub(crate) fn ahead_of(&self, name: &str, fleet: &Fleet, now: Duration) -> Vec<String> {
         // The place of the service is that of its entries something can order; a service with
         // none holds the place of its first entry.
         let own: Vec<(bool, Order)> = self
             .of(name)
-            .map(|e| (orderable(e, fleet, now), self.order(e)))
+            .map(|e| {
+                (
+                    orderable(&e.def, e.want.as_ref(), fleet, now),
+                    self.order(e),
+                )
+            })
             .collect();
         let ready = own.iter().filter(|(ok, _)| *ok).map(|(_, order)| order);
         let Some(mine) = ready.min().or_else(|| own.iter().map(|(_, o)| o).min()) else {
@@ -159,7 +184,7 @@ impl Cluster {
         let mut waiting: BTreeMap<Order, &str> = BTreeMap::new();
         for entry in self.entries.iter().filter(|e| e.def.name != name) {
             let order = self.order(entry);
-            if order < *mine && orderable(entry, fleet, now) {
+            if order < *mine && orderable(&entry.def, entry.want.as_ref(), fleet, now) {
                 waiting.entry(order).or_insert(entry.def.name.as_str());
             }
         }
@@ -172,13 +197,18 @@ impl Cluster {
     }
 }
 
-/// Whether `entry` waits for its turn: no live rollout, a desired version not on every host, and a
-/// host something can order now (not a plan that waits for an Advance or for `min_up`).
-fn orderable(entry: &Entry, fleet: &Fleet, now: Duration) -> bool {
-    let Some(want) = entry.want.as_ref() else {
+/// Whether `def`, wanted at `want`, waits for its turn: no live rollout, a desired version not on
+/// every host, and a host something can order now (not a plan that waits for an Advance or for
+/// `min_up`, and a host no rule before the plan's gate holds, [`crate::orderable`]).
+pub(crate) fn orderable(
+    def: &ServiceDef,
+    want: Option<&Desired>,
+    fleet: &Fleet,
+    now: Duration,
+) -> bool {
+    let Some(want) = want else {
         return false;
     };
-    let def = &entry.def;
     if fleet.is_stopped_in(def, &want.version) || why_live(def, Some(want), fleet, now).is_some() {
         return false;
     }
@@ -192,9 +222,6 @@ fn orderable(entry: &Entry, fleet: &Fleet, now: Duration) -> bool {
     !blocked
         && !view.finished()
         && view.paused.is_none()
-        && !view.members.iter().any(|m| m.state == HostState::Failed)
-        && view
-            .members
-            .iter()
-            .any(|m| m.state == HostState::Waiting && !m.deferring)
+        && !view.failed_holds()
+        && crate::orderable::can_order(def, want, &view, fleet, now)
 }

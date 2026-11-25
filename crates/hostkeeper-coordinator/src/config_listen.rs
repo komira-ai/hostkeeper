@@ -32,6 +32,21 @@ pub struct LanFlags {
     pub lan_names: Vec<String>,
 }
 
+/// The opt-in of a health listener bound on every interface, as a Swarm task's is for the edge's
+/// check.
+#[derive(Clone, Debug, Args)]
+pub struct HealthFlags {
+    /// Take a wildcard --health-listen (`0.0.0.0` or `[::]`): the health listener then listens on
+    /// every interface of the coordinator's network namespace. Give it only in a namespace whose
+    /// interfaces are loopback and one private network, such as a Swarm task's on one overlay
+    /// network, where the edge checks `/readyz` at an address not known before the task starts.
+    /// The listener answers with no token and no TLS, and says only `ok` or a reason token. Off
+    /// unless given; a loopback address or the address of one interface is taken as without it.
+    /// Requires --health-listen.
+    #[arg(long, requires = "health_listen")]
+    pub health_listen_wildcard: bool,
+}
+
 /// Why `--lan-name` takes `name` as no DNS name, as the start's refusal states it, or `Ok`.
 fn lan_name_refusal(name: &str) -> Option<&'static str> {
     let bare = name.strip_suffix('.');
@@ -88,8 +103,8 @@ impl LanFlags {
 
 /// Refuses the listen addresses `flags` name that the start does not take: a wildcard
 /// `--private-listen` unless `--private-listen-wildcard` is given, a wildcard `--lan-listen` unless `--lan-listen-wildcard` is given, a wildcard `--lan-address`, a `--lan-name` that is no DNS name,
-/// and a `--health-listen` that is not a loopback address. An IPv4 address written as IPv6 is
-/// judged as the IPv4 address it is.
+/// and a wildcard `--health-listen` unless `--health-listen-wildcard` is given. An IPv4 address
+/// written as IPv6 is judged as the IPv4 address it is.
 pub(super) fn check_listen(flags: &Serve) -> Result<(), StartError> {
     if !flags.private_listen_wildcard && flags.private_listen.ip().to_canonical().is_unspecified() {
         return Err(StartError::PrivateListen(flags.private_listen));
@@ -118,10 +133,9 @@ pub(super) fn check_listen(flags: &Serve) -> Result<(), StartError> {
             reason,
         });
     }
-    if let Some(health) = flags
-        .health_listen
-        .filter(|health| !health.ip().to_canonical().is_loopback())
-    {
+    if let Some(health) = flags.health_listen.filter(|health| {
+        !flags.health.health_listen_wildcard && health.ip().to_canonical().is_unspecified()
+    }) {
         return Err(StartError::HealthListen(health));
     }
     Ok(())

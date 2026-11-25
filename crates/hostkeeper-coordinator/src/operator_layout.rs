@@ -22,8 +22,9 @@ use crate::layout::{
     Device, Kind, Layout, LayoutError, Placement, Rack, Row, Segment, Sled, SledItem, Subject,
 };
 use crate::operator::{Caller, entry_proto, optional_reason};
-use crate::ops::{AuditEntry, Write};
+use crate::ops::{AuditBy, AuditEntry, Write};
 use crate::service::Coordinator;
+use crate::tokens::Operator;
 
 /// The reason of a write that names none.
 const DEFAULT_REASON: &str = "layout edit";
@@ -191,7 +192,7 @@ impl Coordinator {
     }
 
     /// The `layout_place` audit entry an approval's placement of the subject with `key` writes.
-    pub(crate) fn place_entry(by: &str, key: &str) -> AuditEntry {
+    pub(crate) fn place_entry(by: &(impl AuditBy + ?Sized), key: &str) -> AuditEntry {
         let mut entry = about(by, LAYOUT_PLACE, key);
         entry.reason = Some("approval".to_owned());
         entry
@@ -199,7 +200,7 @@ impl Coordinator {
 
     /// The audit entry of `action` by `by` about `subject` for the request's `reason`.
     fn layout_entry(
-        by: &str,
+        by: &Operator,
         action: &str,
         subject: &str,
         reason: &str,

@@ -13,7 +13,8 @@
 //!   with the [`registry`] of every version CI has set and its release (the digest of its
 //!   package, or the record of its release index; neither orders a host anything);
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start, and
-//!   what each host's last gRPC heartbeat said of its Sigstore trusted root ([`trusted_root`]);
+//!   what each host's last gRPC heartbeat said of its Sigstore trusted root ([`trusted_root`])
+//!   and of its Mac's Full Disk Access grant (`full_disk_access`);
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
 //! - [`verdicts`]: the release failures heard, each counted once per host, order id and try,
 //!   and the [`verdict_file`] that stores them with the verdict each host was last acknowledged,
@@ -81,6 +82,17 @@
 //!   [`operator_repositories`]), kept beside the desired state, and `repository_push`: the
 //!   set of it each Linux host is sent in the answer to a heartbeat over gRPC, and what its
 //!   daemon reported of it;
+//! - [`operator_keys`]: the operator's SSH public keys of each host group, read from
+//!   `--operator-keys-file` and re-read while the coordinator runs, the set each host is sent in
+//!   the answer to a heartbeat over gRPC, and what its daemon reported of it;
+//! - [`prerequisites`]: the host prerequisites of each host group (Apple's Command Line Tools on a
+//!   Mac), read from `--host-prerequisites-file` and re-read while the coordinator runs, the set
+//!   each host is sent in the answer to a heartbeat over gRPC, and what its daemon reported of
+//!   them;
+//! - `console`: the operator's `Console` calls (a Linux server's power and boot device through its
+//!   BMC, and the console sessions) and the WebSocket that attaches to a session (a Linux server's
+//!   Serial over LAN, a Mac's Screen Sharing), over `hostkeeper_console`, with the three files of
+//!   the `--console-*` flags re-read while the coordinator runs and the `ipmitool` process;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
@@ -124,18 +136,27 @@ pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
+mod bmc_report;
+pub mod ca_check;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
+pub mod config_maintenance;
+pub mod config_xcode;
+pub(crate) mod console;
 pub mod converge;
 pub mod decide;
+pub(crate) mod decide_maintenance;
 pub mod defer;
 pub mod desired;
 pub mod enrollment;
 pub(crate) mod facts;
+pub(crate) mod failed_hosts;
 mod features;
 pub mod fleet;
 pub mod force;
+pub(crate) mod full_disk_access;
+pub(crate) mod graceful;
 pub(crate) mod group_converge;
 mod group_halt;
 pub(crate) mod group_reach;
@@ -155,6 +176,7 @@ pub mod initial_admin;
 pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
+pub(crate) mod jobs;
 pub mod jti_file;
 pub mod layout;
 pub mod listen;
@@ -163,6 +185,21 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub(crate) mod macos_resolve;
+pub mod maintenance;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the maintenance runs read it; until they are built only its tests call it"
+    )
+)]
+pub(crate) mod maintenance_effective;
+pub(crate) mod maintenance_mac;
+pub(crate) mod maintenance_operator;
+pub(crate) mod maintenance_policy;
+pub(crate) mod maintenance_runs;
+pub(crate) mod maintenance_service;
+pub(crate) mod maintenance_xcode;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -170,19 +207,24 @@ pub mod operator;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
+pub mod operator_keys;
 pub mod operator_layout;
 pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod order_terms;
+mod orderable;
 pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
+mod plan_memo;
+pub mod prerequisites;
 mod queue;
 pub mod reconcile;
 pub mod registry;
 pub(crate) mod releases;
+pub(crate) mod remote_login_probe;
 pub(crate) mod repositories;
 pub(crate) mod repository_credential;
 pub(crate) mod repository_discover;
@@ -192,11 +234,27 @@ pub(crate) mod repository_serve;
 pub mod retry;
 pub mod rollouts;
 mod running;
+pub(crate) mod serial_console_report;
 pub mod service;
+mod service_errors;
 pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;
 pub mod session;
+pub(crate) mod ssh_access;
+pub(crate) mod ssh_book;
+pub mod ssh_ca;
+pub(crate) mod ssh_cert;
+pub(crate) mod ssh_client;
+pub mod ssh_heartbeat;
+#[cfg(test)]
+mod ssh_host_tests;
+pub(crate) mod ssh_ledger;
+pub mod ssh_operators;
+pub mod ssh_sign;
+pub(crate) mod ssh_terminal;
+pub(crate) mod ssh_terminal_route;
+pub(crate) mod ssh_tunnel;
 pub mod stages;
 pub mod stamp;
 pub mod status;
@@ -210,7 +268,14 @@ pub mod verdict_file;
 pub mod verdicts;
 pub(crate) mod version_route;
 pub(crate) mod wait;
+pub(crate) mod websocket;
 pub(crate) mod write_record;
+pub(crate) mod xcode_feed;
+pub(crate) mod xcode_files;
+pub(crate) mod xcode_get;
+pub(crate) mod xcode_put;
+pub(crate) mod xcode_service;
+pub(crate) mod xcode_store;
 
 #[cfg(test)]
 mod agent_service_tests;
@@ -230,6 +295,8 @@ mod audit_actions_tests;
 mod audit_file_tests;
 #[cfg(test)]
 mod audit_list_tests;
+#[cfg(test)]
+mod audit_only_tests;
 #[cfg(test)]
 mod audit_refusal_tests;
 #[cfg(test)]
@@ -283,6 +350,10 @@ mod extras_dropped_tests;
 #[cfg(test)]
 mod facts_tests;
 #[cfg(test)]
+mod failed_hosts_tests;
+#[cfg(test)]
+mod failure_alerts_tests;
+#[cfg(test)]
 mod first_heartbeat_tests;
 #[cfg(test)]
 mod first_serving_tests;
@@ -311,6 +382,8 @@ mod group_incident_tests;
 #[cfg(test)]
 mod group_install_order_tests;
 #[cfg(test)]
+mod group_local_halt_tests;
+#[cfg(test)]
 mod group_marks_tests;
 #[cfg(test)]
 mod group_retry_tests;
@@ -336,6 +409,8 @@ mod host_group_list_tests;
 mod host_group_move_tests;
 #[cfg(test)]
 mod host_group_proto_tests;
+#[cfg(test)]
+mod host_group_put_maintenance_tests;
 #[cfg(test)]
 mod host_group_put_policy_tests;
 #[cfg(test)]
@@ -378,6 +453,8 @@ mod live_tests;
 pub(crate) mod login_support;
 #[cfg(test)]
 mod macos_resolve_tests;
+#[cfg(test)]
+mod maintenance_calls_tests;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]
@@ -504,6 +581,8 @@ mod services_tests;
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]
+mod silent_health_tests;
+#[cfg(test)]
 mod stages_edge_tests;
 #[cfg(test)]
 mod stages_tests;
@@ -519,6 +598,8 @@ mod state_safety_rollout_tests;
 mod status_service_tests;
 #[cfg(test)]
 mod store_orders_tests;
+#[cfg(test)]
+mod stuck_rollouts_tests;
 #[cfg(test)]
 mod testutil;
 #[cfg(test)]
@@ -539,3 +620,5 @@ mod verdict_acks_tests;
 mod verdict_file_tests;
 #[cfg(test)]
 mod version_route_tests;
+#[cfg(test)]
+mod xcode_job_tests;

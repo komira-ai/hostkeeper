@@ -19,6 +19,8 @@ prost-reflect.workspace = true
 prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# `vendor`: the SHA-256 of each file of ui/vendor/, against its pin.
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -41,7 +43,6 @@ prost-reflect = { workspace = true, features = ["serde"] }
 protox.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
-sha2.workspace = true
 # `tests/client.rs` reads `ui/gen/client.d.ts` with a TypeScript parser.
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
@@ -51,3 +52,7 @@ tonic.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The Buck2 build's policy for this package (docs/farm.md): none of its own; it takes
+# [workspace.metadata.buildrules] of the root Cargo.toml.

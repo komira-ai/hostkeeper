@@ -7,14 +7,16 @@
 //! - [`UI_FILES`]: every file of the app, read at build time with `include_str!`, so no test
 //!   needs a path or a working directory;
 //! - [`client_gen`]: the generator of the app's API client, `ui/gen/client.js`, and its
-//!   TypeScript declarations, `ui/gen/client.d.ts`, from the command table and the descriptors
-//!   of `hostkeeper-proto`;
+//!   TypeScript declarations, `ui/gen/client.d.ts` and one `ui/gen/<namespace>.d.ts` per proto
+//!   package, from the command table and the descriptors of `hostkeeper-proto`;
 //! - [`call_sites`] and [`check_calls`]: the client's functions the app's pages call, read
 //!   from the source, and the check that each method is one of the protobuf descriptors;
 //! - [`derived_calls`], [`calls_json`] and [`listed_calls`]: `ui/calls.json`, the list of those
 //!   functions with their methods and the pages that call them, derived from the source;
 //! - [`scan`]: what the sources must never contain (token storage, logging, a URL of another
-//!   origin, an inline script or handler, markup built from text).
+//!   origin, an inline script or handler, markup built from text, a socket outside the one opener);
+//! - [`vendor`]: the third-party libraries under `ui/vendor/`, each file pinned by its SHA-256 and
+//!   held to a scan of its own.
 //!
 //! The tests under `tests/` also run the app's data layer and pages in a JavaScript engine
 //! against a fake gateway, and send each call of `ui/calls.json` to the real coordinator, built
@@ -26,6 +28,7 @@ pub mod client_gen;
 mod lexis;
 pub mod scan;
 mod sources;
+pub mod vendor;
 
 pub use calls::{
     CallSite, DeriveError, ListError, Listed, ScanError, UnknownCall, call_sites, calls_json,

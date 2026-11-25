@@ -27,8 +27,8 @@
 //! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
 //! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
 //! a directory ([`Serve::with_default_ui_dir`]).
-//! With `--health-listen` (a loopback address) it also serves `GET /healthz` in plain HTTP to a
-//! probe on the same machine (`crate::health`).
+//! With `--health-listen` it also serves `/healthz` and `/readyz` in plain HTTP to a probe or the
+//! edge's check (`crate::health`); a stop drains for `--drain-delay-secs` first (`config_stop.rs`).
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 //!
@@ -68,26 +68,28 @@ use hostkeeper_wire::identity::{
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::accounts::AccountStore;
-use crate::alerts::{
-    DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, observe_every,
-};
+use crate::alerts::{DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS};
 use crate::audit_file::wall_clock;
-use crate::backup::{Backup, Report, Restore, backup, restore};
+use crate::backup::{Backup, Restore, backup, finish, restore};
 use crate::desired::DesiredStore;
 use crate::enrollment::{Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
-use crate::health::{self, Serving};
+use crate::graceful::{Graceful, accept_until_stopped};
+use crate::health::Serving;
 use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
 use crate::layout::LayoutStore;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve_until_stopped, together,
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
+use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsStore;
+use crate::prerequisites::HostPrerequisites;
 use crate::service::{Clock, Coordinator};
+use crate::ssh_tunnel::run_poll;
 use crate::store::Spent;
 use crate::transfer::{Export, export};
 use crate::ui::UiDir;
@@ -96,8 +98,18 @@ use crate::verdict_file::VerdictFile;
 #[path = "config_error.rs"]
 mod error;
 
+/// The flags of the SSH user CA and the start's use of them.
+#[path = "config_ssh.rs"]
+mod ssh;
+pub use ssh::{PasswordAuth, SigningKey, SshFlags, SshStartError};
+
 #[path = "config_file.rs"]
 mod config_file;
+
+/// The flags of the Postgres store beside `--database-dsn-file`.
+#[path = "config_database.rs"]
+mod database;
+pub use database::{DatabaseFlags, JobEvery};
 
 pub use error::StartError;
 
@@ -109,6 +121,10 @@ use secs::{record_window_secs, request_ttl_secs};
 /// The start's checks of the listen addresses.
 #[path = "config_listen.rs"]
 mod listen;
+
+/// The stop: the drain delay, then the end of the connections.
+#[path = "config_stop.rs"]
+mod stop;
 
 /// The addresses `serve` bound, the line it prints for them, and the socket it binds with.
 #[path = "config_bound.rs"]
@@ -173,6 +189,10 @@ pub enum Command {
     /// Write the state the database of --database-dsn-file holds into files of the file store
     /// that hold no state, and the rows of each table.
     Export(Export),
+    /// Make the SSH user CA's key (`init`), or sign a certificate with it offline (`sign`).
+    SshCa(crate::ssh_ca::SshCa),
+    /// Check, reading only, that a copy of a CA's files is the CA the fleet trusts.
+    CheckCa(crate::ca_check::CheckCa),
 }
 
 /// The flags of `serve`.
@@ -181,10 +201,9 @@ pub enum Command {
 // refuses the directory beside it, naming it, at start).
 #[group(id = "records_store", args = ["enrollment_dir", "database_dsn_file"], multiple = true)]
 pub struct Serve {
-    /// A TOML file of flags of `serve`, each key a flag's name without `--` (a string or an
-    /// integer is its value, `true` a flag with no value, an array the flag once per element),
-    /// put in place of this flag before the others are parsed: a flag it gives may not be given
-    /// again.
+    /// A TOML file of flags of `serve`, each key a flag's name without `--` (a string or an integer
+    /// is its value, `true` a flag with no value, an array the flag once per element), put in place
+    /// of this flag before the others are parsed: a flag it gives may not be given again.
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,
     /// Where updaters dial (mutual TLS).
@@ -219,14 +238,23 @@ pub struct Serve {
     /// The opt-in of a wildcard --lan-listen and the address it is reached at.
     #[command(flatten)]
     pub lan: listen::LanFlags,
-    /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine: it
-    /// answers `GET` and `HEAD` of `/healthz` only, `200 ok` while every listener is bound and
-    /// serving and the store takes writes, and `503` with one reason token otherwise
-    /// (`starting`, `not_writer`, `store_unreachable`). It takes a loopback address
-    /// (127.0.0.0/8 or ::1): any other, a wildcard among them, is refused at start. Without it
-    /// there is no health listener.
+    /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine or the
+    /// edge's check: `GET` and `HEAD` of `/healthz` (`200 ok` once every listener is bound) and of
+    /// `/readyz` (`200 ok` while the coordinator takes traffic, `503` with `starting`,
+    /// `store_unreachable` or `draining` otherwise) only. A loopback address or the address of one
+    /// interface; a wildcard only with --health-listen-wildcard. Without it there is none.
     #[arg(long)]
     pub health_listen: Option<SocketAddr>,
+    /// The opt-in of a wildcard --health-listen.
+    #[command(flatten)]
+    pub health: listen::HealthFlags,
+    /// How long, from SIGTERM or SIGINT, the coordinator answers `503 draining` on `/readyz` and
+    /// keeps accepting and serving on every listener before it stops: then the heartbeat, private
+    /// and LAN listeners accept no more, held waits end, each open connection finishes, and it
+    /// exits. 0 stops at once. Checked once at deploy against the edge's values: above its DNS
+    /// refresh plus its healthy threshold times its check interval plus one interval.
+    #[arg(long, default_value_t = 15)]
+    pub drain_delay_secs: u64,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
     #[arg(long)]
@@ -250,12 +278,20 @@ pub struct Serve {
     /// --audit-retained-segments. Requires --halt-marker-file.
     #[arg(long, requires = "halt_marker_file")]
     pub database_dsn_file: Option<PathBuf>,
-    /// With --database-dsn-file: the file, on a local disk that stays writable when the database
-    /// is not, that lists the changes that stand in memory and are not yet committed. A start
-    /// that finds it removes it when the database holds every change it lists, and refuses
-    /// otherwise.
+    /// With --database-dsn-file: the file, on a local disk that stays writable when the database is
+    /// not, that lists the changes that stand in memory and are not yet committed. A start that
+    /// finds it removes it when the database holds every change it lists, and refuses otherwise.
     #[arg(long, requires = "database_dsn_file")]
     pub halt_marker_file: Option<PathBuf>,
+    /// The pool, the instance's row and the migrations of the database.
+    #[command(flatten)]
+    pub database: DatabaseFlags,
+    /// The list of Xcode releases the coordinator reads.
+    #[command(flatten)]
+    pub xcode: crate::config_xcode::XcodeFlags,
+    /// How a Mac's macOS update of a maintenance run is applied.
+    #[command(flatten)]
+    pub maintenance: crate::config_maintenance::MaintenanceFlags,
     /// The allow-list of CI's OIDC token: a TOML file with a `[remote_operator]` table. Its
     /// issuer, audience, event and runner rules apply to every token; its entries are also each
     /// package's trusted publishers until an operator changes the package's list in the state.
@@ -268,12 +304,33 @@ pub struct Serve {
     /// beside `--operator-token-file`; one of the two or `--initial-admin-file` is required.
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
+    /// The operator's SSH public keys for each host group: a TOML file with a
+    /// `[host-groups.<name>]` table holding `keys = [...]` for each group that has keys. The
+    /// daemon of each host in the group writes them into its login account's `authorized_keys`;
+    /// a host in a group the file does not list is sent none. Public keys only, no secret: any
+    /// regular file of at most 256 KiB. It is read again every `--tls-reload-secs`. Default: no
+    /// host is sent keys.
+    #[arg(long)]
+    pub operator_keys_file: Option<PathBuf>,
+    /// The host prerequisites of each host group: a TOML file with a `[host-groups.<name>]` table
+    /// holding `prerequisites = [...]` for each group that needs one; today the one name
+    /// `xcode-command-line-tools`, which the daemon of a Mac installs when the Mac lacks Apple's
+    /// Command Line Tools. A host in a group the file does not list is sent none. No secret: any
+    /// regular file of at most 64 KiB. It is read again every `--tls-reload-secs`. Default: no
+    /// host is sent a set.
+    #[arg(long)]
+    pub host_prerequisites_file: Option<PathBuf>,
     /// A file holding one operator token, mode 0600, owned by the coordinator's user: the one
     /// token, named `operator`. Read once, at start. Not beside `--tokens-file`.
     #[arg(long)]
     pub operator_token_file: Option<PathBuf>,
     #[command(flatten)]
     pub login: LoginFlags,
+    /// The SSH user CA and who may have a certificate.
+    #[command(flatten)]
+    pub ssh: SshFlags,
+    #[command(flatten)]
+    pub console: crate::console::ConsoleFlags,
     /// The ops file: what operators changed (exclusions, labels) and the audit ring, written
     /// by the coordinator and read back at start; created by the first change. Default: the
     /// state file's name with `.ops` added. Its directory must be writable by the
@@ -309,7 +366,8 @@ pub struct Serve {
     /// The prefix of the certificate URI that names the role of the caller's host.
     #[arg(long, default_value = DEFAULT_HOST_ROLE_URI_PREFIX)]
     pub host_role_uri_prefix: String,
-    /// How often the TLS files and the tokens file are looked at again, in seconds.
+    /// How often the TLS files, the tokens file, the operator keys file, the host prerequisites
+    /// file and the console's files are looked at again, in seconds.
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..))]
     pub tls_reload_secs: u64,
     /// The enrollment store of the file store: a directory of the coordinator's own holding the
@@ -468,8 +526,7 @@ pub struct Parts {
     /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
     /// TLS and surface.
     pub lan_listen: Option<SocketAddr>,
-    /// Where to bind the health listener (`--health-listen`, a loopback address), when there
-    /// is one.
+    /// Where to bind the health listener (`--health-listen`), when there is one.
     pub health_listen: Option<SocketAddr>,
     /// How often to look at the TLS files and the tokens file.
     pub reload: Duration,
@@ -485,8 +542,8 @@ pub struct Parts {
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
 /// `--private-listen` (without `--private-listen-wildcard`), `--lan-listen` (without `--lan-listen-wildcard`) or `--lan-address` is a wildcard
-/// address, a `--lan-name` is no DNS name, `--health-listen` is not a
-/// loopback address, `--quiet-secs` is below two
+/// address, a `--lan-name` is no DNS name, `--health-listen` is a wildcard address (without
+/// `--health-listen-wildcard`), `--quiet-secs` is below two
 /// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, an allow-list entry names no
@@ -519,6 +576,15 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let record_window = RecordWindow::new(flags.record_approve_for, flags.record_approve_max)?;
 
     let tokens = state::operator_tokens(flags)?;
+    let operator_keys = match &flags.operator_keys_file {
+        Some(path) => OperatorKeys::from_file(path)?,
+        None => OperatorKeys::default(),
+    };
+    let prerequisites = match &flags.host_prerequisites_file {
+        Some(path) => HostPrerequisites::from_file(path)?,
+        None => HostPrerequisites::default(),
+    };
+    let console = flags.console.console()?;
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
@@ -545,6 +611,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         marker,
         held,
         records,
+        ledger,
+        book,
+        database,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc.clone(),
@@ -555,6 +624,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     );
     let desired = DesiredStore::over(Arc::clone(&backend), loaded.desired).by_groups_only();
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
+        .with_facts(loaded.facts)
         .with_marker(marker)
         .with_record_window(record_window);
     let accounts = AccountStore::over(Arc::clone(&backend), loaded.accounts);
@@ -583,6 +653,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_layout(layout)
         .with_ui(ui)
+        .with_operator_keys(operator_keys)
+        .with_host_prerequisites(prerequisites)
+        .with_console(console)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
@@ -591,8 +664,10 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             Duration::from_secs(flags.repository_discover_secs),
             flags.repository_descriptor_max_bytes,
         );
-    coordinator = state::with_initial_admin(coordinator, flags)?;
-    coordinator = state::with_login(coordinator, flags)?;
+    coordinator = state::with_initial_admin(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_login(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_xcode(coordinator, flags, database.as_ref())?;
+    coordinator = ssh::attach(coordinator, flags, ledger, book, &os_random())?;
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -632,6 +707,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 extra_roots: vec![enrollment.ca_bundle().certificate_der().to_vec()],
             };
             coordinator = coordinator.with_enrollment(Arc::new(enrollment));
+            coordinator.record_unrecorded();
             let served = TlsFiles {
                 cert: server_cert.clone(),
                 key: server_cert.clone(),
@@ -662,7 +738,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
 /// The LAN listener serves the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
-/// An address cannot be bound; the store is deposed ([`StartError::Deposed`]).
+/// An address cannot be bound.
 pub async fn run<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
@@ -675,15 +751,17 @@ where
     Next: Future<Output = io::Result<Stream>> + Send,
     Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    run_as(parts, bind, ready, Serving::default()).await
+    run_as(parts, bind, ready, Serving::default(), Graceful::default()).await
 }
 
-/// [`run`], its health listener saying what `serving` holds ([`start`] drains it).
+/// [`run`], its health listener saying what `serving` holds ([`start`] drains it), and its
+/// heartbeat, private and LAN listeners stopping together when `graceful` is told to stop.
 async fn run_as<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
     ready: impl FnOnce(Bound),
     serving: Serving,
+    graceful: Graceful,
 ) -> Result<Infallible, StartError>
 where
     Bind: Fn(SocketAddr) -> Binding,
@@ -696,7 +774,7 @@ where
         Some(addr) => {
             let (addr, accept) = bind(addr).await?;
             tracing::info!(%addr, "serving the health listener");
-            let probing = health::serve(
+            let probing = crate::health::serve(
                 accept,
                 Arc::clone(&parts.coordinator),
                 serving.clone(),
@@ -707,7 +785,7 @@ where
         }
         None => (None, Either::Right(std::future::pending())),
     };
-    let rest = run_listeners(parts, bind, |bound| {
+    let rest = run_listeners(parts, bind, graceful, |bound| {
         ready(Bound { health, ..bound });
         serving.set();
     });
@@ -718,11 +796,12 @@ where
 }
 
 /// [`run`] past the health listener: binds the other listeners, calls `ready` with their
-/// addresses (`health` none), and serves them until the future is dropped or the store is
-/// deposed.
+/// addresses (`health` none), and serves them until the future is dropped; once `graceful` is
+/// told to stop they accept no more, while the periodic work and the connections go on.
 async fn run_listeners<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
+    graceful: Graceful,
     ready: impl FnOnce(Bound),
 ) -> Result<Infallible, StartError>
 where
@@ -762,43 +841,58 @@ where
         surface: Surface::Control,
     };
     let tokens = parts.coordinator.tokens().clone();
+    let operator_keys = parts.coordinator.operator_keys().clone();
+    let prerequisites = parts.coordinator.host_prerequisites().clone();
+    let console = parts.coordinator.console().files().clone();
     let enrollment = parts.coordinator.enrollment().cloned();
     let coordinator = parts.coordinator;
-    let watching = Arc::clone(&coordinator);
-    let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
+    let observing = crate::jobs::periodic(Arc::clone(&coordinator));
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
+    // The tunnels' poll, which closes the ones that must close; it waits for ever without tunnels.
+    let polling = run_poll(Arc::clone(&coordinator));
+    // Every console session open before this start ended with the one that held it.
+    coordinator.console_started();
+    let sweeping = crate::console::sweep_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
-    let serving_lan = match lan {
-        Some(lan) => Either::Left(serve(
-            lan,
-            Arc::clone(&coordinator),
+    let serving_one = |listener, coordinator| {
+        let stops = graceful.clone();
+        serve_until_stopped(
+            listener,
+            coordinator,
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
-        )),
+            stops,
+        )
+    };
+    let serving_lan = match lan {
+        Some(lan) => Either::Left(serving_one(lan, Arc::clone(&coordinator))),
         None => Either::Right(std::future::pending()),
     };
     let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
     let serving = together(
-        serve(heartbeat, for_heartbeat, CLIENT_PATIENCE, MAX_CONNECTIONS),
-        serve(control, for_control, CLIENT_PATIENCE, MAX_CONNECTIONS),
+        serving_one(heartbeat, for_heartbeat),
+        serving_one(control, for_control),
     );
+    let accepting = accept_until_stopped(&graceful, together(serving, serving_lan));
+    let expire = !coordinator.claims_jobs();
     let reloading = reload_every(
-        enrollment,
+        enrollment.map(|enrollment| (enrollment, expire)),
         vec![parts.heartbeat_tls, parts.control_tls],
         tokens,
+        operator_keys,
+        prerequisites,
+        console,
         parts.reload,
     );
     let all = together(
-        together(serving, serving_lan),
-        together(reloading, together(observing, adopting)),
+        accepting,
+        together(
+            reloading,
+            together(observing, together(adopting, together(polling, sweeping))),
+        ),
     );
-    // A store another coordinator led while this one's link was lost stops the serve: its memory
-    // is stale (`docs/design/coordinator-storage.md`, section 5).
     // On the heap: the futures together are too large for a stack of a test's thread.
-    match select(Box::pin(all), pin!(watching.deposed())).await {
-        Either::Left((never, _)) => match never {},
-        Either::Right(((epoch, found), _)) => Err(StartError::Deposed { epoch, found }),
-    }
+    match Box::pin(all).await {}
 }
 
 /// Resolves on SIGTERM or SIGINT.
@@ -811,7 +905,8 @@ async fn signalled() -> io::Result<()> {
 }
 
 /// Runs the coordinator, its sockets bound by `bind` and the issuer's keys fetched trusting
-/// `roots`, until `stop` resolves, which drains the health listener ([`health::drain_on`]).
+/// `roots`, until `stop` resolves and it has stopped: `--drain-delay-secs` of draining, then the
+/// end of its connections (`config_stop.rs`).
 ///
 /// # Errors
 /// [`StartError`]: the start is refused ([`build`]), an address cannot be bound, or `stop`
@@ -830,21 +925,12 @@ where
     Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
-    let health = Serving::default();
-    let stop = health::drain_on(stop, health.clone());
-    let serving = run_as(
-        parts,
-        bind,
-        |bound| println!("{}", start_line(&bound)),
-        health,
-    );
-    match select(pin!(stop), pin!(serving)).await {
-        Either::Left((stopped, _)) => stopped.map_err(StartError::from),
-        Either::Right((served, _)) => {
-            let Err(why) = served;
-            Err(why)
-        }
-    }
+    let coordinator = Arc::clone(&parts.coordinator);
+    let (health, graceful) = (Serving::default(), Graceful::default());
+    let print = |bound: Bound| println!("{}", start_line(&bound));
+    let serving = run_as(parts, bind, print, health.clone(), graceful.clone());
+    let delay = Duration::from_secs(flags.drain_delay_secs);
+    stop::stopped(&coordinator, stop, delay, health, &graceful, serving).await
 }
 
 /// Builds the runtime and runs the coordinator on it until a signal, serving
@@ -857,8 +943,9 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
-/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore or
-/// export is exit 1; SIGTERM or SIGINT, a backup made, and a restore or export done are exit 0.
+/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore,
+/// export or `ssh-ca` verb, and a CA copy `check-ca` refuses, are exit 1; SIGTERM or SIGINT, a
+/// backup made, a restore or export done, and a CA copy `check-ca` passes are exit 0.
 /// `serve` without
 /// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
@@ -891,20 +978,11 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
         Command::Backup(flags) => finish(backup(&flags, &FileLock)),
         Command::Restore(flags) => finish(restore(&flags, &FileLock)),
         Command::Export(flags) => finish(export(&flags, &FileLock, &wall_clock())),
-    }
-}
-
-/// The exit of a backup, a restore or an export: its report on standard output and
-/// exit 0, or why it was refused on standard error and exit 1.
-fn finish(done: Result<Report, impl std::fmt::Display>) -> ExitCode {
-    match done {
-        Ok(report) => {
-            print!("{report}");
-            ExitCode::SUCCESS
-        }
-        Err(why) => {
-            eprintln!("hostkeeper-coordinator: {why}");
-            ExitCode::from(1)
-        }
+        Command::SshCa(ssh) => finish(crate::ssh_ca::run(
+            &ssh.command,
+            wall_clock()(),
+            &os_random(),
+        )),
+        Command::CheckCa(check) => finish(crate::ca_check::run(&check.command)),
     }
 }

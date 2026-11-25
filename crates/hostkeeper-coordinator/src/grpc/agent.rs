@@ -20,7 +20,7 @@ use super::Admitted;
 use super::beat_map;
 use super::refusal::token_status;
 use crate::enrollment::Enrollment;
-use crate::http::{BeatCaller, BeatRefused, beat};
+use crate::http::{BeatCaller, BeatRefused, PeerAddr, beat};
 use crate::orders::Order;
 use crate::service::Coordinator;
 use crate::trusted_root::TrustedRootSaid;
@@ -37,12 +37,15 @@ pub(crate) fn beat_status(refused: BeatRefused) -> Status {
 /// The `HeartbeatResponse` for `answer`, and the typed order beside it when there is one.
 fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse {
     proto::HeartbeatResponse {
+        ssh: None,
         order: order.as_ref().map(Order::to_proto),
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),
         acks: crate::verdict_file::to_proto(&answer.acks),
         repositories: None,
         facts: None,
+        operator_keys: None,
+        prerequisites: None,
     }
 }
 
@@ -87,18 +90,68 @@ impl Api for AgentService {
             self.coordinator
                 .hear_repositories(&identity, request.get_ref());
             self.coordinator.hear_facts(&identity, request.get_ref());
+            self.coordinator
+                .hear_remote_login_probe(&identity, request.get_ref());
+            self.coordinator
+                .hear_full_disk_access(&identity, request.get_ref());
+            self.coordinator
+                .hear_operator_keys(&identity, request.get_ref());
+            self.coordinator
+                .hear_ssh_report(&identity, request.get_ref());
+            self.coordinator
+                .hear_serial_console_report(&identity, request.get_ref());
+            // Where the host was heard from and the host keys it reports, for the tunnels.
+            let from = request
+                .extensions()
+                .get::<PeerAddr>()
+                .map(|peer| peer.0.ip());
+            let keys = request
+                .get_ref()
+                .ssh
+                .as_ref()
+                .map(|report| report.host_key_fingerprints.clone())
+                .unwrap_or_default();
+            self.coordinator
+                .hear_ssh(identity.host_id.as_str(), from, keys)
+                .await;
+            self.coordinator
+                .hear_prerequisites(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)
             .then(|| self.coordinator.host_facts(&identity, request.get_ref()))
             .flatten();
-        let caller = BeatCaller { identity, retiring };
+        let caller = BeatCaller {
+            identity: identity.clone(),
+            retiring,
+        };
         let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
-        // The set is made once the heartbeat is taken: the host's announced features are the
-        // ones this heartbeat said.
+        // The BMC is kept with what the host runs, which the heartbeat has just recorded.
+        if !retiring {
+            self.coordinator.hear_bmc(&identity, request.get_ref());
+        }
+        // The sets are made once the heartbeat is taken (a retiring host's is refused, so it is
+        // sent none): the host's announced features are the ones this heartbeat said.
         let mut response = response_of(answer, order);
+        // The features it offers go to every agent that announces features, named or not
+        // ([`crate::features::OFFERED`]; `ssh-v1` only while it holds an SSH user CA).
+        response.features = self
+            .coordinator
+            .offering(&request.get_ref().features, &response.features);
         response.repositories = self.coordinator.repository_set(&host_id);
         response.facts = facts;
+        response.operator_keys = self
+            .coordinator
+            .operator_keys_for(&identity, request.get_ref());
+        if !retiring {
+            response.ssh = self
+                .coordinator
+                .ssh_access_for(&identity, request.get_ref())
+                .await;
+        }
+        response.prerequisites = self
+            .coordinator
+            .prerequisites_for(&identity, request.get_ref());
         Ok(Response::new(response))
     }
 

@@ -1,0 +1,17 @@
+hk ssh <host-id> [flags] [-- ssh args]
+    Gets a one-host SSH certificate from the coordinator, for the key of --identity, the ssh
+    agent's first key, or a key kept in $HOME/.hostkeeper/ssh, and runs ssh to the host through
+    the coordinator's tunnel. Flags of ssh: --identity FILE, --reason TEXT.
+hk ssh-proxy <host-id>
+    The byte stream to the host's port 22, for ssh's ProxyCommand:
+    ProxyCommand hk --endpoint URL --ca-file PATH --token-file PATH ssh-proxy %h
+hk ssh-revoke --operator NAME | --serial N | --host <host-id>
+    Revokes certificates: an operator's, one by serial, or the one held for a host.
+hk ssh-status <host-id>
+    The host keys pinned for the host, and the certificate held for it.
+hk ssh-known-host <pins-file> %H %t %K %f
+    Run by ssh itself, as the KnownHostsCommand of hk ssh: says whether a host key is pinned.
+
+These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
+last required, and are built into hk. The token is read from the file; --token-stdin,
+--github-oidc-audience and --response-file are not taken.

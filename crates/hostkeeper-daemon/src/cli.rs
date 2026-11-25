@@ -1,4 +1,8 @@
-//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags.
+//! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
+//! `hostkeeper maintenance-hook`, the maintenance hook the daemon runs as a step
+//! ([`crate::maintenance_hook`]), which exits with the hook contract's codes; and the verbs root
+//! runs on the host itself with the coordinator out of reach, `hostkeeper activate`, `pin` and
+//! `unpin` ([`crate::local`], which says their exit statuses).
 //! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
 //! default is a constant here.
 //!
@@ -18,8 +22,8 @@
 //! `2` for a usage error (as clap reports it), [`EXIT_CONFIG`] when the daemon config did not
 //! load, [`EXIT_LOCKED`] when another daemon holds the state directory. A verb or a flag this
 //! binary does not have is a usage error, `2`, as clap reports it: `ctl` (the coordinator's
-//! command line is `hkctl` now, docs/cli.md), `ci` (CI runs `hkctl releases set-desired` and
-//! `hkctl releases wait-converged`, docs/deploy/ci-client.md), `admin` and `--admin-socket` (the
+//! command line is `hk` now, docs/cli.md), `ci` (CI runs `hk releases set-desired` and
+//! `hk releases wait-converged`, docs/deploy/ci-client.md), `admin` and `--admin-socket` (the
 //! daemon serves no admin socket; a host's status, abort and clear-record go through the
 //! coordinator, docs/admin.md), and the verbs of the update before the hand-over
 //! (`self-update-protocol`, `self-update-fallback`, `self-update-seed`, `mac-config`,
@@ -44,7 +48,9 @@ use hostkeeper_enroll::{
 };
 use hostkeeper_install::version::Owner;
 use hostkeeper_launchd::{Platform, PlatformKind};
-use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
+use hostkeeper_link::{
+    ClockSleeper, LoopFlags, MaintenanceSource, PkiCertSource, StopFlag, ThreadDispatch,
+};
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_placed::roots::STATE_DIR;
@@ -60,14 +66,23 @@ use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
 use crate::coordinator_store::CoordinatorFetcher;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::handover::ProcessExec;
+use crate::host_identity::{HostIdentity, IDENTITY_DIR, IdentityOwner};
+use crate::identity_group::IdentityGroup;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
 use crate::mac::HostIoreg;
+use crate::maintenance_collect::{Collector, LinuxScope};
+use crate::maintenance_facts::MaintenanceFacts;
+use crate::maintenance_hook::HookArgs;
+use crate::maintenance_softwareupdate::MacosMajor;
+use crate::maintenance_state::RunReported;
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
 use crate::observer::{OwnService, observer_with};
-use crate::prune::{LayoutPrune, NoLockPoint};
+use crate::operator_keys::OperatorKeys;
+use crate::prerequisites::Prerequisites;
+use crate::prune::{DEFAULT_KEEP_VERSIONS, LayoutPrune, MAX_KEEP_VERSIONS, NoLockPoint};
 use crate::real_packages::RealPackages;
 use crate::repositories;
 use crate::repository_push::Managed;
@@ -118,6 +133,9 @@ pub const DEADMAN_POLL_SECS: u64 = 1;
 /// The pki directory: the host's key and its certificate generations, `current` the one in use
 /// (design section 10).
 pub const PKI_DIR: &str = "/etc/updater/pki";
+/// The owner, and the group a copy for root alone has, of the host identity copy: uid and gid 0
+/// on every platform the daemon runs on (a Mac's `wheel` is gid 0).
+const ROOT: IdentityOwner = IdentityOwner { uid: 0, gid: 0 };
 /// How long the enrollment loop's connection, handshake and each call to the coordinator may take.
 pub const ENROLL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long `agetty --reload` may run: it only touches agetty's reload file and exits.
@@ -137,6 +155,12 @@ pub struct Cli {
 pub enum Command {
     /// Run the daemon: the one root process of the host.
     Daemon(DaemonFlags),
+    /// Run a step of the maintenance hook: the OS work of a maintenance run, which the daemon
+    /// runs as it runs a hook's step.
+    MaintenanceHook(HookArgs),
+    /// `activate`, `pin` and `unpin`: what root runs on the host itself ([`crate::local`]).
+    #[command(flatten)]
+    Local(crate::local::LocalVerb),
 }
 
 /// The flags of `hostkeeper daemon`.
@@ -167,13 +191,34 @@ pub struct DaemonFlags {
     /// The seconds a step of the repository installer waits at most for the host's package
     /// manager's lock, from 1 to 3600: apt's own wait (`DPkg::Lock::Timeout`) for an install,
     /// and a try every 2 seconds for `dpkg --purge` and `apt-mark`. A lock still held then defers
-    /// the order (`package_manager_busy`), which halts nothing.
+    /// the order (`package_manager_busy`), which halts nothing. It is also the maintenance look's
+    /// bound: each run of the look's package manager that finds the lock held is tried again
+    /// every 2 seconds for at most this long, and a lock still held then fails the look.
     #[arg(
         long,
         default_value_t = DEFAULT_PACKAGE_LOCK_WAIT_SECS,
         value_parser = clap::value_parser!(u64).range(1..=MAX_PACKAGE_LOCK_WAIT_SECS),
     )]
     pub package_lock_wait_secs: u64,
+    /// How many versions of each service the host keeps besides `current`, `previous`, the one
+    /// its pin names (`pins/<service>` beside the state directory) and the ones an unfinished
+    /// update or force still uses, from 0 to 32: the newest, by the time each was staged. A prune
+    /// after a confirmed switch deletes the rest, and none while an update is on trial.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_KEEP_VERSIONS,
+        value_parser = clap::value_parser!(u64).range(0..=MAX_KEEP_VERSIONS),
+    )]
+    pub keep_versions: u64,
+    /// Which Linux updates the host reports due (`maintenance-v1`): `security`, the default,
+    /// security updates and newer kernels; `all`, every update. It applies to a Linux host alone.
+    #[arg(long, value_enum, default_value_t = LinuxScope::Security)]
+    pub maintenance_linux_scope: LinuxScope,
+    /// Whether a Mac reports the newest major upgrade of macOS due (`maintenance-v1`); without
+    /// the flag, a major upgrade is never due, though `softwareupdate` lists it. A Linux host
+    /// ignores it.
+    #[arg(long)]
+    pub maintenance_macos_major: bool,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
     #[command(flatten)]
     pub link: LoopFlags,
@@ -191,6 +236,7 @@ impl DaemonFlags {
             run_dir: Platform::host().run_dir,
             trusted_uid: 0,
             package_lock_wait_secs: self.package_lock_wait_secs,
+            keep_versions: self.keep_versions,
         }
     }
 }
@@ -232,15 +278,16 @@ pub fn run_from(
     exec: crate::packaged::Exec<'_>,
 ) -> ExitCode {
     let cli = Cli::parse_from(&args);
-    let Command::Daemon(flags) = &cli.command;
-    if let Some(error) = crate::packaged::start(
-        exe,
-        packaged,
-        &flags.state_dir,
-        env!("CARGO_PKG_VERSION"),
-        args.get(1..).unwrap_or_default(),
-        exec,
-    ) {
+    if let Command::Daemon(flags) = &cli.command
+        && let Some(error) = crate::packaged::start(
+            exe,
+            packaged,
+            &flags.state_dir,
+            env!("CARGO_PKG_VERSION"),
+            args.get(1..).unwrap_or_default(),
+            exec,
+        )
+    {
         eprintln!("hostkeeper daemon: {error}");
         return ExitCode::from(error.exit_code());
     }
@@ -266,13 +313,28 @@ pub fn run(cli: Cli) -> ExitCode {
 }
 
 /// Runs a parsed command line to its exit status; `systemd` is what systemd set for the process,
-/// used with `--notify-systemd` only.
+/// used with `--notify-systemd` only. `maintenance-hook` runs its step on this host
+/// ([`crate::maintenance_hook::host_main`]) and exits with the step's outcome.
 pub fn run_with(cli: Cli, systemd: SystemdVars) -> ExitCode {
-    let Command::Daemon(flags) = cli.command;
+    let flags = match cli.command {
+        Command::Daemon(flags) => flags,
+        Command::MaintenanceHook(args) => {
+            return ExitCode::from(crate::maintenance_hook::host_main(&args));
+        }
+        Command::Local(verb) => return ExitCode::from(crate::local::main(verb)),
+    };
     let period = flags.link.heartbeat_secs;
     let watchdog = watchdog(&flags, &systemd);
-    let served = notifier(&flags, systemd.notify_socket)
-        .and_then(|notifier| daemon(&flags.settings(), period, notifier.as_ref(), watchdog));
+    let served = notifier(&flags, systemd.notify_socket).and_then(|notifier| {
+        daemon(
+            &flags.settings(),
+            period,
+            flags.maintenance_linux_scope,
+            MacosMajor::from_flag(flags.maintenance_macos_major),
+            notifier.as_ref(),
+            watchdog,
+        )
+    });
     ExitCode::from(exit_status(&served))
 }
 
@@ -326,6 +388,8 @@ pub fn watchdog(flags: &DaemonFlags, systemd: &SystemdVars) -> Box<dyn Watchdog>
 fn daemon(
     settings: &Settings,
     period: NonZeroU64,
+    scope: LinuxScope,
+    major: MacosMajor,
     notifier: &dyn ReadyNotifier,
     watchdog: Box<dyn Watchdog>,
 ) -> Result<(), StartError> {
@@ -339,6 +403,8 @@ fn daemon(
     runtime.block_on(start_and_serve(
         settings,
         period,
+        scope,
+        major,
         own_version,
         notifier,
         watchdog,
@@ -348,6 +414,8 @@ fn daemon(
 async fn start_and_serve(
     settings: &Settings,
     period: NonZeroU64,
+    scope: LinuxScope,
+    major: MacosMajor,
     own_version: HostkeeperVersion,
     notifier: &dyn ReadyNotifier,
     watchdog: Box<dyn Watchdog>,
@@ -355,7 +423,15 @@ async fn start_and_serve(
     let files = HostFiles::host();
     let platform = Platform::host();
     let started = start_with(settings, &files, own_version, notifier, &platform)?;
-    let links = host_links(started.daemon(), &files, period, platform.kind, watchdog);
+    let links = host_links(
+        started.daemon(),
+        &files,
+        period,
+        platform.kind,
+        scope,
+        major,
+        watchdog,
+    );
     start::serve(started, links).await;
     Ok(())
 }
@@ -377,6 +453,24 @@ async fn start_and_serve(
 /// - each loop and each order runs on a thread of its own ([`ThreadDispatch`]);
 /// - both loops log through the daemon's alert sink ([`DaemonLog`]);
 /// - the heartbeat loop tells `watchdog` after each heartbeat that it is alive;
+/// - on a Mac (`kind`), the Remote Login probe starts on a thread of its own, and every heartbeat
+///   after it is done reports it ([`crate::remote_login_probe::at_host_start`]);
+/// - every heartbeat reports the Full Disk Access grant ([`crate::full_disk_access`]);
+/// - every host keeps the certificate and key of the pki directory's `current` generation at
+///   [`IDENTITY_DIR`], after each step of the enrollment loop, for the group `hostkeeper-identity`
+///   ([`HostIdentity`], [`IdentityGroup::for_host`]);
+/// - every host keeps the operator keys the coordinator sends in the managed block of its login
+///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
+/// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
+///   Linux host only reports ([`Prerequisites::at_host`]);
+/// - every host reports what it last found of its maintenance ([`maintenance_source`] over
+///   [`crate::maintenance_collectors::at_host`]): a Linux host under `scope`, from the packages
+///   `placed.json` records and its package manager, which waits for a held lock for the daemon's
+///   `--package-lock-wait-secs`; a Mac from `sw_vers`, `softwareupdate`,
+///   `fdesetup`, its data volume and its Command Line Tools, a major upgrade due under `major`,
+///   and its Xcodes, its update account and its device-management conflicts;
+/// - every heartbeat of a Linux host reports its BMC's address and MAC, read through
+///   `/dev/ipmi0` ([`crate::bmc::at_host`]);
 /// - when `files` names a console, the enrollment loop writes its issue file, naming the daemon
 ///   config's `coordinator`, and has the gettys redraw by running its agetty with `--reload` as
 ///   a child process, its output read to [`AGETTY_OUTPUT_CAP`] and bounded by
@@ -386,6 +480,8 @@ pub fn host_links(
     files: &HostFiles,
     period: NonZeroU64,
     kind: PlatformKind,
+    scope: LinuxScope,
+    major: MacosMajor,
     watchdog: Box<dyn Watchdog>,
 ) -> Links {
     let ctx = daemon.ctx();
@@ -414,11 +510,41 @@ pub fn host_links(
         Arc::clone(&ctx.clock),
         log.clone(),
     );
+    let certs = Arc::new(PkiCertSource::new(&files.pki, log.clone()));
+    let identity = HostIdentity::new(
+        certs.clone(),
+        PathBuf::from(IDENTITY_DIR),
+        IdentityGroup::for_host(kind),
+        ROOT,
+    );
+    let operator_keys = OperatorKeys::at_host(kind, log.clone());
+    let prerequisites = Prerequisites::at_host(kind, log.clone());
+    let maintenance = maintenance_source(
+        daemon,
+        scope,
+        crate::maintenance_collectors::at_host(kind, major, ctx.repository_ports.lock_wait_secs),
+        Arc::new(SystemUnixClock),
+        Arc::new(ThreadDispatch),
+        log.clone(),
+    );
+    let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
-        certs: Arc::new(PkiCertSource::new(&files.pki, log.clone())),
-        clock: Arc::new(SystemUnixClock),
+        certs,
+        bmc: crate::bmc::at_host(kind, Arc::clone(&clock)),
+        serial_console: crate::serial_baseline::at_host(
+            kind,
+            ctx.config.serial_console.as_ref(),
+            Arc::clone(&clock),
+            log.clone(),
+        ),
+        full_disk_access: Some(crate::full_disk_access::at_host(
+            kind,
+            Arc::clone(&clock),
+            log.clone(),
+        )),
+        clock,
         log,
         sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
         enroll_sleeper: Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
@@ -428,7 +554,38 @@ pub fn host_links(
         stop,
         watchdog,
         console,
+        identity: Some(identity),
+        remote_login_probe: crate::remote_login_probe::at_host_start(kind),
+        operator_keys: Some(Arc::new(operator_keys)),
+        prerequisites: Some(Arc::new(prerequisites)),
+        maintenance,
     }
+}
+
+/// The maintenance facts `daemon`'s heartbeats report (`maintenance-v1`): looks by `collectors`
+/// under `scope` (`--maintenance-linux-scope`), leaving out the packages of the daemon's own
+/// `placed.json` ([`crate::Placement`] of its context), timed by `clock` and run on `dispatch`;
+/// none when there is no collector, which then announces and sends nothing. The report carries
+/// the run state of the host's maintenance turn ([`RunReported`]).
+pub fn maintenance_source(
+    daemon: &Arc<Daemon>,
+    scope: LinuxScope,
+    collectors: Vec<Box<dyn Collector>>,
+    clock: Arc<dyn hostkeeper_link::UnixClock>,
+    dispatch: Arc<dyn hostkeeper_link::Dispatch>,
+    log: Arc<dyn hostkeeper_link::Log>,
+) -> Option<Arc<dyn MaintenanceSource>> {
+    MaintenanceFacts::of_host(
+        collectors,
+        &daemon.ctx().placement,
+        scope,
+        clock,
+        dispatch,
+        log,
+    )
+    .map(|facts| {
+        Arc::new(RunReported::new(facts, &daemon.ctx().dirs.state)) as Arc<dyn MaintenanceSource>
+    })
 }
 
 /// What the enrollment request says the daemon came from: this binary, `hostkeeper-<version>`.
@@ -477,7 +634,8 @@ pub fn host_enroller(
 /// their domains when those are there ([`crate::mac_files`]); the config is loaded, the platform's adapters are chosen
 /// ([`Adapters::for_platform`]), the ports are built ([`host_ports`]) and the start runs
 /// ([`start::startup_notifying`]). A Mac's start also keeps the Mac awake once the config is loaded
-/// ([`crate::keep_awake::at_host_start`]).
+/// ([`crate::keep_awake::at_host_start`]), then makes the update account when it is missing, hides
+/// it and gives it a Secure Token (`update_account_make`).
 pub fn start_with(
     settings: &Settings,
     files: &HostFiles,
@@ -500,6 +658,7 @@ pub fn start_with(
     }
     let config = start::load_config(settings)?;
     crate::keep_awake::at_host_start(&config, platform.kind);
+    crate::update_account_make::at_host_start(platform.kind);
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
         .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))
@@ -729,6 +888,7 @@ pub fn host_ports(
         )),
         announcement,
         repository: Arc::new(repository),
+        own_job: adapters.own_job.map(Arc::new),
     })
 }
 

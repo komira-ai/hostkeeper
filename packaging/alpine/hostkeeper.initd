@@ -42,11 +42,13 @@ depend() {
 }
 
 # The directories of the daemon, as packaging/linux/hostkeeper.tmpfiles.conf makes them on a
-# systemd host: root's, the run, state and hook directories closed to group and others. checkpath
+# systemd host: root's, the run, state and hook directories closed to group and others, the packages
+# directory passed through by every user and listed by root alone. checkpath
 # makes a directory that is missing (not its parents, so each parent comes first) and gives one
 # that exists this mode and owner.
 start_pre() {
-	checkpath --directory --mode 0755 --owner root:root /etc/hostkeeper /var/lib/hostkeeper /var/lib/hostkeeper/packages /var/lib/updater
+	checkpath --directory --mode 0755 --owner root:root /etc/hostkeeper /var/lib/hostkeeper /var/lib/updater
+	checkpath --directory --mode 0711 --owner root:root /var/lib/hostkeeper/packages
 	checkpath --directory --mode 0700 --owner root:root /run/hostkeeper /var/lib/updater/state /var/lib/updater/hooks
 	rm -f /run/hostkeeper/ready
 }

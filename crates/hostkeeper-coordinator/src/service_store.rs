@@ -7,8 +7,7 @@
 //! fleet view. Each heartbeat asks the backend to make the link again, on its own thread and never
 //! under the fleet's lock ([`crate::store::Backend::revive`]). Once it is back, a commit whose
 //! outcome was not known is settled and, when it landed, taken into memory; then what is pending
-//! is committed. When another coordinator led the database meanwhile, the pending changes are
-//! dropped knowingly and the coordinator stops.
+//! is committed.
 
 #[cfg(test)]
 use std::sync::PoisonError;
@@ -25,7 +24,7 @@ use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::macos_resolve;
 use crate::repositories::Registry;
-use crate::store::Health;
+use crate::store::{Health, Part};
 
 impl Coordinator {
     /// Whether the fleet's lock, which every decision and order is made under, is held now.
@@ -110,8 +109,26 @@ impl Coordinator {
             .keep_private(self.desired.with_repositories(Registry::private_channels));
     }
 
+    /// Reads again each part of the state whose rows another coordinator changed since this one's
+    /// copy was read (`docs/design/coordinator-multi-instance.md`, section 6, "Invalidation"): one
+    /// read of the parts' versions, then each part that moved on, rows and version in one
+    /// snapshot. Called before every request is answered, a heartbeat among them, so an answer is
+    /// at most one request behind an edit another coordinator committed. A store one process owns
+    /// has nothing to read again.
+    pub(crate) fn refresh_caches(&self) {
+        for part in self.ops.backend().stale() {
+            match part {
+                Part::Desired => self.desired.refresh(),
+                Part::Ops => self.ops.refresh(),
+                Part::Accounts => self.accounts.refresh(),
+                Part::Layout => self.layout.refresh(),
+                Part::Verdicts => self.verdicts.refresh(),
+            }
+        }
+    }
+
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to
-    /// be made again, takes a settled commit into memory, deposes a store another coordinator led,
+    /// be made again, takes a settled commit into memory,
     /// and, while the link is up, commits what is pending (every memory-first change whose commit
     /// failed is committed again at every heartbeat until it lands).
     pub(crate) fn tend_store(&self, now: Duration) {
@@ -130,22 +147,13 @@ impl Coordinator {
             }
             tracing::warn!(
                 alert = "store_unreachable",
-                number = landing.number,
+                id = %landing.id,
                 landed = landing.landed,
                 "the commit whose outcome was not known is settled: memory takes it when it landed"
             );
         }
-        match health {
-            Health::Up => self.ops.retry_unwritten(now),
-            Health::Lost => {}
-            Health::Deposed { found } => self.ops.depose(found),
+        if health == Health::Up {
+            self.ops.retry_unwritten(now);
         }
-    }
-
-    /// Waits until the store is deposed: another coordinator led its database while this one's
-    /// link was lost. Answers the epoch this coordinator held and the one found.
-    pub async fn deposed(&self) -> (u64, u64) {
-        let found = self.ops.deposed().await;
-        (self.ops.backend().epoch().unwrap_or_default(), found)
     }
 }

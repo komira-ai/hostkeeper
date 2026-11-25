@@ -10,7 +10,7 @@ const PLACEHOLDER: &str = "<version>";
 /// with why it left. A name leaves the list of `asset_names` only by being added here (and
 /// marked `withdrawn: ` in the baseline) in the same pull request: consumers fetch
 /// assets by name, so a name is withdrawn only when nothing fetches it.
-const WITHDRAWN: [(&str, &str); 46] = [
+const WITHDRAWN: [(&str, &str); 54] = [
     ("hostkeeper-<version>-1-aarch64.pkg.tar.zst", ARCH_WITHDRAWN),
     (
         "hostkeeper-<version>-1-aarch64.pkg.tar.zst.sigstore.json",
@@ -156,7 +156,27 @@ const WITHDRAWN: [(&str, &str); 46] = [
     ),
     ("mdm_<version>_amd64.deb", MDM_WITHDRAWN),
     ("mdm_<version>_amd64.deb.sigstore.json", MDM_WITHDRAWN),
+    ("hkctl-<version>", HKCTL_WITHDRAWN),
+    ("hkctl-<version>.sigstore.json", HKCTL_WITHDRAWN),
+    ("hkssh-<version>-linux-arm64.cdx.json", HKSSH_WITHDRAWN),
+    ("hkssh-<version>-linux-arm64.tar.gz", HKSSH_WITHDRAWN),
+    (
+        "hkssh-<version>-linux-arm64.tar.gz.sigstore.json",
+        HKSSH_WITHDRAWN,
+    ),
+    ("hkssh-<version>-linux-x86_64.cdx.json", HKSSH_WITHDRAWN),
+    ("hkssh-<version>-linux-x86_64.tar.gz", HKSSH_WITHDRAWN),
+    (
+        "hkssh-<version>-linux-x86_64.tar.gz.sigstore.json",
+        HKSSH_WITHDRAWN,
+    ),
 ];
+
+/// Why the `hkctl` script and its bundle left the release.
+const HKCTL_WITHDRAWN: &str = "the bash script hkctl is withdrawn: `hk-<version>-<platform>.tar.gz` carries the command line as a binary (docs/cli.md)";
+
+/// Why the SSH client's tarballs left the release.
+const HKSSH_WITHDRAWN: &str = "the SSH client hkssh is withdrawn: its tunnel is built into `hk` (`hk ssh`, `hk ssh-proxy`), shipped in `hk-<version>-<platform>.tar.gz` (docs/cli.md)";
 
 /// Why the Arch Linux package and its bundle left the release.
 const ARCH_WITHDRAWN: &str = "the Arch package is withdrawn (no daemon ever listed the arch installer, docs/design/packages-repositories.md section 0)";
@@ -230,7 +250,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 66);
+    assert_eq!(names.len(), 73);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -289,7 +309,7 @@ fn asset_name_list_only_grows_but_for_the_withdrawn_names() {
 fn tag_and_version_string_formats_are_pinned() {
     // Catches: a tag that is not `v<X.Y.Z>`, a `--version` text other than
     // `hostkeeper X.Y.Z+<12 hex>` (`hostkeeper-coordinator ...` and
-    // `hostkeeper-coordinator-update ...` for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
+    // `hostkeeper-coordinator-update ...` and `hk ...` for the other shipped binaries), a shipped binary dropped, or a change of the signer identity.
     let v = version("0.1.27");
     let c = commit("0123456789abcdef0123456789abcdef01234567");
     assert_eq!(v.tag(), "v0.1.27");
@@ -301,6 +321,7 @@ fn tag_and_version_string_formats_are_pinned() {
             "hostkeeper 0.1.27+0123456789ab",
             "hostkeeper-coordinator 0.1.27+0123456789ab",
             "hostkeeper-coordinator-update 0.1.27+0123456789ab",
+            "hk 0.1.27+0123456789ab",
         ]
     );
     assert_eq!(RELEASE_COMMIT, "RELEASE_COMMIT");
@@ -425,13 +446,10 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 29);
-    assert_eq!(summed.len(), 36);
-    // The boot sets of network install are summed and attested, with a bundle of their own, and
-    // so is the command line, one script for every platform.
+    assert_eq!(attested.len(), 31);
+    assert_eq!(summed.len(), 41);
+    // The boot sets of network install are summed and attested, with a bundle of their own.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
-    assert_eq!(hkctl_name(&v), "hkctl-0.1.3");
-    assert!(summed.contains(&hkctl_name(&v)) & attested.contains(&hkctl_name(&v)));
     assert!(attested.iter().all(|a| summed.contains(a)));
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
     // The pxe package is attested for both Linux platforms and is no asset for macOS.
@@ -474,8 +492,9 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "SHA256SUMS",
             "hello-0.2.1-macos-arm64.pkg",
             "hello-0.2.1-macos-arm64.pkg.sigstore.json",
-            "hkctl-0.2.1",
-            "hkctl-0.2.1.sigstore.json",
+            "hk-0.2.1-macos-arm64.cdx.json",
+            "hk-0.2.1-macos-arm64.tar.gz",
+            "hk-0.2.1-macos-arm64.tar.gz.sigstore.json",
             "hostkeeper-0.2.1-macos-arm64.cdx.json",
             "hostkeeper-0.2.1-macos-arm64.pkg",
             "hostkeeper-0.2.1-macos-arm64.pkg.sigstore.json",
@@ -630,6 +649,41 @@ fn a_linux_platform_ships_the_coordinator_updater_attested_with_its_sbom() {
 }
 
 #[test]
+fn every_platform_ships_the_command_line_attested_with_its_sbom() {
+    // Catches: the operator's command line missing from a platform, named other than
+    // `hk-<v>-<p>.tar.gz`, shipped without its bundle or its SBOM, an SBOM given a bundle of its
+    // own, or the withdrawn `hkctl` script or `hkssh` tarballs shipped again.
+    let v = version("0.2.1");
+    for platform in Platform::RELEASED {
+        let p = platform.name();
+        let names = asset_names(&v, &[platform]);
+        let client: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| n.starts_with("hk-") | n.starts_with("hkctl") | n.starts_with("hkssh"))
+            .collect();
+        assert_eq!(
+            client,
+            [
+                format!("hk-0.2.1-{p}.cdx.json"),
+                format!("hk-0.2.1-{p}.tar.gz"),
+                format!("hk-0.2.1-{p}.tar.gz.sigstore.json"),
+            ],
+            "{p}"
+        );
+    }
+    let attested = attested_names(&v);
+    let summed = summed_names(&v);
+    for p in ["linux-x86_64", "linux-arm64", "macos-arm64"] {
+        let tarball = format!("hk-0.2.1-{p}.tar.gz");
+        let sbom = format!("hk-0.2.1-{p}.cdx.json");
+        assert!(attested.contains(&tarball), "{tarball} is attested");
+        assert!(!attested.contains(&sbom), "{sbom} has no bundle");
+        assert!(summed.contains(&tarball) & summed.contains(&sbom), "{p}");
+    }
+}
+
+#[test]
 fn no_platform_ships_the_withdrawn_arch_package() {
     // Catches: the Arch package (or its bundle) shipped again on any platform after its
     // withdrawal, attested or summed.
@@ -769,14 +823,12 @@ fn a_repository_is_two_parts_of_letters_digits_dash_underscore_and_dot() {
 }
 
 #[test]
-fn a_release_waits_for_ci_privileged_and_artifacts_only() {
-    // Catches: a workflow added to the runs a release waits for, such as net-install.yml, whose
-    // emulated install takes hours (it runs on its own triggers and holds no release), or one of
-    // the three dropped, so that a red privileged or artifacts run no longer holds a release.
-    assert_eq!(
-        REQUIRED_WORKFLOWS,
-        ["ci.yml", "privileged.yml", "artifacts.yml"]
-    );
+fn a_release_waits_for_ci_and_artifacts_only() {
+    // Catches: a slow suite added to the runs a release waits for, such as privileged.yml (the
+    // device tests as root) or net-install.yml (an emulated install that takes hours), which run
+    // beside the release and hold none, or one of the two dropped, so that a red unit test or
+    // build no longer holds a release.
+    assert_eq!(REQUIRED_WORKFLOWS, ["ci.yml", "artifacts.yml"]);
 }
 
 #[test]
@@ -811,4 +863,47 @@ fn only_the_failing_build_names_the_testing_fail_repository_entry() {
     );
     assert_eq!(TESTING_ENTRY, "komira-testing");
     assert_eq!(TESTING_FAIL_ENTRY, "komira-testing-fail");
+}
+
+/// The `needs` of each job of `release.yml`, as the file lists them (every job's `needs` is one
+/// flow sequence on its line).
+fn release_needs() -> std::collections::BTreeMap<String, Vec<String>> {
+    let text = include_str!("../../../../../.github/workflows/release.yml");
+    let jobs = text.split_once("\njobs:\n").expect("a jobs map").1;
+    let mut needs = std::collections::BTreeMap::new();
+    let mut job: Option<String> = None;
+    for line in jobs.lines() {
+        let header = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'));
+        if let Some(name) = header.filter(|n| !n.starts_with([' ', '#'])) {
+            needs.insert(name.to_owned(), Vec::new());
+            job = Some(name.to_owned());
+        }
+        if let (Some(job), Some(list)) = (&job, line.strip_prefix("    needs: [")) {
+            let list = list.strip_suffix(']').expect("needs on one line");
+            needs.insert(
+                job.clone(),
+                list.split(", ").map(str::to_owned).collect::<Vec<String>>(),
+            );
+        }
+    }
+    needs
+}
+
+#[test]
+fn the_deploy_jobs_are_set_desired_and_every_job_it_waits_for() {
+    // Catches: a job the deploy waits for left out of DEPLOY_JOBS (a failure of it would not
+    // release the release again), or a job after the deploy (the Mac's beta stage, an install
+    // check, the promotion to stable) listed, so that its failure deploys the release again.
+    let needs = release_needs();
+    assert!(needs.contains_key("macos-test") && needs.contains_key("stable-apt-write"));
+    let mut deploy = std::collections::BTreeSet::new();
+    let mut next = vec!["set-desired".to_owned()];
+    while let Some(job) = next.pop() {
+        if deploy.insert(job.clone()) {
+            next.extend(needs[&job].iter().cloned());
+        }
+    }
+    let listed: std::collections::BTreeSet<String> =
+        DEPLOY_JOBS.iter().map(|j| (*j).to_owned()).collect();
+    assert_eq!(listed, deploy);
 }

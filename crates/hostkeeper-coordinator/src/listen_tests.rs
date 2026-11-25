@@ -32,9 +32,13 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tonic::{Code, Status};
 
-use super::{CLIENT_PATIENCE, Remote, WriteDeadline, carry, connection, reload_all};
+use super::{CLIENT_PATIENCE, Patience, Remote, WriteDeadline, carry, connection, reload_all};
 use crate::http::{PeerAddr, STATUS_PATH, Surface};
+use crate::operator_keys::OperatorKeys;
+use crate::operator_keys::tests::{file, group, key};
+use crate::prerequisites::HostPrerequisites;
 use crate::service::Coordinator;
+use crate::ssh_terminal_route::Shared;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
 use crate::wait::ConnectionWaits;
@@ -60,6 +64,27 @@ async fn a_write_the_peer_does_not_take_times_out_after_the_patience() {
     let late = Pin::new(&mut io).poll_write(&mut cx, b"efgh");
     let late = late.map(|written| written.map_err(|why| why.kind()));
     assert_eq!(late, Poll::Ready(Err(io::ErrorKind::TimedOut)));
+}
+
+/// Catches: a console stream's connection cut at the patience while its browser does not read:
+/// once the connection is released, a write that makes no progress waits for as long as it
+/// takes, and goes on when the peer reads.
+#[tokio::test(start_paused = true)]
+async fn a_released_connection_is_not_held_to_the_patience() {
+    let (near, mut far) = tokio::io::duplex(4);
+    let patience = Patience::default();
+    let mut io = WriteDeadline::released_by(near, PATIENCE, patience.clone());
+    patience.release();
+    let mut cx = Context::from_waker(noop_waker_ref());
+    let first = Pin::new(&mut io).poll_write(&mut cx, b"abcd");
+    assert!(matches!(first, Poll::Ready(Ok(4))));
+    assert!(Pin::new(&mut io).poll_write(&mut cx, b"efgh").is_pending());
+    tokio::time::advance(PATIENCE * 10).await;
+    assert!(Pin::new(&mut io).poll_write(&mut cx, b"efgh").is_pending());
+    let mut got = [0u8; 4];
+    far.read_exact(&mut got).await.expect("read");
+    let late = Pin::new(&mut io).poll_write(&mut cx, b"efgh");
+    assert!(matches!(late, Poll::Ready(Ok(4))));
 }
 
 /// Catches: the deadline running from the first byte of a long response instead of from the
@@ -134,9 +159,123 @@ async fn one_look_of_the_tick_reads_the_tokens_file_again() {
     let tokens = OperatorTokens::from_file(&path).expect("tokens");
     assert!(tokens.name_of(first).is_some());
     tokens_file(&path, second);
-    reload_all(None, &[], &tokens).await;
+    reload_all(
+        None,
+        true,
+        &[],
+        &tokens,
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
+    )
+    .await;
     assert_eq!(tokens.name_of(first), None);
     assert!(tokens.name_of(second).is_some());
+}
+
+/// Proves that one look of the tick reads the operator keys file again: after `reload_all` a
+/// group's keys replaced in the file are the ones listed, with no TLS source and no tokens in
+/// play.
+///
+/// Catches: the tick that looks at the TLS files and the tokens leaving the operator keys file
+/// alone, so that a change of the keys reaches no host until the coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_operator_keys_file_again() {
+    let dir = scratch("listen-tick-operator-keys");
+    let first = vec![key(1, "ops laptop")];
+    let path = file(dir.path(), &group("build", &first));
+    let keys = OperatorKeys::from_file(&path).expect("keys");
+    assert_eq!(keys.set_of("build").expect("a set").keys, first);
+    let second = vec![key(2, "ops laptop")];
+    file(dir.path(), &group("build", &second));
+    reload_all(
+        None,
+        true,
+        &[],
+        &OperatorTokens::none(),
+        &keys,
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
+    )
+    .await;
+    assert_eq!(keys.set_of("build").expect("a set").keys, second);
+}
+
+/// Proves that one look of the tick reads the host prerequisites file again: after `reload_all` a
+/// group's names replaced in the file are the ones listed, with no TLS source and no tokens in
+/// play.
+///
+/// Catches: the tick that looks at the TLS files, the tokens and the operator keys leaving the
+/// host prerequisites file alone, so that a change of a group's set reaches no host until the
+/// coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_host_prerequisites_file_again() {
+    use crate::prerequisites::tests::{file, group};
+    let dir = scratch("listen-tick-prerequisites");
+    let path = file(dir.path(), &group("build", &[]));
+    let held = HostPrerequisites::from_file(&path).expect("prerequisites");
+    assert_eq!(held.set_of("build").expect("a set").names.len(), 0);
+    file(dir.path(), &group("build", &["xcode-command-line-tools"]));
+    reload_all(
+        None,
+        true,
+        &[],
+        &OperatorTokens::none(),
+        &OperatorKeys::default(),
+        &held,
+        &crate::console::ConsoleFiles::default(),
+    )
+    .await;
+    assert_eq!(
+        held.set_of("build").expect("a set").names,
+        ["xcode-command-line-tools"]
+    );
+}
+
+/// Proves that `reload_every` looks at the files once each interval, for as long as it is polled:
+/// the first tick of the interval passes at once and reads nothing, and after one interval of the
+/// paused clock the operator keys file and the host prerequisites file are read again. The driver
+/// waits on the sets changing, never on a clock.
+///
+/// Catches: a tick loop that never reads the files again, or reads them before the interval.
+#[tokio::test(start_paused = true)]
+async fn the_tick_loop_reads_the_files_again_each_interval() {
+    use crate::prerequisites::tests::{file as prerequisites_file, group as prerequisites_group};
+    let interval = Duration::from_secs(60);
+    let dir = scratch("listen-tick-loop");
+    let keys_path = file(dir.path(), &group("build", &[key(1, "ops laptop")]));
+    let keys = OperatorKeys::from_file(&keys_path).expect("keys");
+    let prerequisites_path = prerequisites_file(dir.path(), &prerequisites_group("build", &[]));
+    let held = HostPrerequisites::from_file(&prerequisites_path).expect("prerequisites");
+    let reloading = super::reload_every(
+        None,
+        Vec::new(),
+        OperatorTokens::none(),
+        keys.clone(),
+        held.clone(),
+        crate::console::ConsoleFiles::default(),
+        interval,
+    );
+    let second = vec![key(2, "ops laptop")];
+    let driver = async {
+        file(dir.path(), &group("build", &second));
+        prerequisites_file(
+            dir.path(),
+            &prerequisites_group("build", &["xcode-command-line-tools"]),
+        );
+        assert_eq!(held.set_of("build").expect("a set").names.len(), 0);
+        tokio::time::advance(interval).await;
+        while keys.set_of("build").expect("a set").keys != second
+            || held.set_of("build").expect("a set").names.is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        biased;
+        never = reloading => match never {},
+        () = driver => {}
+    }
 }
 
 // ---- the protocol a connection speaks -----------------------------------------------------
@@ -150,7 +289,7 @@ const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
 /// A server's TLS source over a certificate for `localhost` issued by a CA of its own, and the
 /// DER of that CA, for a client to trust. The source's own ALPN is `h2` only: the listener
 /// offers what it offers whatever that is.
-fn tls_material() -> (TlsSource, Vec<u8>) {
+pub(crate) fn tls_material() -> (TlsSource, Vec<u8>) {
     let mut authority = CertificateParams::new(Vec::<String>::new()).expect("CA params");
     authority.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     authority.key_usages = vec![
@@ -177,7 +316,7 @@ fn tls_material() -> (TlsSource, Vec<u8>) {
 }
 
 /// A TLS client that trusts the CA `ca` and offers the application protocols `offered`.
-fn connector(ca: &[u8], offered: &[&[u8]]) -> TlsConnector {
+pub(crate) fn connector(ca: &[u8], offered: &[&[u8]]) -> TlsConnector {
     let mut roots = RootCertStore::empty();
     roots
         .add(CertificateDer::from(ca.to_vec()))
@@ -220,13 +359,13 @@ fn negotiated(tls: &TlsStream<DuplexStream>) -> Option<Vec<u8>> {
 }
 
 /// A coordinator in a rig of its own, with the rig's directory, which must outlive it.
-fn coordinator(name: &str) -> (Arc<Coordinator>, hostkeeper_testkit::Scratch) {
+pub(crate) fn coordinator(name: &str) -> (Arc<Coordinator>, hostkeeper_testkit::Scratch) {
     let rig = Rig::new(name);
     (Arc::new(rig.coordinator), rig.dir)
 }
 
 /// One `GET` of the status as the operator over HTTP/1.1 on `tls`, and the whole answer.
-async fn status_over_http1(mut tls: TlsStream<DuplexStream>) -> String {
+pub(crate) async fn status_over_http1(mut tls: TlsStream<DuplexStream>) -> String {
     let request = format!(
         "GET {STATUS_PATH} HTTP/1.1\r\nHost: localhost\r\n\
          Authorization: Bearer {OPERATOR}\r\nConnection: close\r\n\r\n"
@@ -238,7 +377,7 @@ async fn status_over_http1(mut tls: TlsStream<DuplexStream>) -> String {
 }
 
 /// An HTTP/2 client over `tls`.
-async fn http2(
+pub(crate) async fn http2(
     tls: TlsStream<DuplexStream>,
 ) -> hyper::client::conn::http2::SendRequest<Full<Bytes>> {
     let (send, driver) = hyper::client::conn::http2::handshake::<_, _, Full<Bytes>>(
@@ -456,7 +595,7 @@ async fn an_http2_connection_its_client_closes_ends_at_once() {
 
 /// A wait for 2.0 of kbf for 30 seconds as the operator: as a gRPC call, or as the gateway's
 /// JSON when `gateway`.
-fn wait_request(gateway: bool) -> Request<Full<Bytes>> {
+pub(crate) fn wait_request(gateway: bool) -> Request<Full<Bytes>> {
     let path = "/hostkeeper.operator.v1.Releases/WaitConverged";
     let call = Request::builder()
         .method("POST")
@@ -562,21 +701,31 @@ async fn a_tcp_stream_names_its_peer_and_a_pipe_names_none() {
 }
 
 /// Proves: a request carries the address of its connection as [`PeerAddr`], and a connection
-/// with no address leaves the request without one; the held waits ride on it either way.
+/// with no address leaves the request without one; the held waits and the coordinator (the one
+/// the terminal of an upgrade outlives the request with) ride on it either way.
 ///
-/// Catches: an address dropped on the way to the request, or invented for a transport with none.
+/// Catches: an address dropped on the way to the request, or invented for a transport with none,
+/// and a request that reaches the router with no coordinator of its own to hand a terminal.
 #[test]
 fn a_request_carries_the_address_of_its_connection_when_it_has_one() {
     let from: std::net::SocketAddr = "192.0.2.7:4433".parse().expect("an address");
     let waits = ConnectionWaits::default();
+    let (coordinator, _dir) = coordinator("listen-carry");
     let mut named = Request::new(());
-    carry(&mut named, &waits, Some(from));
+    carry(&mut named, &waits, Some(from), &coordinator);
     assert_eq!(named.extensions().get::<PeerAddr>(), Some(&PeerAddr(from)));
     assert!(named.extensions().get::<ConnectionWaits>().is_some());
+    assert!(
+        named
+            .extensions()
+            .get::<Shared>()
+            .is_some_and(|shared| Arc::ptr_eq(&shared.0, &coordinator))
+    );
     let mut nameless = Request::new(());
-    carry(&mut nameless, &waits, None);
+    carry(&mut nameless, &waits, None, &coordinator);
     assert_eq!(nameless.extensions().get::<PeerAddr>(), None);
     assert!(nameless.extensions().get::<ConnectionWaits>().is_some());
+    assert!(nameless.extensions().get::<Shared>().is_some());
 }
 
 /// A pipe that says it came from `from`, to drive [`connection`] with a transport that has an
@@ -694,5 +843,35 @@ async fn a_tls_handshake_that_does_not_finish_is_logged_with_the_address_of_its_
         text.contains("a TLS handshake did not finish in time")
             && text.contains("remote=Some(192.0.2.8:5544)"),
         "log: {text}"
+    );
+}
+
+/// Proves: one look of the reload tick reads the console's files again: an operator taken out of
+/// the operators file has no console access after it.
+///
+/// Catches: a tick that leaves the console's files out, so a revoked operator keeps power over
+/// every BMC until the coordinator restarts.
+#[tokio::test]
+async fn one_look_of_the_tick_reads_the_console_files_again() {
+    use hostkeeper_console::operators::{Denied, Need};
+
+    let dir = crate::testutil::scratch("listen-console-reload");
+    let paths = crate::console::support::write_files(&dir, "[[operator]]\nname = \"alice\"\n");
+    let console = crate::console::ConsoleFiles::read(paths).expect("the files");
+    assert!(console.grant("alice", Need::Power).is_ok());
+    crate::console::support::write_files(&dir, "[[operator]]\nname = \"bob\"\n");
+    reload_all(
+        None,
+        true,
+        &[],
+        &OperatorTokens::none(),
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &console,
+    )
+    .await;
+    assert_eq!(
+        console.grant("alice", Need::Power).err(),
+        Some(Denied::NoConsoleAccess)
     );
 }

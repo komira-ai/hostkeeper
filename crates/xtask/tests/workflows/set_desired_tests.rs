@@ -10,10 +10,10 @@ use super::yaml::{self, Node, Value};
 use super::{with_in, workflows_dir};
 
 /// A CI client that keeps every rule: the download, the three provenance checks, the install and
-/// the version check, then the join, the CA, the request, the two calls and the outputs, all
-/// after the check of the tailnet tag. Its job's `runs-on` is on line 31; its steps are, from 1:
-/// tailnet-tag, download, checksum, attestation, commit, install, version, tailnet, ca, request,
-/// set-desired, wait, outputs.
+/// the version check, then the join, the CA, the wait for the coordinator, the request, the two
+/// calls and the outputs, all after the check of the tailnet tag. Its job's `runs-on` is on line
+/// 31; its steps are, from 1: tailnet-tag, download, checksum, attestation, commit, install,
+/// version, tailnet, ca, reach, request, set-desired, wait, outputs.
 pub(super) const CLIENT: &str = "\
 name: set-desired
 on:
@@ -59,14 +59,14 @@ jobs:
           TAILNET_TAG: ${{ inputs.tailnet_tag }}
         run: jq --null-input --arg tag \"$TAILNET_TAG\" 'empty'
       - id: download
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hkctl-1
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --remote-name https://github.com/komira-ai/hostkeeper/releases/download/v1/hk-1-linux-x86_64.tar.gz
       - id: checksum
         run: sha256sum --check --strict --ignore-missing SHA256SUMS
       - id: attestation
         env:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: |
-          gh attestation verify hkctl-1 \\
+          gh attestation verify hk-1-linux-x86_64.tar.gz \\
             --repo komira-ai/hostkeeper \\
             --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \\
             --source-ref refs/heads/main \\
@@ -78,9 +78,9 @@ jobs:
           HOSTKEEPER_COMMIT: ${{ inputs.hostkeeper_commit }}
         run: jq --exit-status '[.[].verificationResult.signature.certificate.sourceRepositoryDigest] | unique == [env.HOSTKEEPER_COMMIT]' verified.json
       - id: install
-        run: install -D --mode 0755 hkctl-1 \"$RUNNER_TEMP/hkctl-bin/hkctl\"
+        run: tar -xzf hk-1-linux-x86_64.tar.gz -C \"$RUNNER_TEMP/hk-release\" hk
       - id: version
-        run: test \"$(\"$RUNNER_TEMP/hkctl-bin/hkctl\" --version)\" = \"hkctl 1.0.0+0123456789ab\"
+        run: test \"$(\"$RUNNER_TEMP/hk-release/hk\" --version)\" = \"hk 1.0.0+0123456789ab\"
       - id: tailnet
         if: ${{ inputs.join_tailnet }}
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
@@ -90,14 +90,23 @@ jobs:
           tags: ${{ inputs.tailnet_tag }}
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
-          ping: ${{ inputs.tailnet_coordinator }}
+          args: --operator=runner
       - id: ca
-        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\"
+        run: printf '%s\\n' \"$CA\" > \"$RUNNER_TEMP/hk-coordinator-ca.pem\"
+      - id: reach
+        if: ${{ inputs.join_tailnet }}
+        env:
+          COORDINATOR_URL: ${{ inputs.coordinator_url }}
+        run: |
+          \"$RUNNER_TEMP/hk-release/hk\" \\
+            --endpoint \"$COORDINATOR_URL\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
+            tailnet-wait
       - id: request
         env:
           VERSION: ${{ inputs.version }}
           TARGETS: ${{ inputs.targets }}
-        run: jq --null-input --arg version \"$VERSION\" --arg targets \"$TARGETS\" '{}' > \"$RUNNER_TEMP/hkctl-request.json\"
+        run: jq --null-input --arg version \"$VERSION\" --arg targets \"$TARGETS\" '{}' > \"$RUNNER_TEMP/hk-request.json\"
       - id: set-desired
         continue-on-error: true
         env:
@@ -106,16 +115,16 @@ jobs:
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+          \"$RUNNER_TEMP/hk-release/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
-            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
-            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\
+            --response-file \"$RUNNER_TEMP/hk-set.json\" \\
             releases set-desired \\
             --service \"$SERVICE\" \\
-            --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            --request \"$RUNNER_TEMP/hk-request.json\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
+            2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)
       - id: wait
         if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
         continue-on-error: true
@@ -127,17 +136,17 @@ jobs:
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
         run: |
-          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+          \"$RUNNER_TEMP/hk-release/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
-            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
-            --response-file \"$RUNNER_TEMP/hkctl-wait.json\" \\
+            --response-file \"$RUNNER_TEMP/hk-wait.json\" \\
             releases wait-converged \\
             --service \"$SERVICE\" \\
             --version \"$VERSION\" \\
             --wait-secs \"${MAX_POLLS}0\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> \"$RUNNER_TEMP/hkctl-wait.err\"
+            2> \"$RUNNER_TEMP/hk-wait.err\"
       - id: outputs
         if: ${{ always() }}
         env:
@@ -146,10 +155,10 @@ jobs:
           WAIT: ${{ inputs.wait }}
           SET_OUTCOME: ${{ steps.set-desired.outcome }}
           WAIT_OUTCOME: ${{ steps.wait.outcome }}
-          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hkctl-set.json', runner.temp) || '/dev/null' }}
-          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hkctl-set.err', runner.temp) || '/dev/null' }}
-          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hkctl-wait.json', runner.temp) || '/dev/null' }}
-          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hkctl-wait.err', runner.temp) || '/dev/null' }}
+          SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}
+          SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hk-set.err', runner.temp) || '/dev/null' }}
+          WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hk-wait.json', runner.temp) || '/dev/null' }}
+          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
           OUTPUTS_PROGRAM: '\"reason=converged\"'
         run: |
           jq --null-input --raw-output \\
@@ -174,16 +183,16 @@ pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
-          \"$RUNNER_TEMP/hkctl-bin/hkctl\" \\
+          \"$RUNNER_TEMP/hk-release/hk\" \\
             --endpoint \"$COORDINATOR_URL\" \\
-            --ca-file \"$RUNNER_TEMP/hkctl-coordinator-ca.pem\" \\
+            --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
-            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\
+            --response-file \"$RUNNER_TEMP/hk-set.json\" \\
             releases set-desired \\
             --service \"$SERVICE\" \\
-            --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            --request \"$RUNNER_TEMP/hk-request.json\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
+            2> >(tee \"$RUNNER_TEMP/hk-set.err\" >&2)
 ";
 
 /// The join step of [`CLIENT`], whole.
@@ -196,7 +205,7 @@ pub(super) const JOIN_BLOCK: &str = "      - id: tailnet
           tags: ${{ inputs.tailnet_tag }}
           version: 1.94.2
           sha256sum: c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32
-          ping: ${{ inputs.tailnet_coordinator }}
+          args: --operator=runner
 ";
 
 /// The input of [`CLIENT`] that turns the join on.
@@ -273,9 +282,10 @@ fn the_oidc_request_comes_after_every_verification_step() {
         "the OIDC token step `set-desired` (step 3) comes before the verification step `commit` (step 6)",
         "the OIDC token step `set-desired` (step 3) comes before the verification step `version` (step 8)",
         "the set step `set-desired` (step 3) comes before `ca` (step 10), whose file it reads",
-        "the set step `set-desired` (step 3) comes before `request` (step 11), whose file it reads",
-        "step 3 (`set-desired`) comes before the last verification step and runs hkctl",
+        "the set step `set-desired` (step 3) comes before `request` (step 12), whose file it reads",
+        "step 3 (`set-desired`) comes before the last verification step and runs hk",
         "the join step `tailnet` (step 9) comes after the OIDC token step `set-desired` (step 3)",
+        "the wait step `reach` (step 11) comes after the OIDC token step `set-desired` (step 3)",
     ];
     assert_client(&early, &early_want);
     // The real file with its set step moved to just before the checksum: the download is step 2.
@@ -300,8 +310,8 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             &["step 5 (`early`) comes before the last verification step and runs ctl"],
         ),
         (
-            "      - id: early\n        run: exec \"$RUNNER_TEMP/hkctl-bin/hkctl\" --version\n",
-            &["step 5 (`early`) comes before the last verification step and runs hkctl"],
+            "      - id: early\n        run: exec \"$RUNNER_TEMP/hk-release/hk\" --version\n",
+            &["step 5 (`early`) comes before the last verification step and runs hk"],
         ),
         (
             "      - id: early\n        run: echo \"$ACTIONS_ID_TOKEN_REQUEST_TOKEN\"\n",
@@ -343,7 +353,7 @@ fn nothing_before_verification_touches_the_token_or_ctl() {
             "      - id: set-desired\n",
             "      - id: set-desired\n        if: ${{ always() }}\n",
         ),
-        &["step 11 (`set-desired`) has `if`, which could run the job on past it"],
+        &["step 12 (`set-desired`) has `if`, which could run the job on past it"],
     );
     // The order is read from the one step with the client's id: a second one is refused.
     assert_client(
@@ -734,11 +744,16 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
         assert!(at(JOIN_STEP) > at(id), "{JOIN_STEP} before {id}: {ids:?}");
     }
     assert!(at(JOIN_STEP) < at(CLIENT_STEP), "{ids:?}");
-    let join_if = "        if: ${{ inputs.join_tailnet }}\n";
+    // The join's own `if:`: the wait step after it has the same one.
+    let join_if = "      - id: tailnet\n        if: ${{ inputs.join_tailnet }}\n";
     let no_if = "the join step `tailnet` (step 8) does not have `if: ${{ inputs.join_tailnet }}`";
-    assert_client(&with_in(CLIENT, join_if, ""), &[no_if]);
+    assert_client(&with_in(CLIENT, join_if, "      - id: tailnet\n"), &[no_if]);
     assert_client(
-        &with_in(CLIENT, join_if, "        if: ${{ always() }}\n"),
+        &with_in(
+            CLIENT,
+            join_if,
+            "      - id: tailnet\n        if: ${{ always() }}\n",
+        ),
         &[no_if],
     );
     assert_client(
@@ -784,8 +799,9 @@ fn the_join_runs_only_when_asked_after_every_check_and_before_the_token_step() {
     assert_client(
         &late,
         &[
-            "the outputs step `outputs` (step 12) is not the last step",
-            "the join step `tailnet` (step 13) comes after the OIDC token step `set-desired` (step 10)",
+            "the outputs step `outputs` (step 13) is not the last step",
+            "the join step `tailnet` (step 14) comes after the OIDC token step `set-desired` (step 11)",
+            "the wait step `reach` (step 9) comes before the step `tailnet` (step 14)",
         ],
     );
     // The real file with its join moved to just before the attestation check.
@@ -891,7 +907,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
             "the join step `tailnet` (step 8) does not pass `audience: ${{ inputs.tailnet_audience }}`",
         ],
     );
-    let join_if = "        if: ${{ inputs.join_tailnet }}\n";
+    let join_if = "      - id: tailnet\n        if: ${{ inputs.join_tailnet }}\n";
     assert_client(
         &with_in(
             CLIENT,
@@ -914,7 +930,7 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
             "the join step `tailnet` (step 8) does not pass `oauth-client-id: ${{ inputs.tailnet_client_id }}`",
         ],
     );
-    // The coordinator the join waits for is the caller's input, in the real file too.
+    // The real join pings nothing and makes the runner's user the node's operator.
     let doc = yaml::load(&real()).expect("parses");
     let steps = entry(&doc, "jobs")
         .and_then(|j| entry(j, JOB))
@@ -927,21 +943,32 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
         .iter()
         .find(|s| entry(s, "id").and_then(Node::as_str) == Some(JOIN_STEP))
         .expect("the join step");
+    let with = entry(join, "with").expect("the join's with");
+    assert!(entry(with, "ping").is_none());
     assert_eq!(
-        entry(join, "with")
-            .and_then(|w| entry(w, "ping"))
-            .and_then(Node::as_str),
-        Some("${{ inputs.tailnet_coordinator }}")
+        entry(with, "args").and_then(Node::as_str),
+        Some("--operator=runner")
     );
-    let ping = "          ping: ${{ inputs.tailnet_coordinator }}\n";
-    let no_ping =
-        "the join step `tailnet` (step 8) does not pass `ping: ${{ inputs.tailnet_coordinator }}`";
+    // Catches: the action's ping back on the join, whose one unanswered ping fails the job, with
+    // any value; and a join that does not make the runner's user the operator the rejoin needs.
+    let args = "          args: --operator=runner\n";
+    let pings = "the join step `tailnet` (step 8) passes `ping`, which fails the job when one ping is not answered; the step `reach` waits for the coordinator";
+    for ping in [
+        "          ping: ${{ inputs.tailnet_coordinator }}\n",
+        "          ping: hk-coordinator\n",
+        "          ping: ''\n",
+        "          Ping: hk-coordinator\n",
+        "          PING: hk-coordinator\n",
+    ] {
+        assert_client(&with_in(CLIENT, args, &format!("{args}{ping}")), &[pings]);
+    }
+    let no_args = "the join step `tailnet` (step 8) does not pass `args: --operator=runner`";
     for to in [
         "",
-        "          ping: hk-coordinator\n",
-        "          ping: ${{ inputs.coordinator_url }}\n",
+        "          args: --operator=root\n",
+        "          args: --operator=runner --accept-dns=false\n",
     ] {
-        assert_client(&with_in(CLIENT, ping, to), &[no_ping]);
+        assert_client(&with_in(CLIENT, args, to), &[no_args]);
     }
     let floating = "the join step `tailnet` (step 8) does not pin the Tailscale tarball by an `X.Y.Z` `version` and a 64-digit lowercase `sha256sum`";
     let sha =

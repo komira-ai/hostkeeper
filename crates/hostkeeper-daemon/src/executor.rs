@@ -24,8 +24,8 @@ use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::{
-    Clock, DeadMan, Finished, ForceVerdict, LaunchError, RecordStore, RunError, StepLauncher,
-    StepRunner, UpdateOrder, Watch,
+    Clock, CrashGate, DeadMan, Finished, ForceVerdict, LaunchError, RecordStore, RunError,
+    StepLauncher, StepRunner, UpdateOrder, Watch,
 };
 
 use crate::boot::{ALERT_INTERRUPTED, ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
@@ -34,17 +34,20 @@ use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
+use crate::maintenance_run::MaintenanceRuns;
 use crate::node::NodeState;
 use crate::observer;
+use crate::own_job::OwnJob;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::repository::{Repository, RepositoryPorts};
 use crate::selfupdate::{self, Restart};
+use crate::unix_clock::SystemUnixClock;
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
-use crate::verbs::clear_halt::Lifted;
+use crate::verbs::clear_halt::{Heard, Lifted};
 use crate::verbs::force::SELF_SERVICE;
 use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
@@ -89,6 +92,9 @@ pub struct Ports {
     /// directory a repository version is staged in, the work directories and the installer
     /// lock ([`crate::repository`]).
     pub repository: Arc<RepositoryPorts>,
+    /// The check that the daemon's own launchd job is enabled ([`crate::own_job`]); `Some` on a
+    /// Mac only.
+    pub own_job: Option<Arc<OwnJob>>,
 }
 
 /// Where the daemon's links and `placed.json` are (design section 4.7): the directories as the
@@ -124,6 +130,9 @@ pub struct Ctx {
     pub units: Arc<dyn UnitControl + Send + Sync>,
     pub placement: Placement,
     pub prune: Arc<dyn Prune>,
+    /// How many versions of a service a prune keeps besides `current`, `previous`, the pin and
+    /// what the records use (`--keep-versions`): [`Ctx::keep_versions`].
+    keep_versions: u64,
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Observes the installed services; it takes none of the daemon's locks.
     pub observer: Arc<Observer>,
@@ -132,6 +141,8 @@ pub struct Ctx {
     pub announcement: Announcement,
     /// What the repository installer works with ([`Ports::repository`]).
     pub repository_ports: Arc<RepositoryPorts>,
+    /// The check of the daemon's own launchd job ([`Ports::own_job`], [`Ctx::check_own_job`]).
+    pub(crate) own_job: Option<Arc<OwnJob>>,
     /// The drift each service's last repository `activate` repaired, until its verdict takes it.
     repaired: Arc<Mutex<BTreeMap<String, Drift>>>,
     /// The counter of the repository installer's tool units ([`Repository::tool_runs`]).
@@ -157,9 +168,18 @@ pub struct Ctx {
     stop: Arc<AtomicBool>,
     /// The daemon's request to exit so that its unit starts a new binary.
     restart: Restart,
+    /// The host's maintenance turns: the one sequencer of the host ([`crate::maintenance_run`]).
+    pub maintenance: MaintenanceRuns,
 }
 
 impl Ctx {
+    /// How many whole versions of a service a prune keeps besides `current`, `previous`, the pin
+    /// and what the records use, the newest first ([`crate::prune`]): `--keep-versions`, set by
+    /// [`Daemon::keeping_versions`].
+    pub fn keep_versions(&self) -> u64 {
+        self.keep_versions
+    }
+
     /// The daemon's request to exit with status 0 after the follow-on of its own update.
     pub fn restart(&self) -> &Restart {
         &self.restart
@@ -634,10 +654,12 @@ impl Daemon {
                 units: ports.units,
                 placement: ports.placement,
                 prune: ports.prune,
+                keep_versions: crate::prune::DEFAULT_KEEP_VERSIONS,
                 force_lock_point: ports.force_lock_point,
                 observer: ports.observer,
                 announcement: ports.announcement,
                 repository_ports: ports.repository,
+                own_job: ports.own_job,
                 repaired: Arc::default(),
                 tool_runs: Arc::new(std::sync::atomic::AtomicU64::new(
                     crate::repository::first_tool_run(),
@@ -655,9 +677,18 @@ impl Daemon {
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
                 restart: Restart::default(),
+                maintenance: MaintenanceRuns::new(Arc::new(SystemUnixClock)),
             },
             abort_tries: Mutex::default(),
         }
+    }
+
+    /// The same daemon, its prunes keeping the newest `versions` whole versions of a service
+    /// besides `current`, `previous`, the pin and what the records use, in place of
+    /// [`crate::prune::DEFAULT_KEEP_VERSIONS`]: `--keep-versions`.
+    pub fn keeping_versions(mut self, versions: u64) -> Daemon {
+        self.ctx.keep_versions = versions;
+        self
     }
 
     /// The same daemon, every step record store it makes changed by `seam` as it is made: the
@@ -671,6 +702,20 @@ impl Daemon {
     /// tests that read what the daemon alerted.
     pub fn with_alerts(mut self, sink: AlertSink) -> Daemon {
         self.ctx.alerts = sink;
+        self
+    }
+
+    /// The same daemon, the writes of its maintenance run record stopped where `gate` says, as a
+    /// crash would: the seam of the tests that stop a turn between its steps.
+    pub fn with_maintenance_crash_gate(mut self, gate: CrashGate) -> Daemon {
+        self.ctx.maintenance.set_crash_gate(gate);
+        self
+    }
+
+    /// The same daemon, a drain's deadline told to its hook in `unix`'s seconds in place of the
+    /// host's wall clock: the seam of the tests that read the deadline.
+    pub fn with_unix_clock(mut self, unix: Arc<dyn hostkeeper_link::UnixClock>) -> Daemon {
+        self.ctx.maintenance.set_unix_clock(unix);
         self
     }
 
@@ -741,12 +786,24 @@ impl Daemon {
         verbs::clear_halt::clear_halt(&self.ctx, service, generation)
     }
 
+    /// A heartbeat reply named `generation` as the halt generation of `service`, after `before`
+    /// in the reply before it ([`verbs::clear_halt::heard`]).
+    pub fn heard_halt(
+        &self,
+        service: &ServiceName,
+        before: Option<u64>,
+        generation: u64,
+    ) -> Result<Heard, Refused> {
+        verbs::clear_halt::heard(&self.ctx, service, before, generation)
+    }
+
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
     /// stays locked and its record `running`, and every hooked order of the service, the same
     /// update's resend included, is `busy` until `abort` clears it. Any other hooked order that
     /// stops without a verdict, whatever its reason, is an alert too (`order_interrupted`), with
     /// its service, its reason and what failed: the coordinator keeps only the reason, so this
     /// line is where the host says why (a switch that could not relink, a launcher that failed).
+    /// A pinned service's orders are held next, before any lock ([`crate::pin::gate`]).
     pub fn execute(&self, verb: Verb) -> Reply {
         let hooked = match &verb {
             Verb::Update(order) | Verb::ForceRollback(order) | Verb::Install(order) => {
@@ -768,7 +825,12 @@ impl Daemon {
                 ),
             );
         }
+        let clears = match crate::pin::gate(&self.ctx, &verb) {
+            Ok(clears) => clears.cloned(),
+            Err(held) => return held,
+        };
         let reply = self.dispatch(verb);
+        crate::pin::cleared(&self.ctx, clears.as_ref(), &reply);
         match (&reply, &hooked) {
             (
                 Reply::Interrupted {
@@ -809,6 +871,7 @@ impl Daemon {
                 halt_generation,
             } => verbs::clear_halt::run(ctx, service, halt_generation),
             Verb::ClearRecord(service) => verbs::clear_record::run(ctx, &service),
+            Verb::Maintain(order) => verbs::maintain::run(ctx, &order),
         }
     }
 

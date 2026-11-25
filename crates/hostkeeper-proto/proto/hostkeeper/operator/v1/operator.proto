@@ -22,7 +22,8 @@
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
 // `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, `MdmRefusal` in mdm.proto, and
-// `RepositoriesRefusal`, `HostGroupsRefusal`, `UsersRefusal`, `ApiTokensRefusal` in their own .proto),
+// `RepositoriesRefusal`, `HostGroupsRefusal`, `UsersRefusal`, `ApiTokensRefusal`,
+// `ConsoleRefusal`, `MaintenanceRefusal` and `XcodeRefusal` in their own .proto),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
@@ -78,12 +79,16 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// `MaintenanceReport`, which `Host` carries.
+import "hostkeeper/agent/v1/maintenance.proto";
 // The release a set with targets names, per platform (`SetDesiredRequest.targets`).
 import "hostkeeper/release/v1/release.proto";
 // `AuditEntry` and `Actor`, which every service of the package answers.
 import public "hostkeeper/operator/v1/entry.proto";
 // The `Rollouts` service and the update plan (`RolloutPlan`) that `ServiceStatus` carries.
 import public "hostkeeper/operator/v1/rollouts.proto";
+// The `Maintenance` service, the maintenance runs an operator schedules.
+import public "hostkeeper/operator/v1/maintenance.proto";
 // `HostRepositories`, which `Host` carries.
 import "hostkeeper/operator/v1/repositories.proto";
 // `SetRepositoryRequest` and `SetRepositoryResponse`; then the messages of `Hosts.ClearRecord`
@@ -148,7 +153,7 @@ service Releases {
   rpc Force(ForceRequest) returns (ForceResponse);
   // Lift a bad mark from a version, so that it may be ordered and CI may set it again.
   rpc UnmarkBad(UnmarkBadRequest) returns (UnmarkBadResponse);
-  // Lift a service's standing halt.
+  // Lift a service's standing halt, and the halts hosts hold of it of their own.
   rpc ClearHalt(ClearHaltRequest) returns (ClearHaltResponse);
   // Everything the coordinator holds about each service. Changes nothing.
   rpc Status(StatusRequest) returns (StatusResponse);
@@ -294,7 +299,7 @@ enum ReleasesRefusal {
   // FAILED_PRECONDITION: a force to a version older than the service's `min_version`, the first
   // release that has its update hook. Such a release is installed on each host by hand.
   RELEASES_REFUSAL_BELOW_MIN_VERSION = 8;
-  // FAILED_PRECONDITION: `ClearHalt` of a service that is not halted.
+  // FAILED_PRECONDITION: `ClearHalt` of a service that is not halted and no host holds halted.
   RELEASES_REFUSAL_NOT_HALTED = 9;
   // FAILED_PRECONDITION: `UnmarkBad` of a version that is not marked bad.
   RELEASES_REFUSAL_NOT_MARKED_BAD = 10;
@@ -361,6 +366,10 @@ enum ReleasesRefusal {
   // INVALID_ARGUMENT: `SetDesired` whose `desired` sets `max_updating` or `min_up`, which a
   // group's rollout policy holds.
   RELEASES_REFUSAL_LIMITS_IN_HOST_GROUP = 31;
+  // ABORTED: `SetDesired` in host groups was decided three times, and each time the desired state
+  // had changed in the store before the set's commit could lock it: a commit came between, after
+  // the first time always another coordinator's. Nothing changed, and asking again is safe.
+  RELEASES_REFUSAL_STATE_CHANGED = 32;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -544,6 +553,31 @@ message Host {
   // The host group the host is in, kept with its enrollment; empty from a coordinator that does
   // not hold host groups.
   string host_group = 25;
+  // The last maintenance report of the host's daemon (`HeartbeatRequest.maintenance`) the
+  // coordinator kept: what the host runs, what is due on it and the maintenance run it holds.
+  // Absent while the coordinator keeps none: the host's daemon has not announced `maintenance-v1`,
+  // or has sent no report the coordinator read. The coordinator keeps the last report that kept
+  // every bound of `MaintenanceReport`; a report that breaks one is dropped and the last one read
+  // stays. On a Mac of a group that keeps Xcode (`xcode_keep` above 0), `due` also holds the
+  // `MAINTENANCE_KIND_XCODE` item the coordinator decides, which no daemon lists: the newest
+  // `xcode_keep` releases its Xcode store holds include one the Mac lacks in its own
+  // `Xcode-<version>.app`, or `xcode-select` does not name the group's `xcode_default`. Its `from`
+  // is the version `xcode-select` names, its `to` the release missing (else the default) and its
+  // `label` that release's build; it is counted in `due_left_out` when `due` already lists 12.
+  optional hostkeeper.agent.v1.MaintenanceReport maintenance = 26;
+  // For a host with a kept `maintenance` report whose `looked_unix` is not 0: the seconds between
+  // that last look and the coordinator's clock when it answered; 0 when the look is ahead of the
+  // coordinator's clock. Absent without a kept report and when `looked_unix` is 0.
+  optional uint64 maintenance_look_age_secs = 27;
+  // True when the coordinator keeps a `maintenance` report and its last look is 0, older than 7200
+  // seconds, or more than 300 seconds ahead of the coordinator's clock: an empty `due` in it then
+  // does not mean nothing is due. False without a report.
+  bool maintenance_stale = 28;
+  // Whether the host's Full Disk Access grant was in force, as its last gRPC heartbeat said
+  // (`HeartbeatRequest.full_disk_access`). UNSPECIFIED: unknown, the host's agent predates the
+  // field, it beats only by the JSON route, which carries none, or the coordinator has not heard
+  // it over gRPC since it started.
+  hostkeeper.agent.v1.FullDiskAccess full_disk_access = 29;
 }
 
 // One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).
@@ -581,7 +615,9 @@ message HostService {
   // The version of the service installed on the host, as it last reported; absent when it is not
   // installed.
   optional string installed_version = 7;
-  // Its health, as the host last reported it.
+  // Its health, as the host last reported it while the host is live; HEALTH_SILENT once the host
+  // is not live (its last heartbeat is 45 seconds old or more), whatever it last reported. The
+  // raw report stays in `Host.heartbeat` as the host sent it.
   hostkeeper.agent.v1.Health health = 8;
   // The last update of the service on the host, with its verdict, phase, class, reason, detail,
   // try and log lines; absent before the first.
@@ -690,6 +726,12 @@ enum GateReason {
   // whose uninstall goes before it, because the group listed it after this one, is still on the
   // host, so a config package goes before its service (docs/design/hostgroups.md section 1.4).
   GATE_REASON_UNINSTALL_ORDER = 36;
+  // The host holds a halt of the service of its own (`ServiceBeat.local_halt` names it) that no
+  // halt of this coordinator stands for; `Releases.ClearHalt` of the service lifts it.
+  GATE_REASON_HALTED_HERE = 37;
+  // As `GATE_REASON_HALTED_HERE`, but the host holds a generation above any this coordinator has
+  // issued, so no generation it sends lifts it but the one `Releases.ClearHalt` issues past it.
+  GATE_REASON_STALE_HALT_HERE = 38;
 }
 
 // Whether a service counts a host.
@@ -1097,9 +1139,10 @@ message UnmarkBadResponse {
 }
 
 // Lifts the halt, acknowledges the report that raised it and every other halt report received
-// while it stood, and raises the service's clear generation by one, which agents are told in
-// every heartbeat reply (`halt_generations`). An acknowledged report does not halt the service
-// again while its host keeps reporting it.
+// while it stood, and raises the service's clear generation by one, or past the highest one a host
+// reports holding a halt under (`ServiceBeat.local_halt`), which agents are told in every
+// heartbeat reply (`halt_generations`). An acknowledged report does not halt the service again
+// while its host keeps reporting it.
 message ClearHaltRequest {
   string service = 1;
   string reason = 2;
@@ -1434,6 +1477,25 @@ message Alert {
   // For `ALERT_KIND_DUPLICATE_CLAIM_PENDING`: the enrolled host whose identity the request also
   // claims; empty when that is another pending request, or not known.
   string other_host_id = 9;
+  // For `ALERT_KIND_UPDATES_DUE`, `ALERT_KIND_MAINTENANCE_HALTED` and
+  // `ALERT_KIND_MAINTENANCE_NOT_BACK`: the host group it concerns; empty for every other kind and
+  // for hosts in no host group.
+  string host_group = 10;
+  // For `ALERT_KIND_FAILED_UPDATE`: the reason of the host's failed report (`unspecified` when it
+  // names none); for `ALERT_KIND_HOST_HALT`: the reason of the halt the host holds. Empty for
+  // every other kind.
+  string reason = 11;
+  // For `ALERT_KIND_FAILED_UPDATE`: what the host said of the failure (its report's `detail`);
+  // empty when it said nothing, and for every other kind.
+  string detail = 12;
+  // For `ALERT_KIND_FAILED_UPDATE`: how often the host was ordered the version, the failed try
+  // included (the try of its report: 1 for the first); 0 when its agent names no try, and for
+  // every other kind.
+  uint64 tries = 13;
+  // For `ALERT_KIND_HOST_HALT`: when the host wrote the halt it holds, unix seconds, by the age it
+  // reports; 0 when it reports none, and for every other kind. `first_observed_unix` is when this
+  // coordinator first saw the alert.
+  uint64 since_unix = 14;
 }
 
 // What an `Alert` is about. These spellings are public; the `alert=` field of the coordinator's
@@ -1463,8 +1525,9 @@ enum AlertKind {
   // may hold mid-update. Listed while the host stays excluded and the change is among the last 64
   // the coordinator keeps. Log token `exclude_abandon`.
   ALERT_KIND_ABANDONED_WHILE_UPDATING = 7;
-  // The host has not heartbeated for the coordinator's silent-host threshold or longer. Log token
-  // `silent_host`.
+  // The host has not heartbeated for the coordinator's silent-host threshold or longer; not while
+  // it reboots in its turn of a maintenance run, or is not back from it
+  // (`ALERT_KIND_MAINTENANCE_NOT_BACK`). Log token `silent_host`.
   ALERT_KIND_SILENT_HOST = 8;
   // The certificate the coordinator serves its hosts expires within the coordinator's window, or
   // has expired: its renewal is failing. Log token `cert_near_expiry`.
@@ -1503,6 +1566,75 @@ enum AlertKind {
   // established. The alert's `version` is the `renew_alert_days` it was raised at, or `expired`.
   // Log token `mdm_identity_near_expiry`.
   ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY = 15;
+  // The host's last prerequisites report holds a prerequisite whose status is
+  // `PREREQUISITE_STATUS_FAILED`: its daemon could not install it or look for it, and tries
+  // again at the `next_try_unix` the report holds. The message names each failed prerequisite
+  // with its failures in a row, its next try and its reason. One alert for each host, listed
+  // while the host's last report holds a failed state. Log token `prerequisite_failed`.
+  ALERT_KIND_PREREQUISITE_FAILED = 16;
+  // The list of Xcode releases the coordinator reads once a day (`--xcode-feed-url`) lists a
+  // release (not a beta, not a release candidate) newer than any its Xcode store holds. The
+  // message names its version, its build and the macOS it requires. One alert, listed until the
+  // store holds that release or a newer one; its `version` is the release's version. Log token
+  // `xcode_release_waiting`.
+  ALERT_KIND_XCODE_RELEASE_WAITING = 17;
+  // An operator's upload to the Xcode store (`PUT /v1/xcode/<sha256>`) of a second build under a
+  // version the store holds was refused: on our hosts a version names one build. The message
+  // names the version, the build the store holds and the build refused. One alert for each
+  // version, listed until the archive the store holds of that version is removed; its `version`
+  // is that version. The coordinator's memory: a restart forgets it. Log token
+  // `xcode_version_taken`.
+  ALERT_KIND_XCODE_VERSION_TAKEN = 18;
+  // The last maintenance report of one or more hosts of a host group (or of no host group) holds
+  // an item that is due (`MaintenanceReport.due` is not empty, or `due_left_out` is not 0), or the
+  // coordinator finds `xcode` due on a Mac of the group (`Host.maintenance`). The
+  // message counts the hosts: `Updates due on 2 hosts of web`, or `Updates due on 1 host in no host
+  // group`; a stale report that holds due items still counts. One alert for each group, with the
+  // group in `host_group`; it stands while a host of the group is due and clears when the last
+  // beats of its hosts report nothing due. Log token `updates_due`.
+  ALERT_KIND_UPDATES_DUE = 19;
+  // The host's last report of the service is a failure of the version its host group wants of it
+  // (an update or a first install): it stays where it is. A failure whose reason the host can
+  // clear by itself (`busy`, `verify_unavailable`, `fetch_failed`, `package_manager_busy`,
+  // `no_space`) is ordered again by the coordinator after the group's `defer_backoff`, longer
+  // after each failure, and stays listed through those tries; any other is not ordered that
+  // version again until an operator retries it (`Hosts.Retry`), or another version is set.
+  // `version` is the version it failed, `reason` and `detail` are those of its report, and
+  // `tries` the try of the order that failed. One alert for each host and service; it clears
+  // when the host reports another outcome (it reaches the version, or, for a failure an operator
+  // retried, a new try is under way), when another version is wanted, or when the host is
+  // excluded from the service or leaves its group. A `halted` refusal is no failed update: the
+  // host holds a halt of its own, `ALERT_KIND_HOST_HALT`. Log token `failed_update`.
+  ALERT_KIND_FAILED_UPDATE = 20;
+  // The host holds a halt of the service of its own (its heartbeat's `local_halt`): it refuses
+  // every order of the service until an operator clears the halt (`Releases.ClearHalt`), whether
+  // or not the coordinator holds a halt of it. `version` is the version it runs, `reason` the
+  // halt's, and `since_unix` when the host wrote it, by the age it reports. The message says when
+  // the generation it holds is above any this coordinator issued: a halt left by an earlier
+  // coordinator, whose cause may be gone. One alert for each host and service, listed while the
+  // host reports the halt. Log token `host_halt`.
+  ALERT_KIND_HOST_HALT = 21;
+  // A host's turn of a maintenance run halted (`MAINTENANCE_HOST_STEP_HALTED`): a step from drain
+  // on failed, the host stays cordoned, and no further host of its group starts in the run. The
+  // message names the host, the run and the reason its daemon gave (the step and the exit code).
+  // One alert for each halted host, with its group in `host_group`; it stands until the host's
+  // daemon reports its turn at another step, after a `Maintenance.RetryHost` or
+  // `Maintenance.PutBack`. Critical. Log token `maintenance_halted`.
+  ALERT_KIND_MAINTENANCE_HALTED = 22;
+  // A host rebooting in its turn of a maintenance run has been silent for its group's
+  // `return_secs` (`MAINTENANCE_HOST_STEP_NOT_BACK`): it stays cordoned, and no further host of its
+  // group starts in the run. The message names the host, the run and since when it is not back.
+  // One alert for each such host, with its group in `host_group`; it clears when the host reports
+  // again. While a host reboots in its turn, and while it is not back, it raises no
+  // `ALERT_KIND_SILENT_HOST`. Critical. Log token `maintenance_not_back`.
+  ALERT_KIND_MAINTENANCE_NOT_BACK = 23;
+  // The host declined the version its host group wants of the service, offered again after each
+  // wait, three times in a row for the same reason: a reason that may not clear by itself. It
+  // waits longer each time (the group's `defer_backoff`) and holds no other host or service.
+  // `version` is the version it declines, `reason` the deferral's, and `tries` how many times in a
+  // row it declined it for that reason. It clears when the host updates, gives another reason,
+  // or another version is wanted. Log token `repeated_deferral`.
+  ALERT_KIND_REPEATED_DEFERRAL = 24;
 }
 
 // How soon an `Alert` needs a person.

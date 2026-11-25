@@ -2,6 +2,10 @@
 
 > **Update 2026-11-14.** The `mdm` package (6.2), the `hostkeeper-mdm` kit and its release assets (M1, M2) are gone. The MDM was removed from the coordinator and the repository (`docs/design/coordinator-mdm.md`, superseded); Macs enroll through the bootstrap package (`docs/design/mac-bootstrap.md`). Where this document describes the MDM, its kit, its policy gate or the `mdm` package, it describes what was removed; the rest stands.
 
+> **Update 2026-11-19.** `hkctl` is now `hk`, one Rust binary generated at build time from the same command table, with the ssh commands built in ([hk.md](hk.md)). Where this document says that the command line is a bash script, needs bash 3.2 or `curl`, is one asset for every platform (`hkctl-<version>`), is not in a tarball, or that it execs a separate `hkssh`, it describes the earlier layout, which `hk.md` supersedes: the transport, the release assets, the token handling and the ssh commands. The names of the services and methods, the flags, the output, the exit codes and the refusal tokens are unchanged, and there is no `hkctl`: the sections below that name commands remain right with `hk` for `hkctl`.
+
+> **Update 2026-11-20.** `hostkeeper` gains three verbs root runs on the host with the coordinator out of reach: `activate` (a force to a version the host keeps, with no fetch), `pin` and `unpin` ([hostkeeper-design.md](hostkeeper-design.md) Q16, [admin.md](../admin.md#roll-a-service-back-on-the-host)). They are run once by hand with the daemon stopped, and serve nothing: the daemon still binds no socket, and `daemon` is still the only verb that runs the daemon.
+
 Status: design, for the maintainers' comments. Every statement about new code is **Designed** until its item lands;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.
@@ -46,7 +50,7 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
   (`hkctl releases set-desired ...` replaces `hostkeeper ctl releases set-desired ...`), with the same flag rules and
   the same exit codes.
 - The UI calls the API through a generated client (`ui/gen/client.js` with its TypeScript declarations
-  `ui/gen/client.d.ts`). `ui/calls.json` is derived from it, not kept by hand.
+  `ui/gen/client.d.ts` and one `ui/gen/<namespace>.d.ts` per proto package). `ui/calls.json` is derived from it, not kept by hand.
 - CI sets a desired version with `hkctl`. The reusable workflow `set-desired.yml` keeps its inputs and outputs; the
   wait is one call to a new method, `Releases.WaitConverged`, instead of a loop in a client.
 - The daemon serves nothing on the host. `hostkeeper admin` and its socket are gone (**Built**, K3: the daemon binds no
@@ -111,7 +115,7 @@ The operator API is the packages `hostkeeper.operator.v1` (services `Hosts`, `Re
 |---|---|---|---|
 | Rust (tonic) | `tonic_prost_build` in `hostkeeper-proto/build.rs` (**Built**) | the daemon's link, `pxe`, Rust tests | gRPC |
 | `hkctl` (bash) | the command table of `hostkeeper-proto/src/ctl.rs` and a new bash emitter (item G1) | operators, CI | JSON gateway over HTTPS |
-| `ui/gen/client.js` and `client.d.ts` | a new emitter over the same table (item G2) | the operator UI | JSON gateway, same origin |
+| `ui/gen/client.js`, `client.d.ts` and the `<namespace>.d.ts` files | a new emitter over the same table (item G2) | the operator UI | JSON gateway, same origin |
 
 The command table (`ctl.rs`, `ctl_gen.rs`, **Built**) already turns every unary RPC into a command with typed flags,
 secret inputs and help text, and refuses what it cannot express (a streaming RPC, a clash, a secret on a non-string
@@ -167,14 +171,16 @@ in `hostkeeper ctl` today (`crates/hostkeeper-ctl/build.rs` shows it on fixture 
 `ui/gen/client.js` is an ES module with one function per unary method of `hostkeeper.operator.v1`
 (`releases.setDesired(request)`), each a `POST` of canonical JSON to `/<package>.<Service>/<Method>` with the
 operator's token, through the `fetch` and token the UI injects (as `ui/api.js` does today, **Built**).
-`ui/gen/client.d.ts` declares each request and response as TypeScript types, from the same descriptors, with proto3
-JSON's names and enum spellings. Both files are checked in, because the UI is static files with no build step and the
+`ui/gen/client.d.ts` declares the `Client` and imports the types, which `ui/gen/<namespace>.d.ts` declares, one file per
+proto package (`hostkeeper_operator_v1.d.ts`) so that no file reaches the 1000 lines every file of `ui/` is held to; the
+types are each request and response, from the same descriptors, with proto3
+JSON's names and enum spellings. All of these files are checked in, because the UI is static files with no build step and the
 image copies `ui/` byte for byte (`cargo xtask release check-image-ui`, **Built**). A test regenerates them and fails on
 any difference.
 
 The repository runs no Node: the UI's tests run the real modules in `boa_engine` inside `cargo test`
 (`crates/hostkeeper-ui-tests`, **Built**). So the client is JavaScript plus declarations rather than `.ts` sources that
-need a compiler; `client.d.ts` is checked in a Rust test by a TypeScript parser crate from crates.io (item G2 picks it,
+need a compiler; the `.d.ts` files are checked in a Rust test by a TypeScript parser crate from crates.io (item G2 picks it,
 subject to `cargo deny`). `ui/api.js` keeps the error handling and the token rules and calls the generated functions;
 the pages call `api.<service>.<method>`. `ui/calls.json` becomes the list of generated functions the pages call, derived
 by the existing scanner (`call_sites`, **Built**) and checked against the real router as now (`real_router.rs`).
@@ -220,18 +226,20 @@ Docker `HEALTHCHECK` or a compose `healthcheck` could only run the coordinator b
 such as `healthcheck`. That is the kind of plumbing verb this design removes, so there is none. Health is exposed as a
 route, and the probe runs outside the container:
 
-- **A health listener.** `serve --health-listen <loopback address:port>` binds one more listener, plain HTTP, that
-  answers only `GET /healthz` (and `HEAD`) and 404 to everything else, with no authentication and no TLS. `serve`
-  refuses an address that is not loopback (`127.0.0.0/8` or `::1`), as it refuses a wildcard for `--private-listen`
-  unless `--private-listen-wildcard` is given (`crates/hostkeeper-coordinator/src/config_listen.rs`, **Built**), so
-  nothing off the machine reaches it. Without the
-  flag there is no such listener, as today.
-- **What it says.** `200` with the body `ok` when every listener the flags name is bound and serving, the store is
-  open and, with the Postgres store, this coordinator holds the single-writer lock (coordinator-storage.md section 5);
-  `503` with one reason token otherwise (`store_unreachable`, `not_writer`, `starting`, and `draining` from SIGTERM
-  or SIGINT until the process exits, ahead of the others). The body is that token and
-  nothing else: no version, no host, no count. It reads memory only and writes no audit line. The listener has the
-  same limits as the others (handshake, head, connection count; `listen.rs`, **Built**).
+- **A health listener.** `serve --health-listen <address:port>` binds one more listener, plain HTTP, that
+  answers `GET` and `HEAD` of `/healthz` (liveness) and `/readyz` (readiness) and 404 to everything else, with no
+  authentication and no TLS. `serve` takes a loopback address (`127.0.0.0/8` or `::1`) or the address of one
+  interface, and refuses a wildcard unless `--health-listen-wildcard` is given, as it does for `--private-listen`
+  (`crates/hostkeeper-coordinator/src/config_listen.rs`, **Built**). Without the flag there is no such listener, as
+  today.
+- **What it says.** `/healthz` is `503 starting` until every listener the flags name is bound, then `200 ok` for
+  good, also while the database's link is lost and while the coordinator drains. `/readyz` is `200 ok` when every
+  listener is bound, the store takes writes and the coordinator is not draining; else `503` with one token:
+  `draining` (from SIGTERM or SIGINT until the process exits), `starting` or `store_unreachable`, in that order. The
+  body is that token and nothing else: no version, no host, no count. It reads memory only and writes no audit line.
+  The listener has the same limits as the others (head, connection count; `listen.rs`, **Built**). From the signal
+  the coordinator serves for `--drain-delay-secs` (default 15), then ends its connections and exits; see
+  [coordinator-health.md](../deploy/coordinator-health.md) and coordinator-multi-instance.md section 11.
 - **Who probes it.** The deployment, from outside the container: the coordinator runs on the host's network
   (coordinator-storage.md section 9), so a probe on the same machine reaches the loopback listener, for example an
   orchestrator's HTTP probe or the machine's own monitoring. The compose file gets no `healthcheck` for the coordinator,
@@ -412,10 +420,10 @@ only when it is not loaded.
   admin socket's directory itself). `packaging/linux/README.md` describes both.
 - **macOS.** The pkg is the only source of the plist and of `/usr/local/bin/hostkeeper` (hostkeeper's package carries
   no units on macOS), so the two always match. Stage 2 makes `daemon_plist` start `/usr/local/bin/hostkeeper daemon`,
-  which seeds and execs `current` at each start, and the postinstall script two lines: a quiet `launchctl print` of the job that ends the script when it is
-  loaded (no `bootout`, packages-native 10.4) and `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
+  which seeds and execs `current` at each start, and the postinstall script three command lines: a quiet `launchctl print` of the job that ends the script when it is
+  loaded (no `bootout`, packages-native 10.4), `launchctl enable` of the job (a job marked disabled is not loaded by `bootstrap`) and `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
   **Built** (S2b): `DaemonJob::standard` runs `INSTALLED_BINARY` (`crates/hostkeeper-launchd/src/plist.rs`, which no
-  longer has `DAEMON_PROGRAM`), and `Postinstall` has the two commands and nothing else; `docs/macos.md` describes
+  longer has `DAEMON_PROGRAM`), and `Postinstall` has the three commands (print, enable, bootstrap) and nothing else; `docs/macos.md` describes
   both.
 - **After stage 3, a `current` that starts nothing.** The linked unit has no repair line, and systemd logs
   `203/EXEC` every second. Root runs `/usr/bin/hostkeeper daemon` once by hand with the unit's flags (an older packaged
@@ -790,7 +798,7 @@ after CI2: an old pin runs an old binary.
 **Recommendation: both become service packages that hostkeeper installs like any other service, and neither folds into
 the coordinator.** They are services that run on one host of the farm, with root needs of their own; they are not
 hostkeeper programs. That is what a service package is for: the daemon fetches, verifies and installs an attested
-package, runs its hook as root, links its units and keeps two versions with rollback (hostkeeper-design.md section 4.7,
+package, runs its hook as root, links its units and keeps the versions hostkeeper-design.md Q14 names, with rollback (hostkeeper-design.md section 4.7,
 **Built**). Assigning the service to a host installs it there; unassigning uninstalls it.
 
 Why not the coordinator: the coordinator is a non-root container (user 65532, coordinator-storage.md section 9). PXE
@@ -914,7 +922,7 @@ switches to the generated client in one pull request, with its tests.
 | S2a | Stage 2: `OLDEST_READER = R1`, the hand-over follow-on, the probe call and its plumbing deleted, the fallback files removed at start; the pin of X1 moved to R1 | R1 converged | the re-pointed and new device tests of 4.5, Linux and Mac; X1 pinned to R1 |
 | S2b | Stage 2: the package unit, the bootstrap unit, the plist and the postinstall (4.1) | S1b released | `crates/xtask/tests/packaging/{unit_file,daemon_flags,self_update}.rs`, `check-macos-pkg` and `crates/hostkeeper-launchd/tests/{plist,postinstall}.rs` on the new texts; the bootstrap-unit and pkg device tests of 4.5 |
 | S3 | Stage 3: `OLDEST_READER = R2`; delete `self-update-protocol`, `self-update-fallback`, `self-update-seed` (and the linked unit's line that calls it), `mac-config`, `update-hook` and its five step words, `--admin-socket`, `SELF_UPDATE_PROTOCOL`, `fallback.rs`, `selfunits.rs` and their texts; the pin of X1 moved to R2; the runbook of 4.1 | R2 converged | `crates/hostkeeper/tests/binary.rs`: each deleted verb and the flag exit 2; X1 pinned to R2; every device test of 4.5. **Built** (S3): see the **Built** notes of 4.1 to 4.5 |
-| H1 | The coordinator's `--health-listen` and `GET /healthz` (2.7); docs/deploy and coordinator-storage.md's **Health** bullet | none | coordinator tests on the router in process: `200 ok` serving; `503` with `store_unreachable`, `not_writer` and `starting` on the fake store; 404 for any other path and for `POST`; a non-loopback address and a wildcard refused at start by name; no listener without the flag; the packaging test still holds the Dockerfile to no `HEALTHCHECK` and no default arguments |
+| H1 | The coordinator's `--health-listen` and `GET /healthz` and `GET /readyz` (2.7); docs/deploy and coordinator-storage.md's **Health** bullet | none | coordinator tests on the router in process: `200 ok` serving; `503` with `store_unreachable` and `starting` on the fake store; 404 for any other path and for `POST`; a wildcard refused at start by name unless `--health-listen-wildcard` is given; no listener without the flag; the packaging test still holds the Dockerfile to no `HEALTHCHECK` and no default arguments |
 | N1 | The `pxe` package and its `prepare` step; `hostkeeper-pxe` out of the deb and rpm; network-install.md and its runbook. **Built** (6.1) | G1 | `cargo xtask release deb --service pxe` tests (shape, unit, manifest, targets); `crates/hostkeeper-pxe/tests/unit_file.rs` (the golden unit and the program's parser); a privileged install, assign and unassign of the `pxe` package under systemd; the `fetch` tests re-pointed at `prepare` |
 | M1 | The `mdm` package: build-time fetch against `pins.txt`, hook steps, units, `bin/mdm` with the `push-cert` and `dep` verbs | G1 | the `install`, `tls`, `verify`, `push_cert` and `dep` tests re-pointed at the package's program; the package tests |
 | M2 | Delete `hostkeeper-mdm` and its release assets | M1, MIGRATION.md's move done | release contract tests without the MDM asset |
@@ -946,5 +954,5 @@ floor); S2a waits for the farm.
 | PXE and MDM | Service packages | Root services on one host, which the container cannot be and the daemon should not be. |
 | `pxe` only while installing | Assign for an install, unassign after | The foreground rule of network-install.md, through the API that already exists. |
 | MDM Apple actions | Verbs of the `mdm` package's program, run by root on the MDM host | They read and write root-owned files there; an API method would widen what an operator token reaches. |
-| The coordinator's health check | A loopback-only `/healthz` listener probed from outside the container; no `HEALTHCHECK`, no verb | The image has no shell or client, and a `healthcheck` verb is the plumbing this design removes. |
+| The coordinator's health check | A `/healthz` and `/readyz` listener on loopback or one interface's address, probed from outside the container; no `HEALTHCHECK`, no verb | The image has no shell or client, and a `healthcheck` verb is the plumbing this design removes. |
 | backup and restore | Deleted by C9 with `import` and `export` | The database's own tools replace them; restore cannot be an API call. |

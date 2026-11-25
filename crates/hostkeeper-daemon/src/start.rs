@@ -5,7 +5,8 @@
 //! file); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a second
 //! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
-//! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
+//! give the package directories an earlier release left otherwise the modes of the store's
+//! layout ([`crate::package_dirs`]), before anything is staged; [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
 //! retried every minute by a thread of its own while it defers, and the adoption of the package
 //! the host was set up with ([`crate::own_package`]); [`remove_dangling_unit_links`];
 //! [`before_records`], [`boot_pass`] and
@@ -14,7 +15,7 @@
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
 //! The daemon serves nothing on the host: it binds no socket and listens on no port. What it
-//! does is seen through the coordinator (`hkctl hosts get`), and orders reach it only in a
+//! does is seen through the coordinator (`hk hosts get`), and orders reach it only in a
 //! heartbeat's answer (docs/design/two-programs.md, section 1).
 //!
 //! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start
@@ -32,7 +33,7 @@
 //! starts before [`startup`] has returned, so no order is taken while the boot work runs.
 
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -52,6 +53,7 @@ use crate::installed;
 use crate::links::Links;
 use crate::mac_config::MacConfigError;
 use crate::mac_files::MacFilesError;
+use crate::maintenance_run::Driven;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::own_package::{self, OwnActivate};
 
@@ -85,6 +87,9 @@ pub struct Settings {
     /// The seconds a step of the repository installer waits for the package manager's lock
     /// (`--package-lock-wait-secs`).
     pub package_lock_wait_secs: u64,
+    /// How many versions of a service a prune keeps besides `current`, `previous`, the pin and
+    /// what the records use (`--keep-versions`).
+    pub keep_versions: u64,
 }
 
 impl Settings {
@@ -199,6 +204,8 @@ fn io_at(path: &Path) -> impl Fn(io::Error) -> StartError + '_ {
 pub struct Started {
     daemon: Arc<Daemon>,
     report: BootReport,
+    /// The thread that resumes the maintenance turn the run record holds, until it is joined.
+    maintenance: Option<std::thread::JoinHandle<Option<Driven>>>,
     /// Held while the daemon lives: one daemon per state directory.
     _lock: File,
 }
@@ -208,13 +215,25 @@ impl Started {
         &self.daemon
     }
 
+    /// Waits for the resume of the maintenance turn the start began ([`Daemon::resume_maintenance`])
+    /// to stop: the turn ended, waits for a reboot, or could not go on. `None` when there was no
+    /// turn to resume, or it was joined before.
+    pub fn join_maintenance(&mut self) -> Option<Driven> {
+        self.maintenance
+            .take()
+            .and_then(|thread| thread.join().ok())
+            .flatten()
+    }
+
     /// What the boot work did.
     pub fn boot_report(&self) -> &BootReport {
         &self.report
     }
 }
 
-/// Takes the exclusive lock of the state directory, made mode 0700 when it is missing.
+/// Takes the exclusive lock of the state directory, made mode 0700 when it is missing, and writes
+/// this process's pid in its file, which `hostkeeper activate` names when the lock is held
+/// ([`crate::local`]). The lock is the kernel's: it goes with the process that held it.
 pub(crate) fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
     files::make_private(state_dir).map_err(io_at(state_dir))?;
     let path = state_dir.join(LOCK_FILE);
@@ -231,6 +250,9 @@ pub(crate) fn lock_state_dir(state_dir: &Path) -> Result<File, StartError> {
         path: path.clone(),
         source: io::Error::from(e),
     })?;
+    file.set_len(0)
+        .and_then(|()| (&file).write_all(format!("{}\n", std::process::id()).as_bytes()))
+        .map_err(io_at(&path))?;
     Ok(file)
 }
 
@@ -276,7 +298,11 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
         facts: settings.facts_file.clone(),
     };
-    let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    let daemon = Arc::new(
+        Daemon::new(config, dirs, ports, own_version).keeping_versions(settings.keep_versions),
+    );
+    report.own_job = daemon.ctx().check_own_job();
+    report.package_dirs = crate::package_dirs::set(daemon.ctx());
     daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);
@@ -286,11 +312,22 @@ pub fn startup_notifying(
     boot_pass(&daemon, &mut report)?;
     delete_archive_versions(&daemon, &mut report);
     after_boot(&daemon, &mut report, notifier);
+    let maintenance = Some(resume_maintenance(&daemon));
     Ok(Started {
         daemon,
         report,
+        maintenance,
         _lock: lock,
     })
+}
+
+/// The maintenance turn the run record holds, resumed from where it stands on a thread of its
+/// own ([`Daemon::resume_maintenance`]) when it has not ended: after a crash, a reboot or a
+/// restart as a newer release. The start does not wait for it ([`Started::join_maintenance`]
+/// does).
+fn resume_maintenance(daemon: &Arc<Daemon>) -> std::thread::JoinHandle<Option<Driven>> {
+    let daemon = Arc::clone(daemon);
+    std::thread::spawn(move || daemon.resume_maintenance())
 }
 
 /// The update of hostkeeper itself that waits for the restart, settled by this binary

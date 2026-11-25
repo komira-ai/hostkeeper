@@ -18,8 +18,8 @@
 //!    run, and the record dropped ([`crate::repository::Repository::remove`]); a service with no installer
 //!    recorded has nothing to remove here;
 //! 6. last, in this order: `current`, `previous`, the seals, the version directories and what
-//!    else is in the package directory, then the step record and params file (the held halt
-//!    generation stays: it is never lowered); then the tombstone.
+//!    else is in the package directory, then the step record, the params file and the rest of
+//!    the service's state directory; then the tombstone.
 //!
 //! The position is read from disk only: no tombstone is step 1; a tombstone is step 3, or step 5
 //! once it says `hook_done`. Every step is idempotent, so a crash anywhere resumes, at the next
@@ -38,13 +38,12 @@ use hostkeeper_hook::{Class, Outcome, Phase, Report, Step, Verdict};
 use hostkeeper_placed::{FileKind, Fs, PlacedError, RealFs, Tombstone};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, PARAMS_FILE, RECORD_FILE};
-use hostkeeper_steps::{AdditiveCall, Finished, Layout, Seal, Staged, StepExit, read_seal};
+use hostkeeper_steps::{AdditiveCall, Bound, Finished, Layout, Seal, Staged, StepExit, read_seal};
 
 use crate::boot::boot_params;
 use crate::checks;
 use crate::executor::{Ctx, Reply};
 use crate::files;
-use crate::halt::HELD_HALT_FILE;
 use crate::installed::{self, CURRENT, PREVIOUS};
 use crate::installers;
 use crate::refusal::Refusal;
@@ -360,7 +359,7 @@ fn run_hook(
         params: &store.params_path(),
         executable: &release.executable,
         unit: &unit,
-        timeout_secs: bound.get(),
+        bound: Bound::Secs(bound),
     });
     let exit = ran.map_err(|error| match ctx.launcher.stop(&unit) {
         Ok(()) => interrupted(
@@ -513,15 +512,15 @@ fn sync_if_there(fs: &dyn Fs, dir: &Path) -> io::Result<()> {
     }
 }
 
-/// Step 6 in the state directory of `service`: everything but the held halt generation, which is
-/// never lowered, and the directory itself when nothing else is left; then an fsync of its
-/// parent.
+/// Step 6 in the state directory of `service`: everything in it, a held-halt file of no halt
+/// too (an uninstall of a halted service is refused at step 1), then the directory itself; then
+/// an fsync of its parent.
 fn remove_records(fs: &dyn Fs, state: &Path, service: &ServiceName) -> io::Result<()> {
     let dir = state.join(service.as_str());
     remove_tree(fs, &dir.join(RECORD_FILE))?;
     remove_tree(fs, &dir.join(PARAMS_FILE))?;
     let rest = names(fs, &dir)?;
-    for name in rest.iter().filter(|name| name.as_str() != HELD_HALT_FILE) {
+    for name in &rest {
         remove_tree(fs, &dir.join(name))?;
     }
     if names(fs, &dir)?.is_empty() & fs.kind(&dir)?.is_some() {

@@ -5,6 +5,7 @@ use serde_json::json;
 use super::*;
 use crate::host_groups::tests::{every_mark, web};
 use crate::host_groups::{GroupDesired, HostGroup};
+use crate::maintenance_policy::{LinuxScope, Maintenance, XcodeDefault};
 use crate::testutil::version;
 
 fn key(parts: &[&str]) -> Vec<KeyVal> {
@@ -103,6 +104,85 @@ fn the_groups_round_trip_through_their_rows_in_list_order() {
 
 fn refused(tables: &Tables) -> String {
     groups_of(tables).expect_err("refused").to_string()
+}
+
+/// A group of `groups()` with the policy of `canary` replaced by the row JSON `policy`.
+fn with_policy_row(policy: serde_json::Value) -> Tables {
+    let mut tables = rows_of(&groups());
+    if let Some(row) = tables
+        .get_mut("host_groups")
+        .and_then(|rows| rows.get_mut(&key(&["canary"])))
+    {
+        row[1] = Val::Json(policy);
+    }
+    tables
+}
+
+/// Proves: a group whose policy holds a maintenance table is written with the table in the
+/// policy's JSON, only the keys away from their defaults, and read back equal; a policy JSON of
+/// the release before, with no `maintenance` key, loads with the default table.
+///
+/// Catches: a maintenance table the rows drop, or a group of the release before loaded with
+/// another table than the default.
+#[test]
+fn a_maintenance_table_round_trips_through_the_policy_row() {
+    let mut held = groups();
+    if let Some(canary) = held.0.get_mut(&name("canary")) {
+        canary.policy.maintenance = Maintenance {
+            xcode_keep: 2,
+            xcode_default: XcodeDefault::Version("26.1".to_owned()),
+            macos_major: true,
+            linux_scope: LinuxScope::All,
+            batch: 3,
+            min_serving: 0,
+            drain_deadline_secs: 900,
+            return_secs: 1800,
+        };
+    }
+    let tables = rows_of(&held);
+    assert_eq!(
+        tables["host_groups"][&key(&["canary"])][1],
+        Val::Json(json!({
+            "bake_beats": 3,
+            "maintenance": {
+                "xcode_keep": 2,
+                "xcode_default": "26.1",
+                "macos_major": true,
+                "linux_scope": "all",
+                "batch": 3,
+                "min_serving": 0,
+                "drain_deadline_secs": 900,
+                "return_secs": 1800
+            }
+        }))
+    );
+    assert_eq!(groups_of(&tables).expect("the groups back"), held);
+
+    let before = with_policy_row(json!({"bake_beats": 3}));
+    let loaded = groups_of(&before).expect("the groups");
+    assert_eq!(
+        loaded.0[&name("canary")].policy.maintenance,
+        Maintenance::default()
+    );
+    assert_eq!(loaded, groups());
+}
+
+/// Proves: a row whose policy holds a maintenance key out of range is refused at load naming
+/// `database:host_groups`, the group and the key with its reason; a table that is not a table
+/// of this build's keys is refused too.
+///
+/// Catches: a load less strict than a start on the files, which would run a group whose
+/// maintenance a `Put` refuses.
+#[test]
+fn a_maintenance_table_out_of_range_in_a_row_is_refused_at_load() {
+    assert_eq!(
+        refused(&with_policy_row(json!({"maintenance": {"batch": 0}}))),
+        "database:host_groups: the desired state is malformed: host group canary: policy maintenance: batch is not 1 to 10000"
+    );
+    assert!(
+        refused(&with_policy_row(json!({"maintenance": {"reboot": true}})))
+            .starts_with("database:host_groups: the desired state is malformed: "),
+    );
 }
 
 /// Proves: rows the state file's reader would refuse are refused at load naming

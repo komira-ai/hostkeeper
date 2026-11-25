@@ -51,12 +51,28 @@ export async function settle() {
 // The time a page context reads, in unix seconds, unless a test gives another.
 export const NOW = 1800000000;
 
+// The fake time zone a page context answers for every instant, in seconds east of UTC: UTC-05:00,
+// with no daylight saving.
+export const TEST_ZONE_OFFSET = -18000;
+
 // A page context over `client` that records what the page does. `answers` are the operator's
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
-// reads `now` (NOW when absent).
-export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [] };
+// reads `now` (NOW when absent). Its `localOffset(unix)` is `zone(unix)` when a `zone` function is
+// given, else TEST_ZONE_OFFSET for every instant. `leave()` runs what the page asked to have run
+// when it is left (`ctx.onLeave`), as the app does when the operator goes to another page or signs
+// out.
+export function recorder(client, params, answers, now, zone) {
+  const seen = {
+    reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], terminals: [],
+    viewers: [],
+  };
   const left = (answers || []).slice();
+  const leavers = [];
+  const leave = () => {
+    for (const run of leavers.splice(0)) {
+      run();
+    }
+  };
   const ctx = {
     api: client,
     params: params || {},
@@ -66,6 +82,65 @@ export function recorder(client, params, answers, now) {
     },
     now() {
       return now === undefined ? NOW : now;
+    },
+    localOffset(unix) {
+      return zone === undefined ? TEST_ZONE_OFFSET : zone(unix);
+    },
+    // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
+    // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(closed)` itself;
+    // what the page sends is kept in `sent` (`{text}` or `{bytes}`), each `close()` is counted, and
+    // the subprotocols offered are kept in `protocols` (null when none). The record itself is the
+    // opened socket's `socket`, what the app hands a terminal.
+    openSocket(path, handlers, protocols) {
+      const socket = { path, handlers, protocols: protocols === undefined ? null : protocols, sent: [], closes: 0 };
+      seen.sockets.push(socket);
+      return {
+        send(data) {
+          socket.sent.push(typeof data === "string" ? { text: data } : { bytes: Array.from(data) });
+        },
+        close() {
+          socket.closes += 1;
+        },
+        socket,
+      };
+    },
+    // A terminal that records what the page does with it: the socket it was given (`socket`, the
+    // socket's record), the `name` of each element it was put in (`into`), and its focuses and
+    // disposals.
+    openTerminal(element, opened) {
+      const terminal = { socket: opened.socket, into: [element.attributes["name"]], focuses: 0, disposes: 0 };
+      seen.terminals.push(terminal);
+      return {
+        show(into) {
+          terminal.into.push(into.attributes["name"]);
+        },
+        focus() {
+          terminal.focuses += 1;
+        },
+        dispose() {
+          terminal.disposes += 1;
+        },
+      };
+    },
+    // A screen viewer the test watches: each call is kept in `seen.viewers` with the element it
+    // draws in (`element`), the socket's record (`socket`) and the `events` it may tell (the test
+    // calls `events.connect()` and the rest); the credentials sent are kept and the disconnects
+    // counted.
+    viewScreen(element, opened, events) {
+      const viewer = { element, socket: opened.socket, events, credentials: [], disconnects: 0 };
+      seen.viewers.push(viewer);
+      return {
+        sendCredentials(creds) {
+          viewer.credentials.push(creds);
+        },
+        disconnect() {
+          viewer.disconnects += 1;
+        },
+        focus() {},
+      };
+    },
+    onLeave(run) {
+      leavers.push(run);
     },
     navigate(name, to) {
       seen.navigations.push({ name, params: to || {} });
@@ -89,7 +164,7 @@ export function recorder(client, params, answers, now) {
       };
     },
   };
-  return { ctx, seen };
+  return { ctx, seen, leave };
 }
 
 // Every element of a view tree, depth first.
@@ -192,6 +267,9 @@ export function fakeDocument() {
       nodeType: 1,
       tagName: tag.toUpperCase(),
       attributes: {},
+      // What a scrolling box reads and sets: the height of its content and how far it is scrolled.
+      scrollHeight: 500,
+      scrollTop: 0,
       children: [],
       listeners: {},
       // The element's style object: only custom properties are set through it, which the page's
@@ -235,17 +313,17 @@ export function fakeDocument() {
         this.listeners[event] = (this.listeners[event] || []).concat([listener]);
       },
     };
+    element.ownerDocument = theDocument;
     created.push(element);
     return element;
   }
-  return {
+  const theDocument = {
     created,
     createElement,
     createElementNS: (namespace, tag) => createElement(tag, namespace),
     createTextNode(data) {
       return { nodeType: 3, data };
     },
-    root: createElement("div"),
     // The window: the listeners the page keeps on it, by event name (`resize`).
     defaultView: {
       listeners: {},
@@ -257,6 +335,8 @@ export function fakeDocument() {
       },
     },
   };
+  theDocument.root = createElement("div");
+  return theDocument;
 }
 
 // Every element under `node` in a fake document, `node` included.

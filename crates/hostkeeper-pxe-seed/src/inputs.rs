@@ -7,6 +7,7 @@ use std::net::SocketAddrV4;
 use std::str::FromStr;
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
+use hostkeeper_config::serial_console::SerialConsole as Port;
 use hostkeeper_wire::names::{HostId, RoleName};
 
 /// A platform `hostkeeper-pxe` installs: one of the two Linux platforms of a release.
@@ -231,13 +232,20 @@ impl FromStr for InstallDisk {
 pub struct SerialConsoleError;
 
 /// The serial port the installed kernel's console and a getty use: `ttyS<n>` (a 16550 port) or
-/// `ttyAMA<n>` (an Arm PL011 port), `n` from 0 to 99, at 115200 baud, 8 bits, no parity.
+/// `ttyAMA<n>` (an Arm PL011 port), `n` from 0 to 99, at 115200 baud, 8 bits, no parity. The
+/// grammar and the baseline's files are the daemon config's own
+/// ([`hostkeeper_config::serial_console`]), so the seed writes what the daemon keeps.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SerialConsole(String);
+pub struct SerialConsole(Port);
 
 impl SerialConsole {
     /// The port's name, such as `ttyS1`.
     pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// The port, with the baseline's files.
+    pub(crate) fn port(&self) -> &Port {
         &self.0
     }
 }
@@ -246,16 +254,9 @@ impl FromStr for SerialConsole {
     type Err = SerialConsoleError;
 
     fn from_str(text: &str) -> Result<SerialConsole, SerialConsoleError> {
-        let number = text
-            .strip_prefix("ttyAMA")
-            .or_else(|| text.strip_prefix("ttyS"))
-            .ok_or(SerialConsoleError)?;
-        let digits = (1..=2).contains(&number.len()) & number.bytes().all(|b| b.is_ascii_digit());
-        // `ttyS01` would name no device: a number is written without a leading 0.
-        let canonical = (number.len() == 1) | !number.starts_with('0');
-        (digits & canonical)
-            .then(|| SerialConsole(text.to_owned()))
-            .ok_or(SerialConsoleError)
+        Port::parse(text)
+            .map(SerialConsole)
+            .map_err(|_| SerialConsoleError)
     }
 }
 

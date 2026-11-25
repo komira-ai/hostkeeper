@@ -122,7 +122,9 @@ fn host_page_shows_services_marks_and_last_update() {
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
             (m("HostGroups/List"), json!({})),
+            (m("Ssh/HostKeys"), json!({"hostId": "web-2"})),
             (m("Layout/Get"), json!({})),
+            (m("Alerts/List"), json!({})),
         ]
     );
     assert_shows(
@@ -240,7 +242,9 @@ return {
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
             (m("HostGroups/List"), json!({})),
+            (m("Ssh/HostKeys"), json!({"hostId": "web-2"})),
             (m("Layout/Get"), json!({})),
+            (m("Alerts/List"), json!({})),
             (
                 m("Hosts/Exclude"),
                 json!({"service": "api", "nodeId": "web-2", "reason": reason, "abandon": false})
@@ -382,7 +386,9 @@ return shown;
             (m("Hosts/Get"), json!({"nodeId": "web-3"})),
             (m("Services/List"), json!({})),
             (m("HostGroups/List"), json!({})),
+            (m("Ssh/HostKeys"), json!({"hostId": "web-3"})),
             (m("Layout/Get"), json!({})),
+            (m("Alerts/List"), json!({})),
             (
                 m("Hosts/SetLabels"),
                 json!({"nodeId": "web-3", "labels": {}})
@@ -728,11 +734,11 @@ return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
             "FAILED_PRECONDITION key_mismatch",
             "FAILED_PRECONDITION not_pending",
             "ALREADY_EXISTS host_id_taken",
-            "FAILED_PRECONDITION duplicate_claim",
+            "This request claims the machine of a host already enrolled (a duplicate claim): tick Replace to approve it in that host's place.",
             "FAILED_PRECONDITION denied",
             "Approved web-7 into host group web: the host gets its certificate at its next poll.",
             "Not approved.",
-            "Approved web-3 as Unassigned (it is ordered no package until it is put in a host group): the host gets its certificate at its next poll.",
+            "Approved web-3 in its own host group: the host gets its certificate at its next poll.",
         ])
     );
     assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");

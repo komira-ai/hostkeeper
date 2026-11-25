@@ -12,13 +12,19 @@
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
 //! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
-//! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]).
+//! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]) and the operator keys
+//! it sends to the host's [`Links::operator_keys`], and the host prerequisites it sends to the host's
+//! [`Links::prerequisites`].
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
 //! that notice: no thread or timer of its own. So a heartbeat that never returns stops the
 //! notices, and systemd, past the unit's `WatchdogSec=`, restarts the daemon. A notice that
 //! cannot be sent is logged, and the loop goes on.
+//!
+//! On a Mac the heartbeat loop also checks, after each heartbeat and its notice, that the daemon's
+//! own launchd job is not marked disabled ([`crate::own_job`]): a job that is gets enabled again
+//! and is alerted, and a check that fails is alerted, the loop going on either way.
 //!
 //! The loops stop when [`Links::stop`] is set: the enrollment loop before its next step, the
 //! heartbeat loop at the end of its wait (`hostkeeper_link::ClockSleeper`). An order running on
@@ -31,6 +37,11 @@
 //! state that every heartbeat reports ([`crate::link_adapters::DaemonRenewal`]), with the end of
 //! the current certificate and the error of the enroller's last step, which the enroller notes
 //! once it runs.
+//!
+//! On every host, the enrollment loop also keeps the host's identity copy current after each step
+//! ([`Links::identity`], [`crate::host_identity`]): the certificate and key of the pki directory's
+//! `current` generation, readable by the group `hostkeeper-identity`, for the services of the
+//! host. A failure there is logged and never reaches the enroller.
 //!
 //! On a Linux host, the enrollment loop also writes the console's issue file after each step,
 //! and after each failure to make the enroller ([`Links::console`], [`crate::console`]): the
@@ -50,21 +61,31 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
-    CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
-    Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
-    RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, FullDiskAccessSource,
+    GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig,
+    MaintainSink, MaintenanceSource, NegotiatedLink, OperatorKeysSink, Platform, Ports,
+    PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, SerialConsoleSource, Sleeper,
+    SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
+use hostkeeper_observe::ProcessRunner;
+use hostkeeper_observe::command::MAX_STDOUT;
 use hostkeeper_steps::Clock;
 
 use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
 use crate::facts_file::FactsFile;
+use crate::host_identity::HostIdentity;
 use crate::link_adapters::{
-    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal, NoTrustedRoot,
+    DaemonHalts, DaemonMaintain, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
+    NoTrustedRoot,
 };
 use crate::node::NodeState;
 use crate::notify::Watchdog;
 use crate::repository_push::RepositoryPush;
+use crate::ssh_files::SshPaths;
+use crate::ssh_host::{SshHost, SystemHost, Tools};
+use crate::ssh_host_mac::MacHost;
+use crate::ssh_setup::SshSetup;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -122,6 +143,33 @@ pub struct Links {
     /// The console's issue file, which the enrollment loop writes after each step and each
     /// failure to make its enroller; none on a host whose console shows none (a Mac).
     pub console: Option<ConsoleIssue>,
+    /// The host's identity copy ([`crate::host_identity`]), which the enrollment loop makes
+    /// current after each step; none where a host keeps none.
+    pub identity: Option<HostIdentity>,
+    /// The Remote Login probe the daemon started ([`crate::remote_login_probe`]), which every
+    /// heartbeat reports once it is done; none on any host but a Mac.
+    pub remote_login_probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+    /// The state of the Full Disk Access grant ([`crate::full_disk_access`]), which every
+    /// heartbeat reports; none where a host reports none.
+    pub full_disk_access: Option<Arc<dyn FullDiskAccessSource>>,
+    /// The host's operator keys ([`crate::operator_keys`]): the managed block of its login
+    /// account's `authorized_keys`, which every heartbeat reports and a set the coordinator sends
+    /// replaces. A daemon that has one announces `operator-keys-v1`.
+    pub operator_keys: Option<Arc<dyn OperatorKeysSink>>,
+    /// The host prerequisites of the host's group ([`crate::prerequisites`]), which every
+    /// heartbeat reports and a set the coordinator sends replaces. A daemon that has them
+    /// announces `prerequisites-v1`.
+    pub prerequisites: Option<Arc<dyn PrerequisitesSink>>,
+    /// The host's maintenance facts ([`crate::maintenance_facts`]), which every heartbeat to a
+    /// coordinator that advertises `maintenance-v1` reports. A daemon that has them announces
+    /// `maintenance-v1` and runs `maintain` orders ([`DaemonMaintain`]); none on a host with no
+    /// collector, which takes no `maintain` order.
+    pub maintenance: Option<Arc<dyn MaintenanceSource>>,
+    /// The host's BMC ([`crate::bmc`]), which every heartbeat reports; none on a Mac.
+    pub bmc: Option<Arc<dyn BmcSource>>,
+    /// The host's serial console baseline ([`crate::serial_baseline`]), which every heartbeat
+    /// reports; none on a host whose config names no `serial_console`.
+    pub serial_console: Option<Arc<dyn SerialConsoleSource>>,
 }
 
 impl Links {
@@ -142,6 +190,7 @@ impl Links {
             stop,
             watchdog,
             mut console,
+            mut identity,
             ..
         } = self;
         let enrolling = Arc::clone(daemon);
@@ -154,7 +203,7 @@ impl Links {
                 sleeper: &*enroll_sleeper,
                 stop: &stop,
             };
-            loop_ports.run(&mut enroller, &mut console);
+            loop_ports.run(&mut enroller, &mut console, &mut identity);
         }));
         let beating = Arc::clone(daemon);
         dispatch.start(Box::new(move || {
@@ -162,6 +211,9 @@ impl Links {
             heartbeater.run(&*sleeper, &mut |outcome| {
                 node.beat(outcome, clock.unix_secs());
                 alive(&*watchdog, beat_log.as_ref());
+                // After the beat and the notice, so a check never holds either back; it alerts
+                // what it finds and never fails.
+                beating.ctx().check_own_job();
             });
         }));
     }
@@ -204,6 +256,17 @@ impl Links {
                     PLATFORM,
                     Arc::clone(&self.log),
                 ))),
+                remote_login_probe: self.remote_login_probe.clone(),
+                full_disk_access: self.full_disk_access.clone(),
+                operator_keys: self.operator_keys.clone(),
+                ssh: ssh_setup(PLATFORM, rustix::process::geteuid().as_raw(), &self.log),
+                prerequisites: self.prerequisites.clone(),
+                maintenance: self.maintenance.clone(),
+                maintain: self.maintenance.as_ref().map(|_| {
+                    Arc::new(DaemonMaintain::new(Arc::clone(daemon))) as Arc<dyn MaintainSink>
+                }),
+                bmc: self.bmc.clone(),
+                serial_console: self.serial_console.clone(),
             },
         )
     }
@@ -234,9 +297,15 @@ impl EnrollLoop<'_> {
     /// again after a wait on `sleeper` of [`OPEN_RETRY_FIRST_SECS`], doubled after each failure
     /// up to [`OPEN_RETRY_MAX_SECS`]; `node` is left without an enrollment meanwhile. `console`,
     /// when there is one, shows what each step came to, and each failure to make the enroller,
-    /// before the wait that follows it. The loop ends when `stop` is set before a try, or the
-    /// wait says [`Tick::Stop`].
-    fn run(&self, make: &mut MakeEnroller, console: &mut Option<ConsoleIssue>) {
+    /// before the wait that follows it. `identity`, when there is one, makes the host's identity
+    /// copy current after each step, once `node` holds that step's enrollment. The loop ends
+    /// when `stop` is set before a try, or the wait says [`Tick::Stop`].
+    fn run(
+        &self,
+        make: &mut MakeEnroller,
+        console: &mut Option<ConsoleIssue>,
+        identity: &mut Option<HostIdentity>,
+    ) {
         let mut wait = OPEN_RETRY_FIRST_SECS;
         let mut logged: Option<String> = None;
         while !self.stop.is_stopped() {
@@ -249,6 +318,9 @@ impl EnrollLoop<'_> {
                                 console.after_step(step, &enrollment, self.log);
                             }
                             self.node.set_enrollment(enrollment);
+                            if let Some(identity) = identity.as_mut() {
+                                identity.after_step(self.log);
+                            }
                         },
                         self.renewal,
                         &mut || !self.stop.is_stopped(),
@@ -281,6 +353,34 @@ impl EnrollLoop<'_> {
 /// repository sink (the link's rule), which is when its mirror reads private repositories.
 pub const fn reads_private_repositories(platform: Platform) -> bool {
     matches!(platform, Platform::DarwinArm64)
+}
+
+/// Whether a daemon of `platform` sets sshd up to trust the coordinator's SSH user CA
+/// (`ssh-v1`): every platform's daemon does, a Linux one over systemd's or OpenRC's sshd and a
+/// Mac's over Remote Login (docs/design/ssh-through-coordinator.md, section 3).
+pub const fn sets_ssh_up(platform: Platform) -> bool {
+    matches!(
+        platform,
+        Platform::LinuxX86_64 | Platform::LinuxArm64 | Platform::DarwinArm64
+    )
+}
+
+/// The sshd setup of a daemon of `platform`, writing as `owner`: over the Linux host on Linux and
+/// over the Mac's ([`MacHost`]) on a Mac; none where [`sets_ssh_up`] is false.
+pub fn ssh_setup(platform: Platform, owner: u32, log: &Arc<dyn Log>) -> Option<Arc<dyn SshSink>> {
+    let runner = Arc::new(ProcessRunner::new(MAX_STDOUT));
+    let host: Arc<dyn SshHost> = match platform {
+        Platform::DarwinArm64 => Arc::new(MacHost::system(runner, Arc::clone(log))),
+        _ => Arc::new(SystemHost::new(runner, Tools::linux())),
+    };
+    sets_ssh_up(platform).then(|| {
+        Arc::new(SshSetup::new(
+            host,
+            SshPaths::linux(),
+            owner,
+            Arc::clone(log),
+        )) as Arc<dyn SshSink>
+    })
 }
 
 /// The platform this daemon was built for.

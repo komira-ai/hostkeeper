@@ -73,7 +73,7 @@ fn features_announced_are_the_eleven_names_and_a_behaviour_needs_the_reply_to_ad
     assert_eq!(shown.outcome, Outcome::Failed);
     assert_eq!(shown.phase, Some(Phase::BeforeCommit));
     assert_eq!(old.deferred, None);
-    assert!(rig.world.halts.raises().is_empty());
+    assert!(rig.world.halts.heard().is_empty());
     assert_eq!(rig.world.dispatch.pending(), 0);
     assert_eq!(rig.world.orders.orders(), [order]);
 
@@ -128,6 +128,32 @@ fn feature_names_read_back_and_an_unknown_name_is_no_feature() {
     }
     assert_eq!(Feature::parse("deferred-v2"), None);
     assert_eq!(Feature::parse(""), None);
+}
+
+/// Catches a feature a daemon may announce that is not read from its name, or announced lists
+/// that together are longer than the wire's reader keeps: the feature of a world that keeps
+/// operator keys is not one of [`ANNOUNCED`], and with every optional feature the list still fits.
+#[test]
+fn the_optional_features_read_back_and_fit_the_wire_limit() {
+    for feature in [
+        Feature::RepositoriesV1,
+        Feature::FactsV1,
+        Feature::PrivateRepositoryV1,
+        Feature::OperatorKeysV1,
+        Feature::PrerequisitesV1,
+    ] {
+        assert_eq!(Feature::parse(feature.as_str()), Some(feature));
+        assert!(!ANNOUNCED.contains(&feature));
+    }
+    assert!(ANNOUNCED.len() + 5 <= hostkeeper_wire::wire::MAX_FEATURES);
+    let rig = Rig::with_world(
+        "features-keeping-keys",
+        World::default().keeping_operator_keys(),
+    );
+    rig.heartbeater().beat_once();
+    let mut features = ANNOUNCED.to_vec();
+    features.push(Feature::OperatorKeysV1);
+    assert_eq!(rig.world.link.beats()[0].features, features);
 }
 
 /// Catches a halt shown to a coordinator that did not advertise `halt-v1` as a halt (kbf's

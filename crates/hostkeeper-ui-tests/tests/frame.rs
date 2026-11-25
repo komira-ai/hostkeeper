@@ -331,3 +331,105 @@ return { before, listed: text().includes("js-agent"), nav: elements(doc.root).so
     assert_eq!(out, json!({"before": true, "listed": true, "nav": true}));
     assert_eq!(bodies_of(&ui, &m("Repositories/List")), [json!({})]);
 }
+
+/// A driver that starts the app as `start` does, with `zone` (JavaScript: an arrow function from
+/// unix seconds to the operator's offset from UTC, or `undefined`) as the operator's time zone, and
+/// opens `page`.
+fn start_in_zone(page: &str, zone: &str) -> String {
+    format!(
+        r#"
+import {{ fakeDocument, settle }} from "../test/kit.js";
+import {{ startApp }} from "./app.js";
+export async function main() {{
+  const doc = fakeDocument();
+  globalThis.doc = doc;
+  globalThis.theApp = startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000, localOffset: {zone} }});
+  await settle();
+  globalThis.theApp.navigate("{page}", {{}});
+}}"#
+    )
+}
+
+#[test]
+fn a_window_is_converted_in_the_zone_the_frame_was_given_and_in_utc_when_it_was_given_none() {
+    // Asserts: a Schedule form's window typed as 2027-01-15 22:00 to 2027-01-16 02:30 is shown as
+    // UTC through the frame's `localOffset` (UTC+01:00: 21:00 to 01:30), and through UTC itself
+    // (22:00 to 02:30) when the app is started with no zone; the converted times are put into the
+    // element the page drew.
+    for (zone, shown) in [
+        (
+            "(unix) => 3600",
+            "Start 2027-01-15 21:00:00 UTC; end 2027-01-16 01:30:00 UTC",
+        ),
+        (
+            "undefined",
+            "Start 2027-01-15 22:00:00 UTC; end 2027-01-16 02:30:00 UTC",
+        ),
+    ] {
+        let mut ui = Ui::start();
+        ui.session("tok_a");
+        // Home, where the app starts, reads the hosts first; the Maintenance page reads them next.
+        ui.reply(&m("Hosts/List"), json!({}));
+        ui.reply(
+            &m("Hosts/List"),
+            json!({"hosts": [{"nodeId": "h-1", "hostGroup": "g", "maintenanceLookAgeSecs": "600",
+                              "maintenance": {"host": {"osName": "ubuntu", "osVersion": "24.04", "bootId": "b-1"},
+                                              "due": [{"kind": "MAINTENANCE_KIND_LINUX", "label": "openssl",
+                                                       "security": true}],
+                                              "lookedUnix": "1799999400"}}]}),
+        );
+        ui.reply(&m("Maintenance/List"), json!({}));
+        ui.reply(
+            &m("HostGroups/Get"),
+            json!({"hostGroup": {"group": {"name": "g", "packages": ["hostkeeper"], "policy": {}}}}),
+        );
+        ui.run(&start_in_zone("maintenance", zone));
+        let out = ui.run(&steps(
+            r#"
+click("open-schedule");
+await settle();
+fire(domNamed(doc.root, "when"), "change", { target: { value: "window" } });
+await settle();
+type("window-start", "2027-01-15T22:00");
+type("window-end", "2027-01-16T02:30");
+fire(domNamed(doc.root, "window-end"), "change", { target: { closest: () => domNamed(doc.root, "schedule-form") } });
+return domNamed(doc.root, "window-utc").textContent;"#,
+        ));
+        assert_eq!(out, shown, "{zone}");
+    }
+}
+
+#[test]
+fn the_console_link_of_a_restarting_host_in_a_run_opens_its_console_page() {
+    // Asserts: in the whole app, the Maintenance page's run with host `l-1` rebooting has a
+    // Console link, and a click on it opens the Console page of `l-1` ("Console of l-1"), which
+    // the frame registers; the top bar no longer names Maintenance.
+    // Catches: the link naming a page the app does not register, so that a click leaves the
+    // operator on the Maintenance page with nothing opened.
+    let mut ui = Ui::start();
+    ui.session("tok_a");
+    // Home, where the app starts, reads the hosts first; the Maintenance page reads them next.
+    ui.reply(&m("Hosts/List"), json!({}));
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [{"nodeId": "l-1", "hostGroup": "g",
+                          "maintenance": {"host": {"osName": "ubuntu"}, "due": [], "lookedUnix": "1799999400"}}]}),
+    );
+    let run = json!({"id": "r-1", "state": "MAINTENANCE_STATE_RUNNING", "hostGroup": "g"});
+    ui.reply(&m("Maintenance/List"), json!({ "runs": [run] }));
+    ui.reply(
+        &m("Maintenance/Get"),
+        json!({"run": run, "hosts": [{"hostId": "l-1", "hostGroup": "g",
+                                      "step": "MAINTENANCE_HOST_STEP_REBOOTING"}]}),
+    );
+    ui.run(&start("maintenance"));
+    let out = ui.run(&steps(
+        r#"
+await settle();
+const before = text().includes("Runs");
+click("open-console");
+await settle();
+return { before, console: text().includes("Console of l-1"), runs: text().includes("Runs") };"#,
+    ));
+    assert_eq!(out, json!({"before": true, "console": true, "runs": false}));
+}

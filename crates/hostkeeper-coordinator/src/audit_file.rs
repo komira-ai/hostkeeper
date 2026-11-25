@@ -5,10 +5,11 @@
 //! file keeps all of them, with the time, up to its retention (below). A line is the five keys, in
 //! this order, `{"seq":1,"at_unix":1800000000,"by":"alice","action":"exclude","detail":{"service":
 //! "demo","node_id":"s2","reason":"bad disk"}}`, then a newline. `by` is who made the change (the
-//! name of the operator's token, `coordinator` or `ci`), `at_unix` the seconds since the epoch,
-//! and `detail` the change's `service`, `node_id`, `host_group`, `reason`, `subject` and `source`,
-//! those it has, in that order (`{}` when it has none). A reader that does not know `host_group`,
-//! `subject` or `source` passes it over.
+//! operator's name, `coordinator` or `ci`), `at_unix` the seconds since the epoch, and `detail`
+//! the change's `service`, `node_id`, `host_group`, `reason`, `subject`, `source` and `api_token`
+//! (the API token the operator called with, whose owner `by` is), those it has, in that order
+//! (`{}` when it has none). A reader that does not know `host_group`, `subject`, `source` or
+//! `api_token` passes it over.
 //!
 //! The file is opened for appending (`O_APPEND`, created with mode `0600`), each line is written
 //! in one call and fsynced, and a file that was just created has its directory fsynced; nothing
@@ -96,6 +97,8 @@ pub(crate) struct Detail {
     pub(crate) subject: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) api_token: Option<String>,
 }
 
 /// One line of the audit file.
@@ -123,6 +126,7 @@ impl AuditLine {
                 reason: entry.reason.clone(),
                 subject: entry.subject.clone(),
                 source: entry.source.clone(),
+                api_token: entry.api_token.clone(),
             },
         }
     }
@@ -141,6 +145,7 @@ impl AuditLine {
                 reason: self.detail.reason,
                 subject: self.detail.subject,
                 source: self.detail.source,
+                api_token: self.detail.api_token,
             },
         }
     }

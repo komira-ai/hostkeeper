@@ -14,11 +14,13 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::executor::Daemon;
 use hostkeeper_daemon::links::Links;
 use hostkeeper_link::testing::{
-    FakeCerts, FakeClock, FakeLink, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
+    FakeCerts, FakeClock, FakeLink, FakeProbe, ManualDispatch, RecordingLog, ScriptedSleeper,
+    identity,
 };
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, CertState, DEFAULT_HEARTBEAT_SECS, FACTS, Feature, Heartbeater, Order,
-    OrderId, PackageDigest, PushedFacts, Reply, StopFlag, Target, Verb,
+    OrderId, PackageDigest, ProbeStep, PushedFacts, RemoteLoginProbe, RemoteLoginProbeSource,
+    Reply, StopFlag, Target, Verb,
 };
 use support::{OWN, Rig, config};
 
@@ -48,6 +50,14 @@ fn install() -> Order {
 
 /// A heartbeat loop over a daemon on `rig`, its link, and the dispatcher of its orders.
 fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<ManualDispatch>) {
+    host_probing(rig, None)
+}
+
+/// [`host`] whose links hold `probe`, the Remote Login probe source the loop reads.
+fn host_probing(
+    rig: &Rig,
+    probe: Option<Arc<dyn RemoteLoginProbeSource>>,
+) -> (Heartbeater, Arc<FakeLink>, Arc<ManualDispatch>) {
     let daemon = Arc::new(Daemon::new(config(), rig.dirs(), rig.ports(), OWN));
     let link = Arc::new(FakeLink::default());
     let dispatch = Arc::new(ManualDispatch::default());
@@ -65,6 +75,14 @@ fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<ManualDispatch>) {
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
+        remote_login_probe: probe,
+        full_disk_access: None,
+        operator_keys: None,
+        prerequisites: None,
+        maintenance: None,
+        bmc: None,
+        serial_console: None,
     };
     (links.heartbeater(&daemon), link, dispatch)
 }
@@ -100,6 +118,8 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
     if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
         features.push(Feature::PrivateRepositoryV1);
     }
+    // Every daemon sets sshd up, but names `ssh-v1` only once the coordinator advertised it:
+    // the first beat has none.
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].facts_generation, None);
     assert_eq!(beats[1].facts_generation, Some(7));
@@ -114,6 +134,27 @@ fn a_host_writes_the_facts_of_a_reply_and_reports_their_generation() {
         )
     );
     assert_eq!(dispatch.pending(), 1, "the order of the reply was started");
+}
+
+/// Proves a daemon of each platform sets sshd up (and announces `ssh-v1`), a Mac's over Remote
+/// Login, and that the setup is built for each without running anything on the host.
+///
+/// Catches: a Mac daemon that announces no `ssh-v1` and drops every `SshAccess` it is sent.
+#[test]
+fn every_daemon_sets_ssh_up() {
+    use hostkeeper_daemon::links::{sets_ssh_up, ssh_setup};
+    use hostkeeper_link::{Log, Platform};
+    let log: std::sync::Arc<dyn Log> =
+        std::sync::Arc::new(hostkeeper_link::testing::RecordingLog::default());
+    for platform in [
+        Platform::LinuxX86_64,
+        Platform::LinuxArm64,
+        Platform::DarwinArm64,
+    ] {
+        assert!(sets_ssh_up(platform));
+        let setup = ssh_setup(platform, 0, &log).expect("a setup");
+        assert_eq!(setup.report(), None, "nothing is taken up before a record");
+    }
 }
 
 /// Proves facts from a coordinator that does not advertise `facts-v1` are not written, and the
@@ -131,4 +172,45 @@ fn facts_without_the_advertised_feature_are_not_written() {
     heartbeater.beat_once();
     assert_eq!(link.beats()[1].facts_generation, None);
     assert!(!rig.facts_file().exists());
+}
+
+/// Proves the heartbeat loop of a daemon whose links hold a Remote Login probe source reports what
+/// the source holds in the beats it sends, as the source holds it at each beat (none while it has
+/// none), and that links with no source report no probe: the field of `Links` reaches the beats.
+#[test]
+fn a_probe_source_in_the_links_is_reported_in_the_beats() {
+    let probe = RemoteLoginProbe {
+        started_unix: 1_700_000_000,
+        steps: vec![ProbeStep {
+            name: "remote_login_get_before".to_owned(),
+            argv: vec![
+                "/usr/sbin/systemsetup".to_owned(),
+                "-getremotelogin".to_owned(),
+            ],
+            exit_code: Some(0),
+            stdout: "Remote Login: Off\n".to_owned(),
+            ..ProbeStep::default()
+        }],
+    };
+    let source = Arc::new(FakeProbe::default());
+    let shared: Arc<dyn RemoteLoginProbeSource> = source.clone();
+    let rig = Rig::new("facts-file-probe");
+    let (mut heartbeater, link, _) = host_probing(&rig, Some(shared));
+    heartbeater.beat_once();
+    source.set(Some(probe.clone()));
+    heartbeater.beat_once();
+    heartbeater.beat_once();
+    source.set(None);
+    heartbeater.beat_once();
+    let reported: Vec<Option<RemoteLoginProbe>> = link
+        .beats()
+        .into_iter()
+        .map(|beat| beat.remote_login_probe)
+        .collect();
+    assert_eq!(reported, vec![None, Some(probe.clone()), Some(probe), None]);
+
+    let rig = Rig::new("facts-file-no-probe");
+    let (mut heartbeater, link, _) = host_probing(&rig, None);
+    heartbeater.beat_once();
+    assert_eq!(link.beats()[0].remote_login_probe, None);
 }

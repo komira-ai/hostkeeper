@@ -25,6 +25,12 @@
 // another pending request contests (`contestedBy`: they match one record) says so, naming the
 // others, and its approval is refused in the page, as the coordinator refuses it
 // (`record_contested`), until the operator rejects all but one.
+//
+// A duplicate claim that matches one record (a host rebuilt on a new disk enrolling again as itself)
+// offers Replace by name, "Replace the existing <host>", saying the old certificate is revoked and the
+// host keeps its group and its place. A matched server that stands on a sled keeps its place by
+// default ("Keep its place", no placement sent); its own slot is not offered as a new one, and a slot
+// another server holds is refused naming who stands there.
 
 import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix,
@@ -195,24 +201,62 @@ function groupChoices(groups) {
   }).filter(([name]) => name !== "")];
 }
 
-// The placement control of an approval: the Sled slot the server stands on, optional (the first choice,
-// Unplaced, lands the host on no sled), one choice among the free slots of the lab by address. A
-// matched request names the record whose server keeps its place across a wipe: where it stands now
-// is said, and is kept unless another slot is chosen.
+// Where the server of the one record `request` matches stands now: its placement, or undefined.
+function heldPlace(request, lab) {
+  const record = request.inventoryMatch === "INVENTORY_MATCH_MATCHED" ? recordHostId(request) : "";
+  return record === "" || lab.failure !== null
+    ? undefined
+    : lab.layout.placements.find((p) => p.key === `inventory:${record}`);
+}
+
+// The placement control of an approval: the Sled slot the server stands on, optional, one choice
+// among the free slots of the lab by address. The first choice sends no placement: Unplaced (the host
+// lands on no sled), or, for a matched request whose server already stands on a sled, "Keep its place"
+// (the place belongs to the record, so it survives the wipe and the new enrollment, and no slot needs
+// choosing). That server's own slot is not offered as a new one: the coordinator judges a place
+// before the approval, so it would be refused as taken (`placement_overlap`).
 function placementSection(request, form, lab) {
   if (lab.failure !== null) {
     return h("p", { class: "flag warn" },
       `The lab layout cannot be read (${describeError(lab.failure)}): the host can be approved unplaced.`);
   }
-  const record = request.inventoryMatch === "INVENTORY_MATCH_MATCHED" ? recordHostId(request) : "";
-  const held = record === "" ? undefined : lab.layout.placements.find((p) => p.key === `inventory:${record}`);
-  const options = slotOptions(lab.layout, held === undefined ? undefined : held.key, true);
+  const record = recordHostId(request);
+  const held = heldPlace(request, lab);
+  const free = slotOptions(lab.layout, undefined, false);
+  const first = held === undefined ? ["", "Unplaced"] : ["", `Keep its place, ${held.address}`];
   return [
-    select("Sled slot", "place-slot", form.place, "slot", options),
-    options.length === 1 ? h("p", { class: "note wide" }, "No sled slot is free: add a sled on Home, in Edit layout.") : null,
-    held === undefined ? null : h("p", { class: "note wide" },
-      `${record} stands at ${held.address}, and stays there unless another slot is chosen.`),
+    select("Sled slot", "place-slot", form.place, "slot", [first, ...free]),
+    free.length === 0 && held === undefined ? h("p", { class: "note wide" }, "No sled slot is free: add a sled on Home, in Edit layout.") : null,
+    held === undefined ? null : h("p", { class: "note wide", name: "keeps-place" },
+      `${record} stands at ${held.address}, and approving it as ${record} keeps it there: no slot needs choosing. Choose another slot only to move it.`),
   ];
+}
+
+// The words of a refused approval the page can explain, or null: a duplicate claim (it needs Replace),
+// a group other than the replaced host's (`host_group_differs`), and a slot another server holds (who
+// stands there).
+function approveProblem(error, request, lab, spot) {
+  const record = recordHostId(request);
+  if (error.reason === "duplicate_claim") {
+    return record === ""
+      ? "This request claims the machine of a host already enrolled (a duplicate claim): tick Replace to approve it in that host's place."
+      : `This request claims the machine id, key or a MAC of a host already enrolled (a duplicate claim). If it is ${record} rebuilt, tick "Replace the existing ${record}" to approve it in its place.`;
+  }
+  if (error.reason === "host_group_differs") {
+    return "With Replace the host keeps the host group it is in: set Host group to Unassigned to keep it, and move it on the Host groups page if needed.";
+  }
+  if (spot === null) {
+    return null;
+  }
+  if (error.reason === "placement_overlap") {
+    const p = lab.layout.placements.find((x) => x.sled === spot.sled && x.slot === spot.slot);
+    const sled = lab.layout.sleds.find((x) => x.id === spot.sled);
+    const address = sled === undefined ? "That slot" : `${sled.address}-S${spot.slot}`;
+    return p === undefined
+      ? `${address} is taken: choose another slot, or leave it unplaced.`
+      : `${address} is taken: ${p.id} stands on it. Choose another slot, or leave it unplaced.`;
+  }
+  return /^(placement_|unknown_sled$|overlap$|capacity$)/.test(error.reason || "") ? layoutProblem(error) : null;
 }
 
 const CLAIM_ROWS = [
@@ -255,7 +299,8 @@ function pending(ctx, request, groups, lab) {
   if (!lab.forms.has(request.requestId)) {
     lab.forms.set(request.requestId, {
       hostId: request.renewalOf || recordHostId(request),
-      hostGroup: choices.some(([name]) => name === recorded) ? recorded : "",
+      // A duplicate claim is approved with Replace, which keeps the replaced host's group: none is chosen.
+      hostGroup: request.duplicateClaim !== true && choices.some(([name]) => name === recorded) ? recorded : "",
       replace: false,
       place: { slot: "" },
     });
@@ -296,9 +341,7 @@ function pending(ctx, request, groups, lab) {
       placementSection(request, form, lab),
       groups.failure === null ? null : h("p", { class: "flag warn wide" },
         `Host groups cannot be listed (${describeError(groups.failure)}): the host can be approved as Unassigned.`),
-      h("div", { class: "replace wide" },
-        checkbox("Replace", "replace", form, "replace"),
-        hint(REPLACE_HINT, true)),
+      replaceChoice(request, form, lab),
       h("div", { class: "decide wide" },
         action(ctx, "Approve", "approve", async () => {
           const body = approval(request, form);
@@ -319,19 +362,47 @@ function pending(ctx, request, groups, lab) {
           try {
             reply = await ctx.api.enrollment.approve(body);
           } catch (error) {
-            if (spot !== null && /^(placement_|unknown_sled$|overlap$|capacity$)/.test(error.reason || "")) {
-              return layoutProblem(error);
+            const words = approveProblem(error, request, lab, spot);
+            if (words !== null) {
+              return words;
             }
             throw error;
           }
           ctx.refresh();
-          const placed = body.hostGroup === ""
-            ? "as Unassigned (it is ordered no package until it is put in a host group)"
-            : `into host group ${body.hostGroup}`;
-          const stands = spot === null ? "" : `, at ${lab.layout.sleds.find((x) => x.id === spot.sled).address}-S${spot.slot}`;
+          // With a renewal or Replace an empty host group keeps the group of the host renewed or replaced.
+          const unassigned = "as Unassigned (it is ordered no package until it is put in a host group)";
+          const placed = body.hostGroup !== "" ? `into host group ${body.hostGroup}`
+            : request.renewalOf ? "in its own host group"
+              : body.replace ? "in the host group the replaced host had (Unassigned if it had none)" : unassigned;
+          // The place is the record's: it is kept only when the host is approved as the record's host id.
+          const held = (reply.hostId || named) === recordHostId(request) ? heldPlace(request, lab) : undefined;
+          const stands = spot !== null
+            ? `, at ${lab.layout.sleds.find((x) => x.id === spot.sled).address}-S${spot.slot}`
+            : (held === undefined ? "" : `, keeping its place at ${held.address}`);
           return `Approved ${reply.hostId || named} ${placed}${stands}: the host gets its certificate at its next poll.`;
         }, { class: "primary" }),
         rejectButton(ctx, request))));
+}
+
+// The Replace choice. For a duplicate claim that matches one record (a host rebuilt on a new disk, say,
+// enrolling again as itself) it is named plainly, "Replace the existing <host>", and says what it does:
+// the certificate of the host that holds that id is revoked and the host keeps its host group and its
+// place in the rack. The page cannot tell which enrolled host the claim duplicates, so it says so. Any other
+// request has the plain Replace box with its hint.
+function replaceChoice(request, form, lab) {
+  const record = recordHostId(request);
+  if (request.duplicateClaim !== true || record === "") {
+    return h("div", { class: "replace wide" },
+      checkbox("Replace", "replace", form, "replace"),
+      hint(REPLACE_HINT, true));
+  }
+  const held = heldPlace(request, lab);
+  return h("div", { class: "replace wide" },
+    checkbox(`Replace the existing ${record}`, "replace", form, "replace"),
+    h("p", { class: "note", name: "replace-says" },
+      `This request matches the record of ${record} and claims the machine id, key or a MAC of a host already enrolled, as ${record} `
+      + `rebuilt on a new disk does. Replacing approves it as ${record}: the certificate of the host that holds ${record} is revoked, and `
+      + `${record} keeps its host group (leave Host group as it is)${held === undefined ? "" : ` and its place at ${held.address}`}.`));
 }
 
 // Reject: the request leaves the queue and its key is refused, so it asks first. The page asks for

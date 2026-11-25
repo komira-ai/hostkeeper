@@ -41,16 +41,27 @@ impl From<postgres::Error> for Fail {
     }
 }
 
-/// The text of a client error: the server's severity, message and SQLSTATE, or the client's own
-/// error and its cause. It never holds the connection string.
+/// The text of a client error: the server's severity, message and SQLSTATE, followed by the table
+/// and the constraint the server names (a statement a constraint refused names both), and, for a
+/// wait that ran out ([`waited_out`]), what it waited for as the server says it (the row and its
+/// table: `while locking tuple (0,1) in relation "rollout_gate"`); or the client's own error and
+/// its cause. It never holds the connection string.
 pub(crate) fn describe(e: &postgres::Error) -> String {
     match e.as_db_error() {
-        Some(db) => format!(
-            "{}: {} (SQLSTATE {})",
-            db.severity(),
-            db.message(),
-            db.code().code()
-        ),
+        Some(db) => {
+            let waited = waited_out(e).then(|| db.where_()).flatten();
+            let named = [("table", db.table()), ("constraint", db.constraint())]
+                .into_iter()
+                .filter_map(|(what, name)| name.map(|name| format!(", {what} {name}")))
+                .chain(waited.map(|place| format!(", {place}")))
+                .collect::<String>();
+            format!(
+                "{}: {} (SQLSTATE {}{named})",
+                db.severity(),
+                db.message(),
+                db.code().code()
+            )
+        }
         None => match e.source() {
             Some(cause) => format!("{e}: {cause}"),
             None => e.to_string(),
@@ -59,9 +70,10 @@ pub(crate) fn describe(e: &postgres::Error) -> String {
 }
 
 /// Whether `e` ended the session, or must be taken as having ended it: the connection is
-/// closed or broke (no answer of the server), the server ended the session (`FATAL`, `PANIC`),
-/// or a bounded wait ran out (a statement or lock timeout, a cancel). A plain refusal of a
-/// statement (`ERROR`: a constraint, a trigger) keeps the session.
+/// closed or broke (no answer of the server), or the server ended the session (`FATAL`, `PANIC`:
+/// a transaction left idle past its timeout, a shutdown). A refusal of a statement (`ERROR`: a
+/// constraint, a trigger, or a bounded wait that ran out, [`waited_out`]) keeps the session: the
+/// server ended the statement alone, and a `ROLLBACK` makes the session take the next one.
 pub(crate) fn ends_session(e: &postgres::Error) -> bool {
     if e.is_closed() {
         return true;
@@ -73,15 +85,22 @@ pub(crate) fn ends_session(e: &postgres::Error) -> bool {
         db.parsed_severity(),
         Some(Severity::Fatal | Severity::Panic) | None
     );
-    let waited = [
-        SqlState::QUERY_CANCELED,
-        SqlState::LOCK_NOT_AVAILABLE,
+    let ended = [
         SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
         SqlState::ADMIN_SHUTDOWN,
         SqlState::CRASH_SHUTDOWN,
     ]
     .contains(db.code());
-    fatal || waited
+    fatal || ended
+}
+
+/// Whether `e` is a statement's bounded wait that ran out: its wait for a lock another
+/// transaction holds (`lock_timeout`, `55P03`) or its run (`statement_timeout` or a cancel,
+/// `57014`). The server ended that statement, not the session ([`ends_session`]).
+pub(crate) fn waited_out(e: &postgres::Error) -> bool {
+    e.as_db_error().is_some_and(|db| {
+        [SqlState::LOCK_NOT_AVAILABLE, SqlState::QUERY_CANCELED].contains(db.code())
+    })
 }
 
 /// Whether a failure to connect is the server not being up yet, by the client's typed errors
@@ -278,12 +297,11 @@ impl<S: Send + 'static> Worker<S> {
         answered.recv().ok()
     }
 
-    /// Hands `job` to the worker's thread without waiting for it. A worker that is gone drops it.
-    pub(crate) fn post(&self, job: impl FnOnce(&mut S) + Send + 'static) {
-        if let Some(jobs) = self.sender() {
-            // A thread that is gone has nothing to run it on.
-            let _ = jobs.send(Box::new(job));
-        }
+    /// Hands `job` to the worker's thread without waiting for it: false when the worker is gone,
+    /// which drops it.
+    pub(crate) fn post(&self, job: impl FnOnce(&mut S) + Send + 'static) -> bool {
+        self.sender()
+            .is_some_and(|jobs| jobs.send(Box::new(job)).is_ok())
     }
 
     /// Stops the thread once the jobs handed to it have run, and waits for it: its state, and

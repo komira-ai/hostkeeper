@@ -5,7 +5,7 @@ Every enrolled host is in one group or is unassigned (there is no built-in group
 packages its group lists, at the group's desired version of each, and an unassigned host is ordered none. This page is what the coordinator does with groups.
 The design is [hostgroups.md](../design/hostgroups.md). A fleet that was placed by roles and a
 rollout file moves through the operator API, by [Moving a fleet from roles to host groups](#moving-a-fleet-from-roles-to-host-groups).
-`hkctl` is [cli.md](../cli.md).
+`hk` is [cli.md](../cli.md).
 
 Every `HostGroups` call takes the operator token only: a CI token is refused with `forbidden`, no
 token with `unauthorized`, and a refused call changes nothing. A call that changes something needs
@@ -88,7 +88,7 @@ an audit entry, `set_repository`, naming the service, with the reason `repositor
 (or `repository komira (the default): <yours>` when cleared).
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services set-repository --service hello-config-web --repository acme-private \
     --reason "the web config comes from the private repository"
 ```
@@ -114,7 +114,7 @@ rollout file. A host's own minimum stands before it.
 ## The calls
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups put --request web.json --reason "the web tier"
 ```
 
@@ -134,7 +134,7 @@ with `web.json` the group's body, in the canonical JSON of the proto
 | `Get` | One group as `List` says it, with, per package, its minimum version and its convergence (as `Releases.Converge` answers it for the group), and a page of its hosts by node id (`limit` up to 256; the token is the last node id of the page before). | `unknown_host_group` |
 | `Put` | Creates a group, or replaces one whole. | `invalid_host_group` (the name), `invalid_package` (a name that breaks its rule, or a package twice), `invalid_policy`, `hostkeeper_not_listed` (an empty list included), `too_many_packages`, `generation_mismatch` |
 | `Remove` | Removes a group, with its desired versions and its marks. | `unknown_host_group`, `not_empty` |
-| `Move` | Moves a host into another group (below). | `unknown_host`, `unknown_host_group`, `same_host_group` |
+| `Move` | Moves a host into another group (below). | `unknown_host`, `unknown_host_group`, `same_host_group`, `host_in_maintenance` |
 
 A bad `limit` or `page_token`, a bad node id or a bad reason is `invalid_request`. The refusals
 are tokens of the status message, as for every operator call.
@@ -177,9 +177,9 @@ and each package its groups list) are registered by being listed: nothing is add
 see them.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services put --service js-agent --repository komira --reason "the agent the web group will run"
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services remove --service js-agent --reason "not deployed after all"
 ```
 
@@ -242,11 +242,11 @@ In group mode an approval puts its host in the group it names, which must be one
 holds (`unknown_host_group`); an operator's approval may name none, and the host is
 then unassigned, and ordered nothing, until `Move` ([enrollment.md](enrollment.md)):
 
-- `hkctl enrollment add-record --host-group <group>`: the record is the approval, and the
+- `hk enrollment add-record --host-group <group>`: the record is the approval, and the
   coordinator puts the host it approves in the record's group. A record added before the
   coordinator held groups names its group by its role; one whose role no group has approves
   nothing, and its request waits for an operator.
-- `hkctl enrollment approve --host-group <group>`: the operator's approval. It names no
+- `hk enrollment approve --host-group <group>`: the operator's approval. It names no
   `--services` (`services_retired`), and the group is optional (so is `--reason`).
 - A Mac approved by an inventory record goes into the record's group; the MDM nonce and
   `--mac-serial-allowlist` are read by nothing and accepted and ignored for one release ([coordinator-mdm.md](../design/coordinator-mdm.md)).
@@ -261,22 +261,23 @@ with `--replace` keeps the group of the host it replaces: naming another group i
 
 A host in a group is changed to another by `Move`, and a host approved in none, or before the
 coordinator held groups, is put in one by `Move`. A host in a group is moved back to none by a
-`Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, the blank choice of the
+`Move` with an empty `host_group` (`hk host-groups move --host-group ""`, the blank choice of the
 **Host group** dropdown on the host's own page in the console):
 it is then unassigned: it is ordered nothing and keeps what it runs, so the host does not move; a host already in none is refused `same_host_group`.
+A host in its turn of a maintenance run (from the order that starts it until it is done or deferred, a halted host and one that is not back included) is refused `host_in_maintenance`, and nothing changes: move it once its turn has ended or the operator has put it back. A host that only waits for its turn can be moved, and the run leaves it out.
 In the console a host is moved on its Host page, whose **Host group**
 dropdown lists the groups held and a blank, Unassigned; the Host groups page lists each group's hosts, each a
 link to that page, and has no form that moves one.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id web-17 --host-group web --reason "racked for the web tier"
 ```
 
 Out of its group, into none:
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id web-17 --host-group "" --reason "no longer a web server"
 ```
 
@@ -303,7 +304,7 @@ The host is then moving until its packages match its new group, at the host's he
    `facts-v1` is ordered nothing, and is told `moving`, until its heartbeat reports that
    generation: the daemon has written the facts file by then, so a package installed after reads
    the new group. The coordinator decides this at each heartbeat, so a change of the host's facts
-   during the move (`hkctl hosts set-labels`) holds the sequence again until the host reports
+   during the move (`hk hosts set-labels`) holds the sequence again until the host reports
    the new generation. A host whose daemon does not announce `facts-v1`, or that heartbeats over
    the JSON route, is sent no facts and is not held for them; so is every host of a coordinator
    that does not advertise the feature.
@@ -360,6 +361,10 @@ and takes no place in its plan, whichever stage each plan is in. So a config pac
 its service is never ordered to a host that does not run the service. A package that is not
 installed because a halt, a hold, an exclusion, a version marked bad, the quiet start or a gate of
 its plan holds it also holds the later ones back. Updates are not ordered by the list.
+A later package whose every host left to order waits `install_order` (behind an earlier package
+that failed its install on one host, say: on that host for good, and, under `failed_hosts =
+FAILED_HOSTS_STOP`, on the others too while they wait `stage_failed`) has nothing to order: it takes no place of `--live-rollouts` and holds no other service of any group, and its plan
+says `nothing_to_order` ([rollout-plans.md](rollout-plans.md#across-services---live-rollouts)).
 
 The uninstall of a package waits, told `uninstall_order`, while a package whose intent was
 written before it (which the group listed after it) is still on the host, whatever holds that
@@ -437,7 +442,7 @@ Promotion from one group to the next is a sequence of deployments the caller mak
 canary group, `WaitConverged` on it, then set the next.
 
 ```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases set-desired --service hello --host-group web-canary --request desired.json
 ```
 
@@ -453,12 +458,16 @@ version, and the `targets` of the release).
 | `bake_beats` | 0 | 0 to 100 |
 | `rollback` | manual | `ROLLBACK_MODE_MANUAL` or `ROLLBACK_MODE_AUTOMATIC`; automatic sets the group's desired version back to the group's last good one |
 | `rollback_after_failed` | 25 percent, 2 hosts | `percent` 1 to 100, `min_hosts` 1 to 10000 |
-| `defer_backoff` | 300 s, factor 2, 3600 s | `initial_secs` at least 1, `factor` 1 to 16, `max_secs` from `initial_secs` to 604800 |
+| `failed_hosts` | continue | `FAILED_HOSTS_CONTINUE` or `FAILED_HOSTS_STOP`; continue counts a failed host as done, failed, and goes on ordering the others, up to the ceiling `rollback_after_failed`; stop holds the stage until an operator resolves the host ([rollout-plans.md](rollout-plans.md#a-failed-host)) |
+| `defer_backoff` | 300 s, factor 2, 3600 s | `initial_secs` at least 1, `factor` 1 to 16, `max_secs` from `initial_secs` to 604800; also the wait before a failure the host can clear by itself is retried |
 | `max_updating` | the whole stage | 0 to 10000; 0 holds the group; a number caps the hosts updating one package at once |
 | `min_up` | 0 | 0 to 10000 |
 | `live_rollouts` | the coordinator's `--live-rollouts` | 1 to 16; can only lower the coordinator's number |
+| `maintenance` | every key at its default | the keys of [Maintenance](#maintenance) below |
 
-A key left out takes its default. Each package of the group rolls by this one policy: its stages
+A key left out takes its default. A group put before `failed_hosts` existed reads as
+`FAILED_HOSTS_CONTINUE`: one failed host no longer holds its stage. A group that relied on one
+failure stopping everything sets `FAILED_HOSTS_STOP`, or a canary. Each package of the group rolls by this one policy: its stages
 are computed over the group's eligible hosts, `max_updating` caps the group's hosts updating that
 package at once (uninstalls count), `min_up` counts the group's live hosts up for it, and
 `live_rollouts` is how many services may roll at once, counted over every group and never above
@@ -467,6 +476,53 @@ and the others queue in the order their versions were set. `rollout_elsewhere` n
 that hold the place. A group that stored a `max_updating` of 1 before this default changed wrote
 nothing, so it now has no cap; set 1 to cap it. The plan, the canary, the bake, the failed-host
 rules and `--live-rollouts` are otherwise as [rollout-plans.md](rollout-plans.md) says.
+
+### Maintenance
+
+`maintenance` holds the keys a group keeps for its hosts' maintenance. A key left out takes its default.
+How an operator runs a Linux host's maintenance with them, and recovers a host that halted, is
+[maintenance.md](maintenance.md).
+
+| Key | Default | Range |
+|---|---|---|
+| `xcode_keep` | 0 | 0 to 4; how many of the newest Xcode releases the group's Macs keep; 0 leaves Xcode alone |
+| `xcode_default` | `latest` | `latest`, or a version of 1 to 3 numbers of 1 to 4 digits joined by dots (`26.1.1`); a version needs an `xcode_keep` of at least 1 |
+| `macos_major` | false | true or false |
+| `linux_scope` | `LINUX_SCOPE_SECURITY` | `LINUX_SCOPE_SECURITY` (security updates and the kernel; `LINUX_SCOPE_UNSPECIFIED` reads as it) or `LINUX_SCOPE_ALL` (every update) |
+| `batch` | 1 | 1 to 10000 |
+| `min_serving` | 1 | 0 to 10000 |
+| `drain_deadline_secs` | 0 (none) | any number of seconds |
+| `return_secs` | 0 (1200 for a Linux host, 3600 for a Mac) | 0, or 60 to 86400 |
+
+A value out of range is refused `invalid_policy`, and the log names the key, `maintenance`, and why.
+`Get` and `List` answer the table with every key named, a default included. A `Put` replaces the group
+whole, so a `Put` that leaves `maintenance` out sets every key back to its default. A maintenance run
+reads `batch` (unless the run names its own) and `min_serving` to decide when each host of the group
+starts its turn, and `linux_scope`, `macos_major`, `drain_deadline_secs` (unless the run names its
+own) and `return_secs` for the `maintain` order it sends the host
+([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). `Schedule` counts a
+major upgrade of macOS that a Mac reports as due only when its group's `macos_major` is true
+([macos.md](../macos.md), Maintenance facts). A run also reads two keys of the policy itself: a
+host whose turn is done holds its batch place until it has sent the group's `bake_beats` healthy
+heartbeats in a row (section 5.6), and a host whose turn deferred is offered again, after the
+run's other hosts of the group and while the window is open, once the group's `defer_backoff` has
+passed since it deferred, longer for each deferral of its turn (section 5.3).
+
+Two alerts of `Alerts.List` follow a host's turn of a run, both critical, each one alert per host
+with the host's group in `host_group`. `maintenance_halted` stands while the host's turn is stored
+halted: it names the host, the run and the reason the host's daemon gave (the step and the exit
+code), says that the host stays cordoned and that no further host of its group starts in the run,
+and that the operator acts with `Maintenance.RetryHost` or `Maintenance.PutBack` (`Cancel` ends the
+run but leaves the host halted); once an act is queued it says that the act is sent to the daemon.
+It clears when the daemon reports its turn at another step. `maintenance_not_back` stands while the
+turn is stored not back: a host stored rebooting that stays silent for its group's `return_secs`
+(1200 for a Linux host, 3600 for a Mac, or the group's own; a host the coordinator has not heard
+since it started is judged from the coordinator's start, by the larger of the two defaults) is
+stored not back by the coordinator at its next observation of the alerts (every 15 seconds; an
+`Alerts.List` alone stores nothing), audited `maintenance_step`. It clears when the host reports
+again, which stores the step its daemon reports. A host stored rebooting, or not back, raises no
+`silent_host` for its silence; it does again if its turn moves on, such as to done, and the host is
+still silent.
 
 ## Incidents are per host and per group
 
@@ -478,7 +534,12 @@ shows, per package, the groups that list it (`host_groups`), their hosts and min
 leaves `roles` and `assignments` empty. `Alerts.List` derives a `halt` alert from each group's
 halt (groups with the same halt of a package, host and version are one alert that names them
 all), and the failed-canary, held-on-bad-version and abandoned-host alerts cover the packages
-that only a group lists.
+that only a group lists. A host of a group whose last report of a package is a failure of the
+group's desired version is a `failed_update` alert (one whose reason the host can clear by itself
+is retried after the group's `defer_backoff` and stays listed through its tries), a host that
+holds a halt of a package of its own is a `host_halt` alert, and a host that declined the group's
+desired version three times in a row for the same reason is a `repeated_deferral` alert, each
+naming the group in its message ([rollout-plans.md](rollout-plans.md#a-failed-host)).
 
 ## The audit log
 
@@ -502,18 +563,18 @@ below is safe at every step.
    `--mac-serial-allowlist` for now: a start refuses an entry that names `services`, and one that
    names a group the store does not hold, which at this point is every group. Start the release.
    Every host keeps running what it runs and is ordered nothing.
-2. **Put each group.** `hkctl host-groups put` with the group's packages in install order and its
-   policy ([cli.md](../cli.md#hkctl-host-groups-put), [The calls](#the-calls)). Name a group after
+2. **Put each group.** `hk host-groups put` with the group's packages in install order and its
+   policy ([cli.md](../cli.md#hk-host-groups-put), [The calls](#the-calls)). Name a group after
    the role whose hosts it takes.
-3. **Move each enrolled host into its group.** `hkctl host-groups move` for each host, the hosts
-   of a role into the group of that name ([cli.md](../cli.md#hkctl-host-groups-move),
+3. **Move each enrolled host into its group.** `hk host-groups move` for each host, the hosts
+   of a role into the group of that name ([cli.md](../cli.md#hk-host-groups-move),
    [Moving a host](#moving-a-host)).
-4. **Set what the rollout file held per package.** `hkctl services set-repository` for each
+4. **Set what the rollout file held per package.** `hk services set-repository` for each
    package whose repository is not `komira` (put the registry's entries in place first,
-   [package-repositories.md](../deploy/package-repositories.md)), and `hkctl services
+   [package-repositories.md](../deploy/package-repositories.md)), and `hk services
    set-min-version` for each minimum a group needs
    ([Where a package's repository and minimum version come from](#where-a-packages-repository-and-minimum-version-come-from)).
-5. **Set the desired versions.** `hkctl releases set-desired --host-group <group>` for each
+5. **Set the desired versions.** `hk releases set-desired --host-group <group>` for each
    package of each group ([Deployments](#deployments-a-version-is-set-in-a-group)), and point CI at
    the groups with the `host_group` of its release step
    ([github-actions.md](../deploy/github-actions.md)).
@@ -523,7 +584,7 @@ below is safe at every step.
 
 A host is ordered nothing until both its group exists and has a desired version, so no service is
 touched while the move runs; a host's packages change only when step 5 gives its group a version
-that differs from what it runs. Scripts that pass `--role` to `hkctl enrollment approve` or
+that differs from what it runs. Scripts that pass `--role` to `hk enrollment approve` or
 `enrollment add-record`, or name a `role` in a `releases force` request, keep working: it is read as
 the group's name. Scripts that call `services assign` or `unassign`, or approve naming services, are
 refused (`placed_by_host_group`, `services_retired`) and must change.

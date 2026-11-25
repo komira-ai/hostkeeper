@@ -48,6 +48,11 @@ impl Drop for TempFile {
     }
 }
 
+/// The mode of a service directory of the package store that [`make_dir`] makes: passed through
+/// by every user, listed by root alone (`hostkeeper_install::version::SERVICE_MODE`, which this
+/// crate does not depend on). A download in it is 0600, root's alone.
+pub(crate) const SERVICE_DIR_MODE: u32 = 0o711;
+
 /// Whether `dir` is a directory: `Ok(false)` when nothing is there, an error when it is
 /// anything but a directory (a link to one included) or when it is writable by its group or by
 /// others (anyone who can write there can replace a staging file by name).
@@ -66,11 +71,12 @@ pub(crate) fn is_dir(dir: &Path) -> io::Result<bool> {
     }
 }
 
-/// Makes `dir` (one level, mode 0755) unless it exists, and checks that it is a directory and
-/// not a link.
+/// Makes `dir` (one level, mode [`SERVICE_DIR_MODE`], whatever the umask) unless it exists, and
+/// checks that it is a directory and not a link.
 pub(crate) fn make_dir(dir: &Path) -> io::Result<()> {
     if !is_dir(dir)? {
-        DirBuilder::new().mode(0o755).create(dir)?;
+        DirBuilder::new().mode(SERVICE_DIR_MODE).create(dir)?;
+        fs::set_permissions(dir, Permissions::from_mode(SERVICE_DIR_MODE))?;
     }
     is_dir(dir).map(|_| ())
 }

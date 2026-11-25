@@ -155,10 +155,10 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
     fs::set_permissions(BASE, fs::Permissions::from_mode(0o755)).expect("its mode");
     let scratch = Scratch::under(Path::new(BASE), "apt-daemon").expect("the daemon's directory");
     let base = scratch.path().to_path_buf();
-    // Closed to others, as the rig's own work directory under the runner's home is: apt then
-    // fetches and verifies as root, which reads the rig's key and repository there, and not as
-    // `_apt`, which cannot (on a host the key and the work directory are readable to `_apt`).
-    fs::set_permissions(&base, fs::Permissions::from_mode(0o700)).expect("its mode");
+    // Open to others, as `/var/lib/hostkeeper` is on a host, so that what keeps another user out
+    // of a package is the daemon's own directories in it. apt runs as root (its sandbox user
+    // `_apt` is never used), so it reads the rig's key and repository under the runner's home.
+    fs::set_permissions(&base, fs::Permissions::from_mode(0o755)).expect("its mode");
     let (state, packages, placed) = (
         base.join("state"),
         base.join("packages"),
@@ -184,6 +184,7 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
         ObserveOptions::default(),
     );
     let ports = Ports {
+        own_job: None,
         launcher: Arc::new(SystemdLauncher::system().with_log(Arc::new(note_step))),
         packages: Arc::new(NoStore),
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),

@@ -245,6 +245,7 @@ pub fn daemon(signers_file: &Path) -> MacDaemon {
         asked: Mutex::default(),
     });
     let ports = Ports {
+        own_job: None,
         launcher: adapters.launcher,
         packages: Arc::clone(&store) as Arc<dyn Packages>,
         clock: Arc::new(host_clock()),

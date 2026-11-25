@@ -34,9 +34,17 @@ use crate::layout::{Layout, LayoutError};
 use crate::ops::{OpsError, OpsState};
 use crate::verdict_file::{self, VerdictsError};
 
+pub(crate) mod beat;
+pub(crate) mod decision;
+mod edit;
 mod fake;
 mod files;
 pub(crate) mod postgres;
+mod writers;
+
+pub(crate) use decision::{Decision, Opened};
+pub(crate) use edit::{Edit, Facts, Fresh, Lock, Part, Scope, Wait};
+pub(crate) use writers::{Writers, Writing};
 
 pub(crate) use fake::Fake;
 #[cfg(test)]
@@ -118,6 +126,70 @@ pub(crate) trait Backend: Send + Sync {
     fn keeps_write_records(&self) -> bool {
         false
     }
+
+    /// Begins one edit of `scope` ([`Edit`]): over a backend other coordinators write, the
+    /// transaction that holds its locks, with every part of it this coordinator's copy is older
+    /// than read afresh. A store begins it under its writers' lock and takes what it read into
+    /// memory before it makes its change.
+    ///
+    /// # Errors
+    /// [`BackendError`]: the edit cannot be made now (the store is lost, the gate was not free in
+    /// time, or a heartbeat found it held); nothing is held.
+    fn begin(&self, scope: Scope) -> Result<Edit, BackendError> {
+        let _ = scope;
+        Ok(Edit::passing())
+    }
+
+    /// The parts whose rows moved on since this coordinator's copy of them was read: what it
+    /// reads again before it answers a request. None over a backend one process owns, or when the
+    /// versions cannot be read now (the copies serve meanwhile).
+    fn stale(&self) -> Vec<Part> {
+        Vec::new()
+    }
+
+    /// `part` read again, rows and version in one snapshot, when this coordinator's copy of it is
+    /// older than the rows: called under the writers' lock of the store that holds the part, which
+    /// takes it into memory at once.
+    ///
+    /// # Errors
+    /// [`BackendError`]: it cannot be read now; the copy serves meanwhile.
+    fn reload(&self, part: Part) -> Result<Fresh, BackendError> {
+        let _ = part;
+        Ok(Fresh::default())
+    }
+
+    /// Keeps `beat`, a heartbeat this coordinator answers, in the fleet's rows of a backend other
+    /// coordinators share (`docs/design/coordinator-multi-instance.md`, section 5.2): the host's
+    /// row, unless the beat is older than the one stored, with its bakes and the orders its report
+    /// settles. Nothing over a backend one process owns, whose fleet is the one in memory. A beat
+    /// that cannot be kept is logged and answered all the same: the decision that follows reads
+    /// the rows as they are.
+    fn keep_beat(&self, beat: beat::HostBeat) {
+        let _ = beat;
+    }
+
+    /// Opens a heartbeat's decision ([`decision`]): over a backend other coordinators share, a
+    /// transaction that holds the gate and the decision's parts and has read them and the fleet's
+    /// rows afresh; [`Opened::Alone`] over a backend one process owns.
+    ///
+    /// # Errors
+    /// [`BackendError`]: the decision cannot be made now (the store is lost, a read failed);
+    /// nothing is held, and the heartbeat is ordered nothing.
+    fn decide(&self) -> Result<Opened, BackendError> {
+        Ok(Opened::Alone)
+    }
+
+    /// Claims the stage of `claim` in the decision this thread holds (section 5.3, "Advance a
+    /// stage"): true when the plan's row was where the decision read it and now stands at the new
+    /// stage, false when another decision moved it first. True outside a decision and over a
+    /// backend one process owns.
+    ///
+    /// # Errors
+    /// [`BackendError`]: the claim failed, which ends the decision.
+    fn claim_stage(&self, claim: &decision::StageClaim<'_>) -> Result<bool, BackendError> {
+        let _ = claim;
+        Ok(true)
+    }
 }
 
 /// Whether a backend takes writes (`docs/design/coordinator-storage.md`, section 5).
@@ -128,12 +200,6 @@ pub(crate) enum Health {
     /// Its link is lost: every write is refused at once until it is made again. The coordinator
     /// orders nothing meanwhile.
     Lost,
-    /// Another coordinator led the store while the link was lost, at epoch `found`: this one's
-    /// memory is stale, and it exits.
-    Deposed {
-        /// The epoch found.
-        found: u64,
-    },
 }
 
 /// The state before and after one change, and its audit lines.
@@ -185,6 +251,18 @@ pub(crate) struct Loaded {
     pub(crate) layout: Layout,
     /// The spent ids of CI's tokens, each with the second until which it is refused.
     pub(crate) spent: Vec<(String, u64)>,
+    /// The hosts' facts generations, over a backend that keeps them ([`crate::facts`]).
+    pub(crate) facts: Option<Facts>,
+}
+
+#[cfg(test)]
+impl Loaded {
+    /// The same, without the queue's numbers a database keeps beside the desired state
+    /// (`set_seq`, a database's alone): what every backend holds alike.
+    pub(crate) fn alike(mut self) -> Loaded {
+        self.desired.seqs.clear();
+        self
+    }
 }
 
 /// Why a backend did not load or commit: the error of the part it failed on, as the store of that
@@ -316,9 +394,14 @@ impl SpentJtis for Spent {
     }
 
     fn record(&self, jti: &str, until: u64) -> io::Result<()> {
+        // The backend's own refusal decides a replay: a database another coordinator spent the
+        // id in refuses it here, though this one's memory never held it.
         self.backend
             .spend(jti, until, (self.clock)())
-            .map_err(io::Error::other)
+            .map_err(|why| match why {
+                BackendError::Spent => io::Error::new(io::ErrorKind::AlreadyExists, why),
+                why => io::Error::other(why),
+            })
     }
 }
 
@@ -345,6 +428,10 @@ mod files_layout_tests;
 #[cfg(test)]
 #[path = "files_host_groups_tests.rs"]
 mod files_host_groups_tests;
+
+#[cfg(test)]
+#[path = "files_maintenance_tests.rs"]
+mod files_maintenance_tests;
 
 #[cfg(test)]
 #[path = "store_tests.rs"]

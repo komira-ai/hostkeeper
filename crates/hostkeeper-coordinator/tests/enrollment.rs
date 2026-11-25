@@ -1,7 +1,8 @@
 //! `hostkeeper-coordinator serve` with enrollment: its flags go together, the start makes the
 //! CA only with `--ca-init` and the server certificate, and the heartbeat listener lets a client
 //! without a certificate through the handshake (the heartbeat route refuses it) and admits the
-//! certificate of a host its CA enrolled. The connections are in-memory and the handshakes the
+//! certificate of a host its CA enrolled; a start records every enrolled host no inventory
+//! record matches. The connections are in-memory and the handshakes the
 //! real ones; nothing binds a socket.
 
 mod support;
@@ -179,6 +180,66 @@ fn new_request(machine_id: &str) -> EnrollRequest {
         }),
         ..EnrollRequest::default()
     }
+}
+
+/// Proves: a start with enrollment records every enrolled host no inventory record matches: a Mac
+/// approved by an operator before (its request claiming its serial, no record holding it) has its
+/// record after the next start, added by `coordinator` with its serial, and a start after that
+/// writes nothing more.
+///
+/// Catches: the bootstrap Macs enrolled before this release left out of the inventory because the
+/// start does not record them.
+#[test]
+fn a_start_records_a_mac_enrolled_without_a_record() {
+    let files = Files::new("enrollment-start-records");
+    let parts = start(&files, &enrollment_flags(true)).expect("started");
+    let enrollment = parts.coordinator.enrollment().expect("enrollment");
+    let mut request = new_request("mac-machine-1");
+    let claims = request.claims.as_mut().expect("claims");
+    claims.mac_serial = "C02XK1ABJG5J".to_owned();
+    claims.platform_uuid = "4C4C4544-0042-5A10-8048-B7C04F4E3332".to_owned();
+    let posted = enrollment.enroll(request).expect("posted");
+    let id = KeyHash::from_hex(&posted.request_id).expect("a request id");
+    enrollment
+        .store()
+        .approve(
+            &id,
+            &id,
+            &Decision {
+                host_id: HostId::parse("mac-1").expect("a host id"),
+                role: Role::parse("build").expect("a role"),
+                services: Vec::new(),
+                replace: false,
+                host_group: None,
+            },
+        )
+        .expect("approved");
+    drop(parts);
+
+    let records = |parts: &Parts| {
+        let by = hostkeeper_coordinator::operator::Caller::Operator(
+            hostkeeper_coordinator::tokens::Operator::named("operator".parse().expect("a name")),
+        );
+        parts
+            .coordinator
+            .list_records(&by, Default::default())
+            .expect("listed")
+            .records
+            .into_iter()
+            .map(|r| (r.host_id, r.serial, r.added_by, r.enrolled))
+            .collect::<Vec<_>>()
+    };
+    let again = start(&files, &enrollment_flags(false)).expect("started again");
+    let want = vec![(
+        "mac-1".to_owned(),
+        "C02XK1ABJG5J".to_owned(),
+        "coordinator".to_owned(),
+        true,
+    )];
+    assert_eq!(records(&again), want);
+    drop(again);
+    let third = start(&files, &enrollment_flags(false)).expect("started a third time");
+    assert_eq!(records(&third), want);
 }
 
 /// Catches the pending cap accepted without enrollment or as 0, and the cap not reaching the

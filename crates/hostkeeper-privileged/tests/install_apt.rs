@@ -27,6 +27,8 @@ mod anything;
 mod containers;
 #[path = "install_apt/daemon.rs"]
 mod daemon;
+#[path = "shared/other_user.rs"]
+mod other_user;
 #[path = "install_apt/repo.rs"]
 mod repo;
 #[path = "install_apt/rig.rs"]
@@ -85,8 +87,8 @@ fn assert_installed(version: &str) {
     );
 }
 
-/// Proves: a service's package stages from a signed repository with its download directory owned
-/// like apt's own `lists/partial/` (apt's sandbox user, not root), installs, updates to a newer version
+/// Proves: a service's package stages from a signed repository, apt downloading as root into a
+/// download directory root's alone (0700), installs, updates to a newer version
 /// keeping its link and its hold, rolls back to the kept previous version with the repository
 /// removed from the disk (nothing is fetched), and is taken off the host entirely: dpkg knows no
 /// package, no file of it remains, the link and the hold are gone and the record is dropped.
@@ -110,15 +112,12 @@ fn a_two_version_package_installs_updates_rolls_back_offline_and_uninstalls() {
         "the version keeps its copy of the index"
     );
     assert_eq!(dpkg_version(), None, "stage installs nothing");
-    // apt run as root gives the lists' partial/ to its sandbox user (_apt, not root); the
-    // download's directory has that owner, so apt downloads as that user and not as root.
+    // apt is kept from its sandbox user (`APT::Sandbox::User=root`): the lists' partial/ and the
+    // download's directory are root's, closed to everyone else.
     let partial = fs::metadata(rig.work().join("lists/partial")).expect("lists/partial");
     let archives = fs::metadata(rig.work().join("archives")).expect("archives");
-    assert_ne!(partial.uid(), 0, "apt made partial/ its sandbox user's");
-    assert_eq!(
-        (archives.uid(), archives.gid(), archives.mode() & 0o7777),
-        (partial.uid(), partial.gid(), partial.mode() & 0o7777)
-    );
+    assert_eq!(partial.uid(), 0, "apt kept partial/ root's");
+    assert_eq!((archives.uid(), archives.mode() & 0o7777), (0, 0o700));
 
     let activated = installer.activate(&v1, &dir1).expect("activate 1.0-1");
     assert_eq!(activated.drift, None);
@@ -166,12 +165,14 @@ fn a_two_version_package_installs_updates_rolls_back_offline_and_uninstalls() {
 /// Proves, through the daemon's own order path: a host with apt and the rig's repository entry
 /// announces `apt`; an install order of the apt entry stages, installs, holds and enables the
 /// package and starts its unit (the built-in `cutover`); an update moves it; a `force_rollback`
-/// installs the kept previous version with the repository removed from the disk; an uninstall
-/// order stops the unit and purges the package, leaving no file, link, hold or version
-/// directory of it.
+/// installs the kept previous version with the repository removed from the disk; no file the
+/// daemon keeps of the package (the version directories, the work directory) can be read by
+/// another user than root; an uninstall order stops the unit and purges the package, leaving no
+/// file, link, hold or version directory of it.
 ///
-/// Catches: a daemon that does not announce or dispatch apt on a host that can run it, or whose
-/// rollback or uninstall leaves the host other than the order says.
+/// Catches: a daemon that does not announce or dispatch apt on a host that can run it, whose
+/// rollback or uninstall leaves the host other than the order says, or whose kept package (and
+/// any secret file in it) another user can read.
 #[test]
 fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     let rig = Rig::new("apt-daemon", Trust::Entry);
@@ -230,6 +231,11 @@ fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     assert_eq!(finished(daemon.order(&back)), succeeded);
     assert_installed("1.0-1");
     assert_eq!(active(), "active");
+    // What the daemon keeps of the two versions (each kept `.deb`, its indexes, its tree) and
+    // the work directory's copy are root's alone, in a directory any user can pass through.
+    let base = scratch.path();
+    let tried = other_user::assert_root_only(base, &[&base.join("packages"), &base.join("apt")]);
+    assert!(tried > 0, "the daemon keeps files of the package");
 
     let packages = scratch.path().join("packages").join(PACKAGE);
     let reply = finished(daemon.order(&daemon::uninstall(4)));

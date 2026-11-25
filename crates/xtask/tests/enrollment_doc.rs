@@ -1,20 +1,20 @@
-//! The operator docs against `hkctl`, the command line they name, and
+//! The operator docs against `hk`, the command line they name, and
 //! `docs/operations/enrollment.md`, the runbook for enrolling a node, and
 //! `docs/operations/network-install.md`, the runbook for installing one from the network, against
 //! the code they describe.
 //!
-//! - Every command line in a fenced block that begins `hkctl` is read as hkctl reads it
-//!   ([`hkctl::parse`]): its global flags are those of `docs/cli.md`'s table, and its service,
-//!   method and flags those of the command table hkctl is generated from, the one `docs/cli.md`
-//!   is written from. A renamed RPC or flag, a flag hkctl does not have (`hostkeeper ctl`'s
+//! - Every command line in a fenced block that begins `hk` is read as hk reads it
+//!   ([`hk::parse`]): its global flags are those of `docs/cli.md`'s table, and its service,
+//!   method and flags those of the command table hk is generated from, the one `docs/cli.md`
+//!   is written from. A renamed RPC or flag, a flag hk does not have (`hostkeeper ctl`'s
 //!   `--output`), a value a bool, enum or integer flag does not take, or a call without the
 //!   endpoint, CA file and token it needs, fails here. A line continued with a trailing `\` is
 //!   one line; words are split as a shell splits them, by white space, with `'...'` and `"..."`
 //!   quoting.
 //! - This holds in every operator doc: each Markdown file of the repository but the design
 //!   documents (`docs/design/`, which also describe methods not built yet). There, an inline
-//!   code span that begins `hkctl` names a service and a method hkctl has, and flags that method
-//!   or hkctl has; and no fenced line begins `hostkeeper ctl`.
+//!   code span that begins `hk` names a service and a method hk has, and flags that method
+//!   or hk has; and no fenced line begins `hostkeeper ctl`.
 //! - The enrollment runbook uses the calls of the procedure: `add-record`, `list-records`,
 //!   `remove-record`, `open-record`, `list` and `approve` of `enrollment`.
 //! - The tokens of its two refusal tables are exactly the refusal tokens of the protos: the
@@ -31,13 +31,24 @@
 //!   of its queries whole, each run with jaq on the coordinator's JSON, and a section for each
 //!   stage ([`move_runbook`]).
 //!
+//! - The runbook of the maintenance update, `docs/operations/maintenance.md`, names only the
+//!   `hk maintenance` verbs of the command table and calls each of them and the Xcode calls, and
+//!   the names of its tables (the group's settings, a run's states, a host's steps, why a host is
+//!   left out, the refusals, the alerts) are those the protos define, its device-management
+//!   settings those the daemon's detector reports and its update-account keys the bootstrap's
+//!   ([`maintenance_runbook`]).
+//!
 //! The checks are pure functions of the text, each tested on edited texts as well as on the real
 //! files. The files are read from the repository; a missing runbook fails.
 
-#[path = "enrollment_doc/hkctl.rs"]
-mod hkctl;
+#[path = "enrollment_doc/doc_check_tests.rs"]
+mod doc_check_tests;
+#[path = "enrollment_doc/hk.rs"]
+mod hk;
 #[path = "jq/run.rs"]
 mod jq;
+#[path = "enrollment_doc/maintenance_runbook.rs"]
+mod maintenance_runbook;
 #[path = "enrollment_doc/move_runbook.rs"]
 mod move_runbook;
 #[path = "../src/testdir.rs"]
@@ -46,7 +57,7 @@ mod testdir;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use hkctl::{Global, Parsed};
+use hk::{Global, HAND_VERBS, Parsed};
 use hostkeeper_proto::ctl::{COMMANDS, Command, Input};
 use prost_reflect::DescriptorPool;
 
@@ -137,9 +148,9 @@ fn lines_of(doc: &str, first: &[&str]) -> Vec<String> {
         .collect()
 }
 
-/// The fenced lines that call `hkctl`.
-fn hkctl_lines(doc: &str) -> Vec<String> {
-    lines_of(doc, &["hkctl"])
+/// The fenced lines that call `hk`.
+fn hk_lines(doc: &str) -> Vec<String> {
+    lines_of(doc, &["hk"])
 }
 
 /// `line` split into words as a shell splits them: by white space, a `'...'` or `"..."` span
@@ -172,16 +183,16 @@ fn words(line: &str) -> Result<Vec<String>, String> {
     Ok(words)
 }
 
-/// hkctl's global flags, from `docs/cli.md` as the generator writes it.
+/// hk's global flags, from `docs/cli.md` as the generator writes it.
 fn globals() -> Vec<Global> {
-    hkctl::globals_of(&hostkeeper_hkctl::markdown(COMMANDS)).expect("the global flags")
+    hk::globals_of(&hostkeeper_hk::markdown(COMMANDS)).expect("the global flags")
 }
 
-/// The command `line` calls, as `service rpc`, or why hkctl refuses it; `None` for `--help` and
+/// The command `line` calls, as `service rpc`, or why hk refuses it; `None` for `--help` and
 /// `--version`.
 fn command_of(line: &str) -> Result<Option<String>, String> {
     let words = words(line)?;
-    match hkctl::parse(&hkctl::served(COMMANDS), &globals(), &words[1..]) {
+    match hk::parse(&hk::served(COMMANDS), &globals(), &words[1..]) {
         Ok(Parsed::Call(c)) => Ok(Some(c)),
         Ok(Parsed::Help | Parsed::Version) => Ok(None),
         Err(e) => Err(format!("{line}\n{e}")),
@@ -198,7 +209,7 @@ fn command_problems(doc: &str) -> Vec<String> {
 fn command_problems_for(doc: &str, required: &[&str]) -> Vec<String> {
     let mut problems = Vec::new();
     let mut called = BTreeSet::new();
-    for line in hkctl_lines(doc) {
+    for line in hk_lines(doc) {
         match command_of(&line) {
             Ok(command) => called.extend(command),
             Err(e) => problems.push(e),
@@ -206,7 +217,7 @@ fn command_problems_for(doc: &str, required: &[&str]) -> Vec<String> {
     }
     for required in required {
         if !called.contains(*required) {
-            problems.push(format!("no command line calls `hkctl {required}`"));
+            problems.push(format!("no command line calls `hk {required}`"));
         }
     }
     problems
@@ -384,7 +395,7 @@ fn inline_spans(doc: &str) -> Vec<String> {
     spans
 }
 
-/// The flags of `command` on hkctl's command line: each field's own, `--request`, and `--help`.
+/// The flags of `command` on hk's command line: each field's own, `--request`, and `--help`.
 fn flags_of(command: &Command) -> Vec<String> {
     let mut flags = vec!["--request".to_owned(), "--help".to_owned()];
     for field in command.fields {
@@ -400,14 +411,14 @@ fn flags_of(command: &Command) -> Vec<String> {
     flags
 }
 
-/// What is wrong with an inline span `span` that begins `hkctl`: a service or method hkctl does
-/// not have, or a flag neither the method nor hkctl has. A span whose first word after the
+/// What is wrong with an inline span `span` that begins `hk`: a service or method hk does
+/// not have, or a flag neither the method nor hk has. A span whose first word after the
 /// global flags is not a name of the command grammar (`[a-z][a-z0-9-]*`: a version, a
 /// placeholder such as `<service>`) is no command; `...` stands for global flags before the
 /// service and for the rest after it; values are passed over.
 fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
-    let commands = hkctl::served(COMMANDS);
-    // After the method, as in the script: a global flag but `--version`, which is hkctl's own
+    let commands = hk::served(COMMANDS);
+    // After the method, as in the script: a global flag but `--version`, which is hk's own
     // only before the service.
     let is_global = |flag: &str| {
         globals
@@ -447,8 +458,28 @@ fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
     let Some(service) = names.first() else {
         return Vec::new();
     };
+    // A hand verb of the ssh tunnel, or `ssh` and a host id: the flags are its own and hk's.
+    let host_id = service == "ssh"
+        && names.get(1).is_some_and(|m| {
+            !commands
+                .iter()
+                .any(|c| c.service_command == "ssh" && c.method_command == *m)
+        });
+    // `ssh-known-host` is run by ssh as its `KnownHostsCommand`, so only a span names it.
+    if host_id || HAND_VERBS.contains(&service.as_str()) || service == "ssh-known-host" {
+        let own = hk::hand_flags(service);
+        // Every word of the span: a flag may come before the host id too.
+        return span
+            .split_whitespace()
+            .skip(1)
+            .filter(|w| w.starts_with("--") && *w != "--" && *w != "--help")
+            .map(|w| w.split('=').next().unwrap_or(w))
+            .filter(|f| !own.contains(f) && !is_global(f))
+            .map(|f| format!("`{span}`: {service} has no flag {f}"))
+            .collect();
+    }
     if !commands.iter().any(|c| c.service_command == service) {
-        return vec![format!("`{span}`: hkctl has no service {service}")];
+        return vec![format!("`{span}`: hk has no service {service}")];
     }
     let Some(method) = names.get(1) else {
         return Vec::new();
@@ -470,19 +501,19 @@ fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
         .collect()
 }
 
-/// Every problem of the operator doc `path` (from the root) whose text is `doc`: a fenced `hkctl`
-/// line hkctl refuses, an inline `hkctl` span that names what hkctl does not have, and a fenced
+/// Every problem of the operator doc `path` (from the root) whose text is `doc`: a fenced `hk`
+/// line hk refuses, an inline `hk` span that names what hk does not have, and a fenced
 /// `hostkeeper ctl` line.
 fn doc_problems(path: &str, doc: &str) -> Vec<String> {
     let mut problems = Vec::new();
-    for line in hkctl_lines(doc) {
+    for line in hk_lines(doc) {
         if let Err(e) = command_of(&line) {
             problems.push(format!("{path}: {e}"));
         }
     }
     let globals = globals();
     for span in inline_spans(doc) {
-        if span == "hkctl" || span.starts_with("hkctl ") {
+        if span == "hk" || span.starts_with("hk ") {
             problems.extend(
                 span_problems(&span, &globals)
                     .into_iter()
@@ -490,19 +521,24 @@ fn doc_problems(path: &str, doc: &str) -> Vec<String> {
             );
         }
     }
+    if let Some(line) = lines_of(doc, &["hkctl"]).first() {
+        problems.push(format!(
+            "{path}: a fenced `hkctl` line; the operator docs name hk, not hkctl: {line}"
+        ));
+    }
     if let Some(line) = lines_of(doc, &["hostkeeper", "ctl"]).first() {
         problems.push(format!(
-            "{path}: a fenced `hostkeeper ctl` line; the operator docs name hkctl: {line}"
+            "{path}: a fenced `hostkeeper ctl` line; the operator docs name hk: {line}"
         ));
     }
     problems
 }
 
 /// Catches an operator doc (a runbook, README, CONTRIBUTING, a reference page) whose fenced
-/// `hkctl` line hkctl would refuse as a usage error, whose inline `hkctl` span names a service,
-/// method or flag hkctl does not have, or that still gives a `hostkeeper ctl` command.
+/// `hk` line hk would refuse as a usage error, whose inline `hk` span names a service,
+/// method or flag hk does not have, or that still gives a `hostkeeper ctl` command.
 #[test]
-fn every_operator_doc_names_hkctl() {
+fn every_operator_doc_names_hk() {
     let root = repo_root();
     let docs = operator_docs(&root);
     for needed in [DOC, NETWORK_INSTALL_DOC, "README.md", "CONTRIBUTING.md"] {
@@ -517,64 +553,64 @@ fn every_operator_doc_names_hkctl() {
     for path in &docs {
         let doc =
             std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("read {path}: {e}"));
-        lines += hkctl_lines(&doc).len();
+        lines += hk_lines(&doc).len();
         problems.extend(doc_problems(path, &doc));
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
-    assert!(lines > REQUIRED.len(), "{lines} fenced hkctl lines");
+    assert!(lines > REQUIRED.len(), "{lines} fenced hk lines");
 }
 
 /// The globals a call needs, as the runbooks write them.
 const CALL: &str =
-    "hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file>";
+    "hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file>";
 
 /// A fenced block holding the call `rest` with [`CALL`]'s globals.
 fn fenced_call(rest: &str) -> String {
     fenced(&format!("{CALL} {rest}"))
 }
 
-/// Catches the doc check passing a fenced `hostkeeper ctl` line, a line hkctl refuses, an inline
+/// Catches the doc check passing a fenced `hostkeeper ctl` line, a line hk refuses, an inline
 /// span with a misspelled method or a flag of `hostkeeper ctl` only, a fenced `hostkeeper ctl`
 /// line in the CI client's page, the last that held one; and catches it refusing a placeholder,
-/// a span cut by a line break, or a fenced line that only mentions hkctl.
+/// a span cut by a line break, or a fenced line that only mentions hk.
 #[test]
 fn the_doc_check_refuses_each_defect() {
     let good = fenced_call("hosts get --node-id <id>")
-        + "Run `hkctl hosts get\n--node-id <id>`, `hkctl <service> <method>`, `hkctl`,\n"
-        + "`hkctl --endpoint https://<l> releases ... --service api`, `hkctl --help` and \n"
-        + "``hkctl enrollment approve --replace=true ``, `hkctl 0.1.2+abc`; see `hostkeeper ctl`.\n"
-        + &fenced("echo hkctl nothing")
-        + &fenced("hkctl --version");
+        + "Run `hk hosts get\n--node-id <id>`, `hk <service> <method>`, `hk`,\n"
+        + "`hk --endpoint https://<l> releases ... --service api`, `hk --help` and \n"
+        + "``hk enrollment approve --replace=true ``, `hk 0.1.2+abc`; see `hostkeeper ctl`.\n"
+        + &fenced("echo hk nothing")
+        + &fenced("hk --version");
     assert_eq!(doc_problems("docs/x.md", &good), Vec::<String>::new());
     let cases = [
         (
             fenced("hostkeeper ctl hosts get --node-id n"),
-            "docs/x.md: a fenced `hostkeeper ctl` line; the operator docs name hkctl: \
+            "docs/x.md: a fenced `hostkeeper ctl` line; the operator docs name hk: \
              hostkeeper ctl hosts get --node-id n",
         ),
         (
-            fenced("hkctl hosts get --node-id n"),
-            "docs/x.md: hkctl hosts get --node-id n\na call needs --endpoint",
+            fenced("hk hosts get --node-id n"),
+            "docs/x.md: hk hosts get --node-id n\na call needs --endpoint",
         ),
         (
-            "`hkctl hosts gt --node-id n`".to_owned(),
-            "docs/x.md: `hkctl hosts gt --node-id n`: the service hosts has no method gt",
+            "`hk hosts gt --node-id n`".to_owned(),
+            "docs/x.md: `hk hosts gt --node-id n`: the service hosts has no method gt",
         ),
         (
-            "`hkctl host get`".to_owned(),
-            "docs/x.md: `hkctl host get`: hkctl has no service host",
+            "`hk host get`".to_owned(),
+            "docs/x.md: `hk host get`: hk has no service host",
         ),
         (
-            "`hkctl --output json\nhosts get --node-id n`".to_owned(),
-            "docs/x.md: `hkctl --output json hosts get --node-id n`: hkctl has no service json",
+            "`hk --output json\nhosts get --node-id n`".to_owned(),
+            "docs/x.md: `hk --output json hosts get --node-id n`: hk has no service json",
         ),
         (
-            "`hkctl hosts get --node-id n --version`".to_owned(),
-            "docs/x.md: `hkctl hosts get --node-id n --version`: hosts get has no flag --version",
+            "`hk hosts get --node-id n --version`".to_owned(),
+            "docs/x.md: `hk hosts get --node-id n --version`: hosts get has no flag --version",
         ),
         (
-            "`hkctl hosts get --transport=gateway`".to_owned(),
-            "docs/x.md: `hkctl hosts get --transport=gateway`: hosts get has no flag --transport",
+            "`hk hosts get --transport=gateway`".to_owned(),
+            "docs/x.md: `hk hosts get --transport=gateway`: hosts get has no flag --transport",
         ),
     ];
     for (doc, problem) in cases {
@@ -584,7 +620,7 @@ fn the_doc_check_refuses_each_defect() {
     assert_eq!(
         doc_problems(ci, &fenced("hostkeeper ctl releases converge --service s")),
         [format!(
-            "{ci}: a fenced `hostkeeper ctl` line; the operator docs name hkctl: \
+            "{ci}: a fenced `hostkeeper ctl` line; the operator docs name hk: \
              hostkeeper ctl releases converge --service s"
         )]
     );
@@ -622,7 +658,7 @@ fn the_operator_docs_are_every_markdown_file_but_the_design() {
     );
 }
 
-/// Catches a command line of the runbook that hkctl would refuse as a usage error (a renamed or
+/// Catches a command line of the runbook that hk would refuse as a usage error (a renamed or
 /// misspelled RPC or flag, a value a flag does not take, a call without its globals), a step of
 /// the procedure with no command, and a refusal token the code does not define or the runbook
 /// leaves out.
@@ -633,7 +669,7 @@ fn enrollment_doc_commands_parse() {
     let mut problems = command_problems(&doc);
     problems.extend(token_problems(&doc));
     assert!(problems.is_empty(), "{DOC}:\n{}", problems.join("\n"));
-    assert!(hkctl_lines(&doc).len() >= REQUIRED.len());
+    assert!(hk_lines(&doc).len() >= REQUIRED.len());
 }
 
 /// Every problem of the network-install runbook: a command line that does not parse, a call of
@@ -646,7 +682,7 @@ fn network_install_problems(doc: &str) -> Vec<String> {
     problems
 }
 
-/// Catches an `hkctl` line of the network-install runbook that hkctl would refuse as a usage
+/// Catches an `hk` line of the network-install runbook that hk would refuse as a usage
 /// error, a step of it with no command, and a refusal token the code does not define.
 #[test]
 fn network_install_doc_commands_parse() {
@@ -684,7 +720,7 @@ fn the_network_install_check_refuses_each_defect() {
         .collect();
     assert_eq!(
         network_install_problems(&without_approve),
-        ["no command line calls `hkctl enrollment approve`"]
+        ["no command line calls `hk enrollment approve`"]
     );
     let token = all + "A heartbeat is refused `revoked` at once.\n";
     assert_eq!(
@@ -716,8 +752,8 @@ fn a_misspelled_command_is_refused() {
         format!("{CALL} --output yaml enrollment list"),
         format!("{CALL} --transport gateway enrollment list"),
         format!("{CALL} enrollment"),
-        "hkctl enrollment list".to_owned(),
-        "hkctl --endpoint https://c.example.com --ca-file c enrollment list".to_owned(),
+        "hk enrollment list".to_owned(),
+        "hk --endpoint https://c.example.com --ca-file c enrollment list".to_owned(),
     ] {
         let problems = command_problems(&(required_calls() + &fenced(&line)));
         assert_eq!(problems.len(), 1, "{line}: {problems:?}");
@@ -730,24 +766,24 @@ fn a_misspelled_command_is_refused() {
         Vec::<String>::new()
     );
     assert_eq!(
-        hkctl_lines(&fenced(&continued)),
+        hk_lines(&fenced(&continued)),
         [format!(
             "{CALL} enrollment approve --replace true --reason \"two words\""
         )]
     );
     // A block whose last line is continued neither runs on into the next block nor is lost.
-    let cut = "hkctl enrollment list \\";
+    let cut = "hk enrollment list \\";
     for doc in [fenced(cut) + &fenced_call("enrollment list"), fenced(cut)] {
-        assert_eq!(hkctl_lines(&doc)[0], "hkctl enrollment list \\");
+        assert_eq!(hk_lines(&doc)[0], "hk enrollment list \\");
         let problems = command_problems(&(required_calls() + &doc));
-        assert_eq!(problems, ["a trailing \\ in: hkctl enrollment list \\"]);
+        assert_eq!(problems, ["a trailing \\ in: hk enrollment list \\"]);
     }
-    assert_eq!(command_of("hkctl enrollment approve --help"), Ok(None));
-    assert_eq!(command_of("hkctl --version"), Ok(None));
+    assert_eq!(command_of("hk enrollment approve --help"), Ok(None));
+    assert_eq!(command_of("hk --version"), Ok(None));
 }
 
 /// Catches a runbook that drops a step of the procedure, and command lines read from outside a
-/// fenced block or from a line that only mentions hkctl.
+/// fenced block or from a line that only mentions hk.
 #[test]
 fn every_step_of_the_procedure_has_a_command() {
     let without_approve: String = REQUIRED
@@ -755,11 +791,11 @@ fn every_step_of_the_procedure_has_a_command() {
         .filter(|r| **r != "enrollment approve")
         .map(|r| fenced_call(r))
         .collect();
-    let outside = "Run `hkctl enrollment approve` and\nhkctl enrollment approve --bad\n";
-    let doc = without_approve + outside + &fenced("echo hkctl enrollment approve --bad");
+    let outside = "Run `hk enrollment approve` and\nhk enrollment approve --bad\n";
+    let doc = without_approve + outside + &fenced("echo hk enrollment approve --bad");
     assert_eq!(
         command_problems(&doc),
-        ["no command line calls `hkctl enrollment approve`"]
+        ["no command line calls `hk enrollment approve`"]
     );
     assert_eq!(command_problems(&required_calls()), Vec::<String>::new());
 }
@@ -780,7 +816,7 @@ fn words_are_split_as_a_shell_splits_them() {
     assert_eq!(words("a \"b"), Err("an unclosed \" in: a \"b".to_owned()));
     assert_eq!(words("a 'b"), Err("an unclosed ' in: a 'b".to_owned()));
     assert_eq!(words("a \\"), Err("a trailing \\ in: a \\".to_owned()));
-    assert!(command_of("hkctl enrollment list --page-token 'x").is_err());
+    assert!(command_of("hk enrollment list --page-token 'x").is_err());
 }
 
 /// A refusal table under `heading` with `tokens`.

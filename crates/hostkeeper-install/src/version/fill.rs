@@ -4,7 +4,7 @@
 //! A repository installer makes its version directory itself: the core creates the staging
 //! directory, the caller writes into its real path, and the core makes the tree durable, seals
 //! it (the `.seal` file, with the tree digest of what was written and the package digest the
-//! order names), renames it in and makes it 0555. Prune, the boot reseal and the step runner's
+//! order names), renames it in and keeps it 0700. Prune, the boot reseal and the step runner's
 //! checks then treat it like any version. No manifest is read: what the tree holds is the
 //! caller's.
 
@@ -56,8 +56,8 @@ pub enum FillError<E: Debug + Display> {
 /// In order: the version-name check, the service directory, its lock and its orphans. When the version is on the host, its seal must be there, must be
 /// for `order.package_digest`, and the tree must have the seal's digest
 /// ([`UnpackError::ArtifactChanged`] otherwise); then `same` is called with the real path of the
-/// version (its error is [`FillError::Fill`], and nothing is changed), the directory is made 0555
-/// if a crash left it 0700, and the result is `fresh: false`. Otherwise a staging directory is
+/// version (its error is [`FillError::Fill`], and nothing is changed), the directory is made 0700
+/// if an earlier release left it open (0555), and the result is `fresh: false`. Otherwise a staging directory is
 /// made and `fill` is called with its real path (mode 0700, empty); its error is
 /// [`FillError::Fill`]. The filled tree is made durable (every regular file and directory
 /// synced, links neither followed nor synced), its tree digest is read, and the seal and the

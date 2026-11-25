@@ -181,6 +181,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         agent_version: version("0.9.0"),
         features: vec![Feature::DeferredV1],
         services: vec![ServiceFacts {
+            local_halt: None,
             name: service("x"),
             version: version("1.0"),
             health: Health::Absent,
@@ -206,6 +207,14 @@ fn the_heartbeat_json_has_the_wire_names() {
         installers: Vec::new(),
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        ssh: None,
+        prerequisites: None,
+        bmc: None,
+        serial_console: None,
+        maintenance: None,
     };
     let mut expected = serde_json::json!({
         "platform": "darwin-arm64",

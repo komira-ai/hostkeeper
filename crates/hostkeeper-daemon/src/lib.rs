@@ -18,7 +18,8 @@
 //!   and the standing halt, runs no hook, and switches the service under its lock alone, through
 //!   the installer of its version ([`verbs::force`]).
 //!   `uninstall` runs the sequence of design section 4.7 ([`uninstall`]), resumed from its
-//!   tombstone in `placed.json`.
+//!   tombstone in `placed.json`. Before any of these, a service's pin ([`pin`]) defers every
+//!   order that would change what it runs.
 //! - [`selfupdate`]: the update of hostkeeper itself (design section 6.6): an `update` of the
 //!   service `hostkeeper` refused while another service's update is unfinished, its new binary's
 //!   release judged against the daemon's oldest reader, its steps run under the step lock (built
@@ -35,16 +36,36 @@
 //!   which the start of a Mac's daemon does when its config is not there.
 //! - [`keep_awake`]: a Mac's power settings, made at the start of its daemon so that the Mac never
 //!   sleeps (`pmset`), unless the daemon config's `keep_awake` is off.
+//! - [`remote_login_probe`]: a Mac's report of what its daemon can do of Remote Login without
+//!   Full Disk Access, and of why the Mac may sleep, run once at its start and sent in every
+//!   heartbeat after ([`line_process`] reads `pmset -g log` for it).
+//! - [`full_disk_access`]: whether a Mac's Full Disk Access grant is in force for its daemon,
+//!   found by listing a directory only the grant allows and sent in every heartbeat.
 //! - [`adapters`]: the step launcher, service manager, unit directory, observer ports and package
 //!   check of the host's platform ([`adapters::Adapters::for_platform`]: systemd on Linux,
 //!   launchd on macOS), and the claims of its enrollment.
+//! - [`own_job`]: a Mac's check that the daemon's own launchd job is not marked disabled in
+//!   launchd's override database, run at the start and after each heartbeat; a job that is gets
+//!   enabled again and alerted.
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
+//! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
+//!   device every ten minutes.
+//! - [`serial_baseline`]: the serial console baseline (the GRUB file, the getty's drop-in and the
+//!   getty) a Linux host whose config names a `serial_console` keeps, looked at every ten minutes
+//!   and reported in its heartbeats as `applied`, `reboot_pending`, `failed` or `unsupported`.
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
+//! - [`ssh_host_mac`]: the Mac's host of the sshd setup that trusts the coordinator's SSH user CA:
+//!   the `Include` of `sshd_config`, the login user, the `com.apple.access_ssh` group and
+//!   Remote Login by `launchctl` (docs/design/ssh-through-coordinator.md, section 3).
+//! - [`host_identity`]: the host's certificate and key, kept after every step of the enrollment
+//!   loop at `/var/lib/hostkeeper/identity` for the group `hostkeeper-identity`
+//!   ([`identity_group`]), for the services of the host (docs/design/host-identity.md).
 //! - [`prune`]: after a confirmed switch (an update that ends `Succeeded`, a force that moved
-//!   `current`), the service's version directories but `current` and `previous` are deleted,
-//!   under the lock the order already holds.
-//! - [`halt`]: the held halt generation of each service, persisted, never lowered.
+//!   `current`), the service's version directories but `current`, `previous`, the pinned one
+//!   ([`pin`]), the ones the records use and the newest `--keep-versions` others are deleted,
+//!   under the lock the order already holds, and none while an update of the service is on trial.
+//! - [`halt`]: the generation a halt of each service is held under, persisted while the halt stands.
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
 //! - [`packages`]: the port that fetches a `macos-pkg` entry's `.pkg` by its pin,
@@ -59,10 +80,57 @@
 //!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`facts_file`]: the host's facts file, written from the facts the coordinator sends.
+//! - [`maintenance_state`]: the run state of the maintenance report, read from the host's
+//!   maintenance run record (`hostkeeper_steps::maintenance`), which [`maintenance_run`]'s
+//!   sequencer drives through a `maintain` order's steps ([`verbs::maintain`]), across a reboot.
+//! - [`operator_keys`]: the operator keys the coordinator sends (`operator-keys-v1`), put in the
+//!   managed block of the login account's `authorized_keys` ([`authorized_keys`], the block and the
+//!   file) and reported by digest in every heartbeat; [`login_account`] finds the account (root on
+//!   Linux, a Mac's one local administrator) and, on a Mac, [`mac_ssh`] makes sure Remote Login is
+//!   on and the account may use ssh.
+//! - [`ssh_setup`]: the host's sshd, set up to trust the coordinator's SSH user CA from the access
+//!   the coordinator sends (`ssh-v1`), with [`ssh_files`] (the files and the record's checks),
+//!   [`ssh_effective`] (what `sshd -T` says and the lockout rules judge of it) and [`ssh_host`] (the
+//!   host's port and its real adapters, Linux's and [`ssh_host_mac`]'s).
+//! - [`prerequisites`]: the host prerequisites the coordinator sends (`prerequisites-v1`), made sure
+//!   of on the host and reported by state in every heartbeat; [`xcode_clt`] is the one there is,
+//!   Apple's Command Line Tools, looked for and installed headless on a Mac.
+//! - [`maintenance_facts`]: what the host last found of its maintenance (`maintenance-v1`), looked
+//!   for on a worker once an hour and at once after a maintenance step, and reported in every
+//!   heartbeat to a coordinator that asks; the look reads its [`maintenance_collectors`] (each
+//!   platform's list), which are [`maintenance_collect`]'s `Collector`s: [`maintenance_host`] (the
+//!   OS, the kernels, the boot), [`maintenance_reboot`] (a reboot the host asks for) and the
+//!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
+//!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on a
+//!   Mac, [`maintenance_macos`] (`sw_vers`, the hardware serial, and the macOS updates
+//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]), [`maintenance_mac`]
+//!   (FileVault, the data volume's free space, the Command Line Tools), [`maintenance_xcode`] (the
+//!   Xcodes installed and the one selected), [`maintenance_account`] (the update account's state)
+//!   and [`maintenance_mdm`] (the device-management settings that conflict with a run), reading
+//!   property lists through [`maintenance_plist`].
+//! - [`update_account`]: a Mac's update account, read from its root-only file, and the update
+//!   call, which gives its password to the program on its standard input alone.
+//! - `update_account_make`: the update account made at a Mac's start when it is missing (`sysadminctl
+//!   -addUser`), hidden, with no login shell and out of `com.apple.access_ssh`, and given a Secure
+//!   Token by the bootstrap's administrator (`sysadminctl -secureTokenOn`), the passwords on the
+//!   program's standard input alone.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
-//! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags, `hostkeeper maintenance-hook`, and the verbs
+//!   root runs on the host itself; the binary only forwards to it.
+//! - [`local`]: `hostkeeper activate`, `pin` and `unpin`, run by root with the daemon stopped:
+//!   a force to a version the host keeps, with no fetch ([`verbs::force::activate()`]), and the
+//!   pin that holds the coordinator's orders for a service.
+//! - [`maintenance_hook`]: `hostkeeper maintenance-hook <prepare|cutover|verify>`, the OS work of
+//!   a maintenance run: the parameters of the run's `maintain` order, the work of each kind
+//!   (`macos`, `xcode`, `linux`, `reboot`) found by the host's platform (on a Mac, the `macos`
+//!   kind's stage: `softwareupdate --download` or `--fetch-full-installer` after a free-space
+//!   check), the reboot recorded in the run record before it is asked for, and the Linux kinds'
+//!   `verify`: the host booted again, nothing of the run still due and every service healthy.
+//! - [`maintenance_linux`]: the `linux` and `reboot` kinds of that hook on a Linux host: the
+//!   install of the host's package manager (`apt`, `dnf` or `apk`), the question whether the host
+//!   then needs a reboot, the kernel it runs after the reboot, and the reboot itself.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and
@@ -82,6 +150,8 @@
 
 pub mod adapters;
 pub mod archive_versions;
+pub mod authorized_keys;
+pub mod bmc;
 pub mod boot;
 pub mod builtin;
 pub mod checks;
@@ -92,33 +162,68 @@ pub mod entry;
 pub mod executor;
 pub mod facts_file;
 mod files;
+pub mod full_disk_access;
 pub mod halt;
 pub mod handover;
 pub mod hook_log;
+pub mod host_identity;
+pub mod identity_group;
 pub mod installed;
 pub mod installers;
 pub mod ipmi;
 pub mod keep_awake;
+#[cfg(test)]
+mod key_fixture_tests;
 mod launchd_plist;
 pub mod layout;
+pub mod line_process;
 pub mod link_adapters;
 pub mod links;
+pub mod local;
 pub mod locks;
+pub mod login_account;
 pub mod mac;
 pub mod mac_config;
 pub mod mac_files;
+pub mod mac_ssh;
 pub mod macos_pkg;
+pub mod maintenance_account;
+pub mod maintenance_apk;
+pub mod maintenance_apt;
+pub mod maintenance_collect;
+pub mod maintenance_collectors;
+pub mod maintenance_dnf;
+pub mod maintenance_facts;
+pub mod maintenance_hook;
+pub mod maintenance_host;
+pub mod maintenance_linux;
+pub mod maintenance_mac;
+pub mod maintenance_macos;
+pub mod maintenance_mdm;
+pub mod maintenance_own;
+pub mod maintenance_plist;
+pub mod maintenance_reboot;
+pub mod maintenance_run;
+pub mod maintenance_softwareupdate;
+pub mod maintenance_state;
+pub mod maintenance_xcode;
 pub mod mirror;
 pub mod node;
 pub mod notify;
 pub mod observer;
+pub mod operator_keys;
+pub mod own_job;
 pub mod own_package;
+pub mod package_dirs;
 pub mod packaged;
 pub mod packages;
+pub mod pin;
 pub mod place;
+pub mod prerequisites;
 pub mod prune;
 pub mod real_packages;
 pub mod refusal;
+pub mod remote_login_probe;
 pub mod repositories;
 pub mod repository;
 pub mod repository_push;
@@ -126,6 +231,12 @@ pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
+pub mod serial_baseline;
+pub mod ssh_effective;
+pub mod ssh_files;
+pub mod ssh_host;
+pub mod ssh_host_mac;
+pub mod ssh_setup;
 pub mod stamp;
 pub mod start;
 pub mod target;
@@ -134,9 +245,12 @@ pub mod testing;
 pub mod uninstall;
 pub mod unit_links;
 pub mod unix_clock;
+pub mod update_account;
+mod update_account_make;
 pub mod verb;
 pub mod verbs;
 pub mod watchers;
+pub mod xcode_clt;
 
 pub use boot::{BootError, BootReport, BootStep, Outcome, ServiceBoot, Stage};
 pub use executor::{

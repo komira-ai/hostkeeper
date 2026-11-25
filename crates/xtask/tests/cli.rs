@@ -117,6 +117,66 @@ fn install_tool_takes_the_member_out_of_a_tar_gz_with_status_0() {
 }
 
 #[test]
+fn install_tool_decodes_a_zst_download_with_status_0() {
+    // Catches: `--extract zst` not reaching the install (the compressed bytes would be installed),
+    // or a status other than 0 for a good zstd download, the way buck2's releases ship.
+    let d = dir("zst");
+    let archive =
+        ruzstd::encoding::compress_to_vec(TOOL, ruzstd::encoding::CompressionLevel::Fastest);
+    std::fs::write(d.join("buck2.zst"), &archive).expect("download");
+    let digest = sha256(&archive);
+    let o = run(
+        &d,
+        &[
+            "install-tool",
+            "--download",
+            "buck2.zst",
+            "--sha256",
+            &digest,
+            "--out",
+            "bin/buck2",
+            "--extract",
+            "zst",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        format!("ok: buck2.zst has SHA-256 {digest}; installed bin/buck2\n")
+    );
+    assert_installed(&d.join("bin/buck2"));
+}
+
+#[test]
+fn install_tool_with_zst_and_a_member_is_a_usage_error_with_status_2() {
+    // Catches: a `--member` silently ignored for a zstd download, which holds one file and no
+    // members, or the misfit reported as a failure (status 1).
+    let d = dir("zst-member");
+    let o = run(
+        &d,
+        &[
+            "install-tool",
+            "--download",
+            "buck2.zst",
+            "--sha256",
+            &"0".repeat(64),
+            "--out",
+            "buck2",
+            "--extract",
+            "zst",
+            "--member",
+            "buck2",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(
+        stderr(&o),
+        "xtask: --extract zst is one compressed file: it takes no --member\n"
+    );
+    assert!(!d.join("buck2").exists());
+}
+
+#[test]
 fn install_tool_with_extract_and_no_member_is_a_usage_error_with_status_2() {
     // Catches: flags that do not fit together reported as a failure (status 1), or accepted.
     let d = dir("usage");

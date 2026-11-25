@@ -42,9 +42,9 @@ pub(crate) fn locate(
     if !problems.is_empty() {
         return Err(Error::Refused(problems));
     }
-    let [ci, privileged, artifacts] = ids;
+    let [ci, artifacts] = ids;
     let mut lines = vec![format!(
-        "{commit} is on {MAIN}; ci.yml run {ci}, privileged.yml run {privileged} and artifacts.yml run {artifacts} succeeded"
+        "{commit} is on {MAIN}; ci.yml run {ci} and artifacts.yml run {artifacts} succeeded"
     )];
     lines.extend(answer(output, vec![format!("run-id={artifacts}")])?);
     Ok(lines)

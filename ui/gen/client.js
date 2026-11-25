@@ -21,6 +21,14 @@ export function createClient(call) {
     audit: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Audit/List", request),
     }),
+    console: Object.freeze({
+      open: (request) => call("hostkeeper.operator.v1.Console/Open", request),
+      power: (request) => call("hostkeeper.operator.v1.Console/Power", request),
+      setBootDevice: (request) => call("hostkeeper.operator.v1.Console/SetBootDevice", request),
+      list: (request) => call("hostkeeper.operator.v1.Console/List", request),
+      close: (request) => call("hostkeeper.operator.v1.Console/Close", request),
+      probe: (request) => call("hostkeeper.operator.v1.Console/Probe", request),
+    }),
     enrollment: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Enrollment/List", request),
       approve: (request) => call("hostkeeper.operator.v1.Enrollment/Approve", request),
@@ -62,6 +70,14 @@ export function createClient(call) {
       removeDevice: (request) => call("hostkeeper.operator.v1.Layout/RemoveDevice", request),
       putSled: (request) => call("hostkeeper.operator.v1.Layout/PutSled", request),
       removeSled: (request) => call("hostkeeper.operator.v1.Layout/RemoveSled", request),
+    }),
+    maintenance: Object.freeze({
+      schedule: (request) => call("hostkeeper.operator.v1.Maintenance/Schedule", request),
+      list: (request) => call("hostkeeper.operator.v1.Maintenance/List", request),
+      get: (request) => call("hostkeeper.operator.v1.Maintenance/Get", request),
+      cancel: (request) => call("hostkeeper.operator.v1.Maintenance/Cancel", request),
+      retryHost: (request) => call("hostkeeper.operator.v1.Maintenance/RetryHost", request),
+      putBack: (request) => call("hostkeeper.operator.v1.Maintenance/PutBack", request),
     }),
     mdm: Object.freeze({
       listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),
@@ -119,6 +135,12 @@ export function createClient(call) {
       hold: (request) => call("hostkeeper.operator.v1.Services/Hold", request),
       unhold: (request) => call("hostkeeper.operator.v1.Services/Unhold", request),
     }),
+    ssh: Object.freeze({
+      signUserCert: (request) => call("hostkeeper.operator.v1.Ssh/SignUserCert", request),
+      hostKeys: (request) => call("hostkeeper.operator.v1.Ssh/HostKeys", request),
+      pinHostKeys: (request) => call("hostkeeper.operator.v1.Ssh/PinHostKeys", request),
+      revoke: (request) => call("hostkeeper.operator.v1.Ssh/Revoke", request),
+    }),
     users: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Users/List", request),
       create: (request) => call("hostkeeper.operator.v1.Users/Create", request),
@@ -126,6 +148,10 @@ export function createClient(call) {
       enable: (request) => call("hostkeeper.operator.v1.Users/Enable", request),
       resetPassword: (request) => call("hostkeeper.operator.v1.Users/ResetPassword", request),
       delete: (request) => call("hostkeeper.operator.v1.Users/Delete", request),
+    }),
+    xcode: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Xcode/List", request),
+      remove: (request) => call("hostkeeper.operator.v1.Xcode/Remove", request),
     }),
   });
 }

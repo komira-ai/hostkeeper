@@ -5,6 +5,7 @@ use serde_json::json;
 
 use super::*;
 use crate::force::ForceTargets;
+use crate::maintenance_policy::{LinuxScope, Maintenance, XcodeDefault};
 use crate::ops::HaltOrigin;
 use crate::registry::Digest;
 use crate::rollouts::Pause;
@@ -108,10 +109,11 @@ fn a_package_name_is_one_to_255_bytes_of_its_alphabet() {
 }
 
 /// Proves: the default policy is the default of every key of section 3 (no stage, which is 50 and
-/// 100 percent; no canary; 0 bake beats; manual rollback; 25 percent and 2 hosts; 300, 2 and 3600
-/// seconds; `max_updating` the whole stage; `min_up` 0; the coordinator's `live_rollouts`), it is
-/// written `{}`, and `{}` reads as it; an explicit `max_updating` of 1 is written, and the default
-/// is not.
+/// 100 percent; no canary; 0 bake beats; manual rollback; 25 percent and 2 hosts; failed hosts
+/// continue; 300, 2 and 3600 seconds; `max_updating` the whole stage; `min_up` 0; the
+/// coordinator's `live_rollouts`), it is written `{}`, and `{}` reads as it; an explicit
+/// `max_updating` of 1 is written, and the default is not; `failed_hosts` is written only when it
+/// is `stop`, and a group written before the key (`{}`) reads as `continue`.
 ///
 /// Catches: a default written into every group's file, or a key read with another default than
 /// the one the rollout file had.
@@ -125,6 +127,7 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
             policy.bake_beats,
             policy.rollback,
             policy.rollback_after_failed,
+            policy.failed_hosts,
             policy.defer_backoff,
             policy.max_updating,
             policy.min_up,
@@ -139,6 +142,7 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
                 percent: 25,
                 min_hosts: 2
             },
+            FailedHosts::Continue,
             DeferBackoff {
                 initial_secs: 300,
                 factor: 2,
@@ -165,9 +169,42 @@ fn the_default_policy_is_written_as_nothing_and_read_back_from_nothing() {
         serde_json::from_value::<Policy>(json!({"max_updating": 1})).expect("reads"),
         capped
     );
+    let stops = Policy {
+        failed_hosts: FailedHosts::Stop,
+        ..Policy::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&stops).expect("serialises"),
+        json!({"failed_hosts": "stop"})
+    );
+    assert_eq!(
+        serde_json::from_value::<Policy>(json!({"failed_hosts": "stop"})).expect("reads"),
+        stops
+    );
+    assert_eq!(
+        serde_json::from_value::<Policy>(json!({"failed_hosts": "continue"})).expect("reads"),
+        policy
+    );
     assert_eq!(
         serde_json::from_value::<Policy>(json!({})).expect("reads"),
         policy
+    );
+    assert_eq!(policy.maintenance, Maintenance::default());
+    let named = json!({"maintenance": {}});
+    assert_eq!(
+        serde_json::from_value::<Policy>(named).expect("reads"),
+        policy
+    );
+    let tabled = Policy {
+        maintenance: Maintenance {
+            batch: 2,
+            ..Maintenance::default()
+        },
+        ..Policy::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&tabled).expect("serialises"),
+        json!({"maintenance": {"batch": 2}})
     );
     assert_eq!(policy.check(), Ok(()));
     let halves = [RawStage::Percent(50), RawStage::Percent(100)];
@@ -198,6 +235,7 @@ fn every_key() -> Policy {
             percent: 10,
             min_hosts: 3,
         },
+        failed_hosts: FailedHosts::Stop,
         defer_backoff: DeferBackoff {
             initial_secs: 60,
             factor: 3,
@@ -206,6 +244,16 @@ fn every_key() -> Policy {
         max_updating: 0,
         min_up: 5,
         live_rollouts: Some(2),
+        maintenance: Maintenance {
+            xcode_keep: 2,
+            xcode_default: XcodeDefault::Version("26.1".to_owned()),
+            macos_major: true,
+            linux_scope: LinuxScope::All,
+            batch: 3,
+            min_serving: 0,
+            drain_deadline_secs: 900,
+            return_secs: 1800,
+        },
     }
 }
 
@@ -227,10 +275,21 @@ fn a_policy_with_every_key_is_written_by_name_and_read_back() {
             "bake_beats": 4,
             "rollback": "automatic",
             "rollback_after_failed": {"percent": 10, "min_hosts": 3},
+            "failed_hosts": "stop",
             "defer_backoff": {"initial_secs": 60, "factor": 3, "max_secs": 7200},
             "max_updating": 0,
             "min_up": 5,
-            "live_rollouts": 2
+            "live_rollouts": 2,
+            "maintenance": {
+                "xcode_keep": 2,
+                "xcode_default": "26.1",
+                "macos_major": true,
+                "linux_scope": "all",
+                "batch": 3,
+                "min_serving": 0,
+                "drain_deadline_secs": 900,
+                "return_secs": 1800
+            }
         })
     );
     assert_eq!(
@@ -356,6 +415,41 @@ fn every_policy_key_is_checked_at_its_bounds() {
     .check()
     .expect_err("refused");
     assert_eq!(error.key, "min_up");
+}
+
+/// Proves: a maintenance key out of range is refused as `maintenance: <why>`, with the reason of
+/// the table's check, and the policy's earlier keys are named before it; a policy written by the
+/// release before, with no `maintenance` key, reads as the default table.
+///
+/// Catches: a table out of range stored because the policy's check skips it, or a group of the
+/// release before read with a table other than the default.
+#[test]
+fn a_maintenance_key_out_of_range_is_refused_and_an_absent_table_is_the_default() {
+    let with = |edit: PolicyEdit<'_>| {
+        let mut policy = Policy::default();
+        edit(&mut policy);
+        policy.check().map_err(|e| e.to_string())
+    };
+    assert_eq!(
+        with(&|p| p.maintenance.batch = 0),
+        Err("maintenance: batch is not 1 to 10000".to_owned())
+    );
+    assert_eq!(
+        with(&|p| p.maintenance.xcode_keep = 5),
+        Err("maintenance: xcode_keep is over 4".to_owned())
+    );
+    assert_eq!(with(&|p| p.maintenance.xcode_keep = 4), Ok(()));
+    assert_eq!(
+        with(&|p| {
+            p.min_up = 10_001;
+            p.maintenance.batch = 0;
+        }),
+        Err("min_up: is over 10000".to_owned())
+    );
+    let before = json!({"bake_beats": 3, "min_up": 1});
+    let read = serde_json::from_value::<Policy>(before).expect("reads");
+    assert_eq!(read.maintenance, Maintenance::default());
+    assert_eq!(read.check(), Ok(()));
 }
 
 /// Proves: a policy key this build does not know is refused, as is a stage's.

@@ -17,10 +17,10 @@ description = "The boot menus and autoinstall seeds pxe serves: the fixed grub.c
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The MAC grammar of the inventory (`MacAddress`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
-# The host id and role grammars of the inventory record (`HostId`, `RoleName`).
+# The host id and role grammars of the inventory record (`HostId`, `RoleName`), and the rule
+# of one SSH public key line (`operator_keys::public_key`).
 hostkeeper-wire = { path = "../hostkeeper-wire" }
-# The daemon config is carried in the seed as base64, byte for byte; an SSH public key's blob is
-# decoded to check the key type it names.
+# The daemon config is carried in the seed as base64, byte for byte.
 base64.workspace = true
 thiserror.workspace = true
 
@@ -30,3 +30,7 @@ saphyr-parser.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The Buck2 build's policy for this package (docs/farm.md): none of its own; it takes
+# [workspace.metadata.buildrules] of the root Cargo.toml.

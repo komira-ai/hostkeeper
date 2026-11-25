@@ -31,14 +31,25 @@ fn failure(what: &str, why: &str) -> PortError {
     PortError::new(what, why)
 }
 
+/// The wait of a test's `gh`: none.
+fn no_wait(_: std::time::Duration) {}
+
+/// A `gh` over `exec` that does not wait between the attempts of a read.
+fn unwaiting<E: Exec>(exec: E) -> Gh<E> {
+    Gh {
+        exec,
+        wait: Sleep(no_wait),
+    }
+}
+
 /// A `gh` that answers the command line `line` with `stdout`.
 fn gh(line: &[&str], stdout: &str) -> Gh<FakeExec> {
-    Gh::new(FakeExec::default().on(line, true, stdout, ""))
+    unwaiting(FakeExec::default().on(line, true, stdout, ""))
 }
 
 /// A `gh` whose command line `line` ends unsuccessfully, printing `stderr`.
 fn failing(line: &[&str], stderr: &str) -> Gh<FakeExec> {
-    Gh::new(FakeExec::default().on(line, false, "", stderr))
+    unwaiting(FakeExec::default().on(line, false, "", stderr))
 }
 
 fn calls(gh: &Gh<FakeExec>) -> Vec<Vec<String>> {
@@ -171,7 +182,15 @@ fn a_failing_gh_reports_its_trimmed_stderr() {
         api.runs(&repo(), "ci.yml", &commit()),
         Err(failure(
             &format!("gh api {path}"),
-            "gh: Server Error (HTTP 500)"
+            "gh: Server Error (HTTP 500) (the last of 4 attempts)"
+        ))
+    );
+    let api = failing(&["gh", "api", &path], "gh: Bad credentials (HTTP 401)\n");
+    assert_eq!(
+        api.runs(&repo(), "ci.yml", &commit()),
+        Err(failure(
+            &format!("gh api {path}"),
+            "gh: Bad credentials (HTTP 401)"
         ))
     );
 }
@@ -875,7 +894,9 @@ fn verify_refuses_a_file_or_bundle_path_that_is_not_utf8() {
     assert_eq!(calls(&api), Vec::<Vec<String>>::new());
 }
 
+mod server_errors;
 mod signer;
+mod verify_each;
 
 #[test]
 fn jobs_reads_the_jobs_of_every_page_in_order_with_their_conclusions() {

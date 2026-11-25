@@ -116,7 +116,7 @@ impl Fake {
     }
 
     /// From now on, the fake answers `health` as its health ([`Backend::health`]), as a store
-    /// whose link is lost or that was deposed does; it still takes commits.
+    /// whose link is lost does; it still takes commits.
     pub(crate) fn set_health(&self, health: Health) {
         self.lock().health = Some(health);
     }
@@ -194,6 +194,7 @@ impl Backend for Fake {
                 .iter()
                 .map(|(jti, until)| (jti.clone(), *until))
                 .collect(),
+            facts: None,
         })
     }
 

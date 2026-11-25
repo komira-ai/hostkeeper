@@ -72,6 +72,7 @@ fn a_refused_install_is_sent_until_acknowledged_and_its_absent_entry_stays_until
 
     let absent = |last_update: Option<OrderResult>| {
         Some(hostkeeper_link::ServiceFacts {
+            local_halt: None,
             name: service("web"),
             version: version("2.0"),
             health: Health::Absent,

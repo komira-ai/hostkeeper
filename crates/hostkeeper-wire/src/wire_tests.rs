@@ -15,6 +15,7 @@ fn v(text: &str) -> crate::version::Version {
 #[test]
 fn a_heartbeat_is_written_and_read_in_one_spelling() {
     let busy = Heartbeat {
+        local_halt: None,
         platform: Platform::DarwinArm64,
         version: v("0.1.7+g0123456789ab-3"),
         health: Health::Unhealthy,
@@ -35,6 +36,7 @@ fn a_heartbeat_is_written_and_read_in_one_spelling() {
         cert_not_after_unix: None,
         last_renew_error: None,
         record_try: None,
+        maintenance: None,
     };
     assert_eq!(
         serde_json::to_value(&busy).expect("json"),

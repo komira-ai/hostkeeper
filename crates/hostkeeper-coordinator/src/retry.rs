@@ -5,7 +5,9 @@
 //! after an operator clears the halt the failure raised (which acknowledges the failure: the host
 //! leaves the update plan, `docs/design/rollout-update-plans.md` section 1.5), and not after the
 //! host is excluded and included again. Ordering it again is the operator's decision, so it is
-//! this call: it sets the failed report aside ([`crate::fleet::retry`]), and the host is ordered
+//! this call (but for a failure the host can clear by itself, in a host group, which the
+//! coordinator sets aside by itself once the group's `defer_backoff` has passed:
+//! [`crate::fleet::Fleet::retry_by_itself`]): it sets the failed report aside ([`crate::fleet::retry`]), and the host is ordered
 //! the service's desired version at its next heartbeat, as the update plan and the gate's other
 //! rules let it, at the try after the failed one ([`crate::fleet::Fleet::next_try`]).
 //!

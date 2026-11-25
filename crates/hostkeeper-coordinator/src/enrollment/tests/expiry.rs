@@ -21,7 +21,9 @@ use super::support::{
 use crate::enrollment::{DEFAULT_REQUEST_TTL_SECS, os_random};
 use crate::listen::reload_all;
 use crate::operator::Caller;
+use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsState;
+use crate::prerequisites::HostPrerequisites;
 use crate::rollback_tests::unwritable;
 use crate::testutil::{Log, OPERATOR};
 use crate::tokens::OperatorTokens;
@@ -31,10 +33,19 @@ const TTL: u64 = DEFAULT_REQUEST_TTL_SECS;
 
 /// One look of the coordinator's reload tick over `enrollment`, with no TLS file.
 async fn tick(enrollment: &Rig) {
+    tick_expiring(enrollment, true).await;
+}
+
+/// [`tick`] that expires the overdue requests only when `expire` is set.
+async fn tick_expiring(enrollment: &Rig, expire: bool) {
     reload_all(
         Some(&enrollment.enrollment),
+        expire,
         &[],
         &OperatorTokens::single(OPERATOR),
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
 }
@@ -76,6 +87,38 @@ fn listed(
         )
         .expect("listed")
         .requests
+}
+
+/// Proves: a tick whose `expire` is false expires no request, however overdue (the request stays
+/// listed pending and nothing is audited), and the next tick with `expire` true expires it with
+/// one `request_expired` entry.
+///
+/// Catches: a tick that sweeps although the coordinator did not ask it to (the sweep of a
+/// coordinator that does not own the expiry), and a sweep that a skipped tick loses for good.
+#[tokio::test]
+async fn a_tick_that_does_not_expire_leaves_an_overdue_request_waiting() {
+    let enrollment = Rig::new("expiry-tick-off");
+    let rig = coordinator_over("expiry-tick-off-coordinator", &enrollment).await;
+    let operator = rig.coordinator.caller(Some(OPERATOR)).await;
+    let key = HostKey::new();
+    enrollment
+        .enrollment
+        .enroll(enroll_request(&key, "machine-1"))
+        .expect("requested");
+    let before = audit_of(&rig.coordinator).len();
+
+    enrollment.clock.set(NOW + TTL + 100);
+    tick_expiring(&enrollment, false).await;
+    assert_eq!(audit_after(&rig.coordinator, before), []);
+    let pending = listed(&rig, &operator, false);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].state, EnrollmentRequestState::Pending as i32);
+    assert_eq!(listed(&rig, &operator, true), []);
+
+    tick_expiring(&enrollment, true).await;
+    assert_eq!(audit_after(&rig.coordinator, before), [expired(&key, TTL)]);
+    assert_eq!(listed(&rig, &operator, false), []);
+    assert_eq!(listed(&rig, &operator, true).len(), 1);
 }
 
 /// Proves the brief's first two cases at the coordinator's periodic point: a request just under

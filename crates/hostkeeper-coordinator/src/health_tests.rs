@@ -12,7 +12,9 @@ use hyper::{Method, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::{mpsc, oneshot};
 
-use super::{HEALTH_PATH, Serving, Verdict, answer, connection, drain_on, serve, verdict};
+use super::{
+    HEALTH_PATH, READY_PATH, Serving, Verdict, answer, connection, drain_on, serve, verdict,
+};
 use crate::marks_support::rig_on;
 use crate::service::Coordinator;
 use crate::store::{Fake, Health};
@@ -56,9 +58,14 @@ async fn asked(
     (status, body, kind, cache)
 }
 
-/// The status and the body of the answer to `GET /healthz`.
+/// The status and the body of the answer to `GET /readyz`.
 async fn get(coordinator: &Coordinator, serving: &Serving) -> (StatusCode, Bytes) {
-    let (status, body, _, _) = asked(coordinator, serving, &Method::GET, HEALTH_PATH).await;
+    get_path(coordinator, serving, READY_PATH).await
+}
+
+/// The status and the body of the answer to `GET` of `path`.
+async fn get_path(coordinator: &Coordinator, serving: &Serving, path: &str) -> (StatusCode, Bytes) {
+    let (status, body, _, _) = asked(coordinator, serving, &Method::GET, path).await;
     (status, body)
 }
 
@@ -95,13 +102,12 @@ async fn a_serving_coordinator_on_a_store_that_takes_writes_is_200_ok() {
     assert_eq!((fake.commits(), fake.audit()), (commits, lines));
 }
 
-/// Proves: `503` with exactly one reason token as the body: `starting` before every listener is
-/// bound, `store_unreachable` while the store's link is lost, `not_writer` once the store is
-/// deposed; `starting` wins over either store state, a `HEAD` is answered as a `GET`, and
-/// a link made again is `200 ok` again.
+/// Proves: `/readyz` is `503` with exactly one reason token as the body: `starting` before every listener is
+/// bound, `store_unreachable` while the store's link is lost; `starting` wins over the store's
+/// state, a `HEAD` is answered as a `GET`, and a link made again is `200 ok` again.
 ///
-/// Catches: a coordinator that cannot write (link lost) or that another coordinator replaced
-/// as the writer read as healthy; a reason token other than the three, or with more beside it;
+/// Catches: a coordinator that cannot write (link lost) read as healthy; a reason token other
+/// than these, or with more beside it;
 /// a start read as a store failure; a recovery the probe never sees.
 #[tokio::test]
 async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
@@ -124,24 +130,13 @@ async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
         unavailable("starting"),
         "starting first"
     );
-    fake.set_health(Health::Deposed { found: 7 });
-    assert_eq!(
-        get(&rig.coordinator, &serving).await,
-        unavailable("starting"),
-        "starting first"
-    );
 
     serving.set();
     assert_eq!(
         get(&rig.coordinator, &serving).await,
-        unavailable("not_writer")
-    );
-    fake.set_health(Health::Lost);
-    assert_eq!(
-        get(&rig.coordinator, &serving).await,
         unavailable("store_unreachable")
     );
-    let (status, body, _, _) = asked(&rig.coordinator, &serving, &Method::HEAD, HEALTH_PATH).await;
+    let (status, body, _, _) = asked(&rig.coordinator, &serving, &Method::HEAD, READY_PATH).await;
     assert_eq!(
         (status, body),
         unavailable("store_unreachable"),
@@ -155,7 +150,7 @@ async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
     );
 }
 
-/// Proves: every verdict's status and token: `200 ok`, and `503` for `starting`, `not_writer`,
+/// Proves: every verdict's status and token: `200 ok`, and `503` for `starting`,
 /// `store_unreachable` and `draining`.
 ///
 /// Catches: a reason that answers `200`, or two verdicts that share a token.
@@ -167,11 +162,6 @@ fn each_verdict_has_its_status_and_token() {
             Verdict::Starting,
             StatusCode::SERVICE_UNAVAILABLE,
             "starting",
-        ),
-        (
-            Verdict::NotWriter,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "not_writer",
         ),
         (
             Verdict::StoreUnreachable,
@@ -189,9 +179,9 @@ fn each_verdict_has_its_status_and_token() {
     }
 }
 
-/// Proves: once drained, `GET /healthz` is `503` with the body `draining` exactly, whatever
+/// Proves: once drained, `GET /readyz` is `503` with the body `draining` exactly, whatever
 /// else holds: a coordinator still starting, one serving on a store that takes writes, one whose
-/// store's link is lost and one deposed; a `HEAD` is answered as a `GET`; neither a link made
+/// store's link is lost; a `HEAD` is answered as a `GET`; neither a link made
 /// again nor a [`Serving::set`] after the drain (a start that finishes its binds late) brings
 /// back `200 ok`; the answer changes nothing the fake holds. Other paths stay `404 not_found`.
 ///
@@ -229,14 +219,13 @@ async fn a_drained_coordinator_is_503_draining_whatever_else_holds() {
     assert_eq!(get(&rig.coordinator, &serving).await, draining, "serving");
     for (health, what) in [
         (Health::Lost, "the link lost"),
-        (Health::Deposed { found: 7 }, "deposed"),
         (Health::Up, "the link made again"),
     ] {
         fake.set_health(health);
         assert_eq!(get(&rig.coordinator, &serving).await, draining, "{what}");
     }
     let (status, body, kind, cache) =
-        asked(&rig.coordinator, &serving, &Method::HEAD, HEALTH_PATH).await;
+        asked(&rig.coordinator, &serving, &Method::HEAD, READY_PATH).await;
     assert_eq!(
         (status, body, kind.as_str(), cache.as_str()),
         (
@@ -288,6 +277,57 @@ async fn the_stop_drains_and_answers_what_it_answered() {
     assert!(failed.is_draining(), "a failed stop drains too");
 }
 
+/// Proves: `/healthz` is the process's liveness and `/readyz` its readiness, in every state:
+/// before every listener is bound both are `503 starting`; once serving both are `200 ok`; with the
+/// store's link lost `/readyz` is `503 store_unreachable` and `/healthz` stays `200 ok`; once
+/// draining `/readyz` is `503 draining` and `/healthz` stays `200 ok`; each for `GET` and `HEAD`,
+/// and a `POST` of either is `404 not_found`.
+///
+/// Catches: a liveness check that fails with the database or with a drain, so the orchestrator
+/// kills a coordinator that is doing what it should; a readiness check that stays `200` where the
+/// edge must stop sending connections.
+#[tokio::test]
+async fn healthz_is_liveness_and_readyz_is_readiness_in_every_state() {
+    let fake = Fake::new();
+    let rig = rig_on("health-readyz", &fake, "");
+    let serving = Serving::default();
+    let say =
+        |status: StatusCode, token: &'static str| (status, Bytes::from_static(token.as_bytes()));
+    let down = StatusCode::SERVICE_UNAVAILABLE;
+    let steps = [
+        (say(down, "starting"), say(down, "starting")),
+        (say(StatusCode::OK, "ok"), say(StatusCode::OK, "ok")),
+        (say(StatusCode::OK, "ok"), say(down, "store_unreachable")),
+        (say(StatusCode::OK, "ok"), say(down, "draining")),
+    ];
+    for (step, (alive, ready)) in steps.into_iter().enumerate() {
+        match step {
+            1 => serving.set(),
+            2 => fake.set_health(Health::Lost),
+            3 => serving.drain(),
+            _ => {}
+        }
+        for method in [Method::GET, Method::HEAD] {
+            let health = asked(&rig.coordinator, &serving, &method, HEALTH_PATH).await;
+            assert_eq!(
+                (health.0, health.1),
+                alive,
+                "healthz, step {step}, {method}"
+            );
+            let probe = asked(&rig.coordinator, &serving, &method, READY_PATH).await;
+            assert_eq!((probe.0, probe.1), ready, "readyz, step {step}, {method}");
+        }
+    }
+    for path in [HEALTH_PATH, READY_PATH] {
+        let posted = asked(&rig.coordinator, &serving, &Method::POST, path).await;
+        assert_eq!(
+            (posted.0, posted.1),
+            (StatusCode::NOT_FOUND, Bytes::from_static(b"not_found")),
+            "{path}"
+        );
+    }
+}
+
 /// Proves: over the listener, a probe answered `200 ok` before the stop, and a probe that
 /// connected before the stop and sends its request after it, are told `200 ok` and
 /// `503 draining`; a probe that connects after the stop is told `503 draining` too.
@@ -319,7 +359,7 @@ async fn a_probe_answered_after_the_stop_is_told_draining() {
         PATIENCE,
         4,
     ));
-    let head = "GET /healthz HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    let head = "GET /readyz HTTP/1.1\r\nhost: localhost\r\n\r\n";
 
     let (mut before, server) = tokio::io::duplex(4096);
     offer.send(server).expect("offered");

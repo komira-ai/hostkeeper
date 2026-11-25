@@ -22,7 +22,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="125" y="104" class="b" text-anchor="middle">Browser (the UI)</text>
 <text x="125" y="122" class="t-m" text-anchor="middle">cookie + CSRF header</text>
 <rect x="30" y="200" width="190" height="64" rx="5" class="box"/>
-<text x="125" y="224" class="b" text-anchor="middle">hkctl, CI, scripts</text>
+<text x="125" y="224" class="b" text-anchor="middle">hk, CI, scripts</text>
 <text x="125" y="242" class="t-m" text-anchor="middle">Authorization: Bearer</text>
 <rect x="30" y="460" width="190" height="80" rx="5" class="box"/>
 <text x="125" y="484" class="b" text-anchor="middle">Deploy script</text>

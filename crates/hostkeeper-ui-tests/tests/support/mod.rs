@@ -41,6 +41,7 @@ use prost_reflect::{
 use serde_json::{Value, json};
 
 pub mod pages;
+pub mod screen;
 
 /// The fake document, tree queries and page context the drivers share.
 const KIT: &str = include_str!("kit.js");
@@ -307,7 +308,17 @@ fn assert_shape(message: MessageDescriptor, value: &Value, what: &str) {
 
 impl Ui {
     /// An engine with every module of the app and the kit, and a gateway with nothing scripted.
+    /// The vendored libraries are not loaded: they draw into a real document, which the engine
+    /// has not, and a page reaches them only through its context (`ctx.openTerminal`), which a
+    /// test fakes.
     pub fn start() -> Ui {
+        Ui::start_with(&[], &[])
+    }
+
+    /// [`Ui::start`], with the vendored modules `vendored` (paths under `ui/`) loaded too, and the
+    /// test modules `extra` (each a path under `test/` and its text), for a test that runs a
+    /// vendored module of no document itself.
+    pub fn start_with(vendored: &[&str], extra: &[(&str, &'static str)]) -> Ui {
         let loader = Rc::new(MapModuleLoader::new());
         let mut context = Context::builder()
             .module_loader(loader.clone())
@@ -315,10 +326,13 @@ impl Ui {
             .expect("the engine starts");
         let mut modules: Vec<(String, &str)> = UI_FILES
             .iter()
-            .filter(|f| f.is_script())
+            .filter(|f| f.is_script() && (!f.is_vendored() || vendored.contains(&f.path)))
             .map(|f| (format!("ui/{}", f.path), f.text))
             .collect();
         modules.push(("test/kit.js".to_owned(), KIT));
+        for (path, text) in extra {
+            modules.push((format!("test/{path}"), *text));
+        }
         for (path, text) in modules {
             let source = Source::from_bytes(text).with_path(Path::new(&path));
             let module = Module::parse(source, None, &mut context)

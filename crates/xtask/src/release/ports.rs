@@ -3,11 +3,12 @@
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
 //! ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]), `check_binary::VersionOf`
-//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
+//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too), `code_signature::CodesignCli` ([`CodeSign`]) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::contract::{Commit, Repo, Signer};
 
@@ -163,6 +164,25 @@ pub(crate) trait Verifier {
         bundle: Option<&Path>,
         commit: &Commit,
     ) -> Result<Vec<Attestation>, PortError>;
+
+    /// The answer of [`Verifier::verify`] to each ask, in the order asked. The default verifies
+    /// them one after the other; an adapter whose verifications are independent programs runs
+    /// them side by side (`release check` verifies every attested asset of a release twice).
+    fn verify_each(&self, asks: &[Ask<'_>]) -> Vec<Result<Vec<Attestation>, PortError>> {
+        asks.iter()
+            .map(|a| self.verify(a.signer, a.file, a.bundle, a.commit))
+            .collect()
+    }
+}
+
+/// One verification [`Verifier::verify_each`] is asked for: the arguments of
+/// [`Verifier::verify`].
+#[derive(Clone, Copy)]
+pub(crate) struct Ask<'a> {
+    pub(crate) signer: &'a Signer,
+    pub(crate) file: &'a Path,
+    pub(crate) bundle: Option<&'a Path>,
+    pub(crate) commit: &'a Commit,
 }
 
 /// What a program printed and how it ended.
@@ -216,6 +236,24 @@ pub(crate) trait BuildPkg {
     fn check_signature(&self, pkg: &Path) -> Result<String, PortError>;
 }
 
+/// What one `codesign` run ended with: whether it exited 0, and everything it printed (it writes
+/// `--display` text to stderr and requirements to stdout, so both streams, stdout first).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Codesigned {
+    pub(crate) success: bool,
+    pub(crate) text: String,
+}
+
+/// What `codesign` says of a built Mach-O program (`code_signature::CodesignCli` is the adapter).
+pub(crate) trait CodeSign {
+    /// `codesign --verify --strict --verbose=2 <binary>`.
+    fn verify(&self, binary: &Path) -> Result<Codesigned, PortError>;
+    /// `codesign --display --verbose=2 <binary>`.
+    fn display(&self, binary: &Path) -> Result<Codesigned, PortError>;
+    /// `codesign --display --requirements - <binary>`.
+    fn requirements(&self, binary: &Path) -> Result<Codesigned, PortError>;
+}
+
 /// The registry the coordinator's image is pushed to (`skopeo`, read by `image_push`).
 pub(crate) trait Registry {
     /// Copies every image of the OCI layout `layout`, the one its `index.json` names `tag`, to
@@ -243,6 +281,119 @@ pub(crate) struct Ran {
 /// Starts a program with arguments in the current directory and waits for it.
 pub(crate) trait Exec {
     fn spawn(&self, program: &str, args: &[String]) -> std::io::Result<Ran>;
+
+    /// Each run, a program and its arguments, answered in the order given. The default runs
+    /// them one after the other; the process runner runs them side by side, each with a cache
+    /// home of its own ([`spawn_side_by_side`]).
+    fn spawn_each(&self, runs: &[(String, Vec<String>)]) -> Vec<std::io::Result<Ran>> {
+        runs.iter()
+            .map(|(program, args)| self.spawn(program, args))
+            .collect()
+    }
+}
+
+/// How many programs [`spawn_side_by_side`] runs at once.
+pub(crate) const SIDE_BY_SIDE: usize = 8;
+
+/// The environment variable [`spawn_side_by_side`] gives each run its cache home in
+/// (`gh` keeps its Sigstore TUF metadata under `$XDG_CACHE_HOME/gh`).
+const CACHE_HOME: &str = "XDG_CACHE_HOME";
+
+/// The first number [`spawn_side_by_side`] tries for the directory of its cache homes.
+static NEXT_HOMES: AtomicU64 = AtomicU64::new(0);
+
+/// How many numbers the directory of the cache homes tries before the runs fail: far more than
+/// the stale directories of one process id a temporary directory holds, and few enough that a
+/// fault which makes every name look taken fails at once.
+const HOMES_ATTEMPTS: u64 = 1024;
+
+/// Each run started with `start(program, args, env)`, at most `width` (at least one) at once,
+/// each on a thread of its own; the answers in the order of `runs`. A run whose thread panicked
+/// is an error. `env` is what `start` sets in the run's environment, on top of this process's:
+/// exactly `[(CACHE_HOME, <the run's cache home>)]`.
+///
+/// Every run has a cache home of its own: the new, empty directory `<index>` in a new directory
+/// under `parent`, which is removed when the last run has ended. No two runs share a cache:
+/// `gh attestation verify` writes the Sigstore TUF metadata it fetches into its cache, every
+/// run anew, and two of them writing one cache at once fail each other (go-tuf reads each file
+/// back after writing it, and refuses one the other `gh` rewrote in between). When the
+/// directory of the homes cannot be made, every run is answered with that error and none is
+/// started; a home that cannot be made is that run's error.
+pub(crate) fn spawn_side_by_side<F>(
+    runs: &[(String, Vec<String>)],
+    width: usize,
+    parent: &Path,
+    start: F,
+) -> Vec<std::io::Result<Ran>>
+where
+    F: Fn(&str, &[String], &[(&str, &Path)]) -> std::io::Result<Ran> + Sync,
+{
+    let stem = format!("xtask-cache-homes-{}", std::process::id());
+    let homes = match new_dir(parent, &stem, &NEXT_HOMES, HOMES_ATTEMPTS) {
+        Ok(base) => Removed(base),
+        Err(e) => {
+            let why = format!("make the cache homes under {}: {e}", parent.display());
+            return runs
+                .iter()
+                .map(|_| Err(std::io::Error::new(e.kind(), why.clone())))
+                .collect();
+        }
+    };
+    let start = &start;
+    let mut answers = Vec::with_capacity(runs.len());
+    for (first, batch) in (0..).step_by(width.max(1)).zip(runs.chunks(width.max(1))) {
+        std::thread::scope(|scope| {
+            let started: Vec<_> = (first..)
+                .zip(batch)
+                .map(|(index, (program, args))| {
+                    let home = homes.0.join(format!("{index}"));
+                    scope.spawn(move || {
+                        std::fs::create_dir(&home)
+                            .and_then(|()| start(program, args, &[(CACHE_HOME, &home)]))
+                    })
+                })
+                .collect();
+            answers.extend(started.into_iter().map(|run| {
+                run.join()
+                    .unwrap_or_else(|_| Err(std::io::Error::other("the run's thread panicked")))
+            }));
+        });
+    }
+    answers
+}
+
+/// A directory removed, with everything in it, when this drops.
+struct Removed(std::path::PathBuf);
+
+impl Drop for Removed {
+    fn drop(&mut self) {
+        // One that cannot be removed is left behind; no later batch uses its name.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The new directory `parent/<stem>-<n>`, `n` taken from `next`, a fresh number for each try: a
+/// directory that already exists is passed over, never shared or emptied; any other error is
+/// returned, and so is `attempts` numbers all taken.
+fn new_dir(
+    parent: &Path,
+    stem: &str,
+    next: &AtomicU64,
+    attempts: u64,
+) -> std::io::Result<std::path::PathBuf> {
+    for _ in 0..attempts {
+        let path = parent.join(format!("{stem}-{}", next.fetch_add(1, Ordering::Relaxed)));
+        // `create_dir`, not `create_dir_all`: a directory that already exists is an error, so
+        // no batch ever shares one.
+        match std::fs::create_dir(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            made => return made.map(|()| path),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("no free directory {stem}-<n> in {attempts} numbers"),
+    ))
 }
 
 /// One run of a program that inherits nothing: its environment is exactly `env`, and it runs in
@@ -270,6 +421,7 @@ pub(crate) struct Ports<'a> {
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,
+    pub(crate) codesign: &'a dyn CodeSign,
     pub(crate) advisories: &'a dyn AdvisoryCheck,
     pub(crate) registry: &'a dyn Registry,
     pub(crate) wait: &'a dyn Wait,
@@ -280,3 +432,6 @@ pub(crate) struct Ports<'a> {
 pub(crate) trait Adapters {
     fn ports(&self) -> Ports<'_>;
 }
+
+#[cfg(test)]
+mod tests;

@@ -136,13 +136,13 @@ fn start(args: Vec<OsString>) -> Parts {
 }
 
 /// Proves: a `serve` with the database's connection string in a file of mode 0600 starts on a
-/// database that has nothing in it: it makes the schema, takes the coordinator's lock (a second
-/// start on the same database is refused while the first runs, and is not once it has stopped),
+/// database that has nothing in it: it makes the schema, takes the coordinator's lock (shared: a second
+/// start on the same database goes on beside the first, while an exclusive taker is refused until both have stopped),
 /// and a change an operator makes is held by the audit table.
 ///
-/// Catches: a start that does not reach the database, one that leaves it unlocked so a second
-/// coordinator could write beside the first, or an operator's change that never reaches the
-/// table.
+/// Catches: a start that does not reach the database, one that leaves it unlocked so that the
+/// release before this one could write beside it, one that refuses a second coordinator, or an
+/// operator's change that never reaches the table.
 #[test]
 fn a_serve_starts_on_the_database_and_holds_its_lock() {
     let files = Files::new("database-start");
@@ -150,11 +150,11 @@ fn a_serve_starts_on_the_database_and_holds_its_lock() {
     let args = database_args(&files, &database);
 
     let parts = start(args.clone());
-    let why = refusal(args.clone());
     assert!(
-        matches!(&why, StartError::Database(_)),
-        "a second coordinator is refused: {why}"
+        database.lock_is_held(),
+        "the coordinator holds the lock: an exclusive taker is refused"
     );
+    let second = start(args.clone());
     let done = parts
         .coordinator
         .operate(
@@ -168,6 +168,11 @@ fn a_serve_starts_on_the_database_and_holds_its_lock() {
     );
 
     drop(parts);
+    assert!(
+        database.lock_is_held(),
+        "the second coordinator still holds the lock"
+    );
+    drop(second);
     database.lock_is_free();
     let again = start(args);
     drop(again);
@@ -340,8 +345,8 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0018`, so `schema_version` holds 1 to 18 and the column is there, and an operator's change is
-/// held by the audit table.
+/// `0009` to `0031`, so `schema_version` holds 1 to 31 and the column is there, and an operator's
+/// change is held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
 /// without bringing its schema up to date.
@@ -357,7 +362,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0018` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0031` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -366,13 +371,25 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE mdm_secrets, mdm_settings, mdm_commands, mdm_identities, mdm_enrollments, \
          abm_devices, abm_state; \
          DROP TABLE lab_cluster, lab_rows, lab_racks, lab_placements, lab_devices, lab_sleds, lab_sled_items; \
+         DROP TABLE tx_ledger; \
+         DROP TABLE ssh_tunnel, ssh_host_key_pin, ssh_host, ssh_revocation, ssh_cert, ssh_audit; DROP SEQUENCE ssh_cert_serial; \
+         DROP TABLE instances; \
+         DROP TABLE rollout_gate, state_versions, audit_counter; \
+         DROP TABLE fleet_hosts, fleet_bakes, fleet_orders, cluster_quiet; \
+         DROP TABLE sessions, login_failures, login_gate, periodic_jobs, alerts; \
+         DROP TABLE xcode_releases; \
+         DROP TABLE maintenance_hosts, maintenance_runs; \
+         DROP TABLE fleet_tries; DROP SEQUENCE desired_seq; \
+         ALTER TABLE desired DROP COLUMN set_seq, DROP COLUMN set_for; \
+         ALTER TABLE group_desired DROP COLUMN set_seq, DROP COLUMN set_for; \
+         ALTER TABLE audit DROP COLUMN api_token; \
          DELETE FROM schema_version WHERE version >= 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=18).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=31).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator
@@ -388,7 +405,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 19; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 32; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -402,17 +419,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (19, 'from_the_future', ";
+               VALUES (32, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 19, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 32, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 19");
+    run(&database, "DELETE FROM schema_version WHERE version = 32");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }
@@ -445,4 +462,192 @@ fn a_database_that_holds_sealed_mdm_secrets_starts_without_their_key() {
         .query_one("SELECT count(*)::text FROM mdm_secrets", &[])
         .expect("the count");
     assert_eq!(held.get::<_, String>(0), "1");
+}
+
+/// Proves: `serve --database-pool 2` holds the coordinator's lock on exactly two writing sessions
+/// and the one of heartbeats' decisions (the default 4 on four and that one), and each start makes its row of `instances` with this build's release
+/// (`hostkeeper-coordinator --version`'s) and the addresses of its heartbeat and private listeners;
+/// `--database-pool 0`, a `--migrate-ddl-lock-timeout-ms` of 0 or of 5000 (not below the
+/// store's statement timeout) and a `--beat-reorder-secs` of 0 or of 45 (not below the silence after
+/// which a host is down) are usage errors, before the database is touched.
+///
+/// Catches: a pool flag that does not reach the store, a start that makes no row of its own, and
+/// a lock timeout the statement timeout would cut short.
+#[test]
+fn a_serve_holds_its_pool_and_makes_its_instance_row() {
+    let files = Files::new("database-pool");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+    let shared = || -> i64 {
+        in_schema(&database)
+            .query_one(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND mode = 'ShareLock' \
+                 AND granted AND database = (SELECT oid FROM pg_database \
+                                             WHERE datname = current_database())",
+                &[],
+            )
+            .expect("the locks")
+            .get(0)
+    };
+
+    let mut pooled = args.clone();
+    pooled.extend(flags(&[("--database-pool", "2")]));
+    let parts = start(pooled);
+    assert_eq!(shared(), 3);
+    drop(parts);
+    database.lock_is_free();
+    let parts = start(args.clone());
+    assert_eq!(shared(), 5, "the default pool and the decisions' session");
+    drop(parts);
+
+    let rows: Vec<(String, String)> = in_schema(&database)
+        .query(
+            "SELECT release, listen FROM instances ORDER BY started_unix, id",
+            &[],
+        )
+        .expect("the instances")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let release = hostkeeper_coordinator::stamp::version().to_owned();
+    let listen = "heartbeat=192.0.2.1:1 private=192.0.2.1:2".to_owned();
+    assert_eq!(
+        rows,
+        vec![(release.clone(), listen.clone()), (release, listen)]
+    );
+
+    for (flag, value) in [
+        ("--database-pool", "0"),
+        ("--migrate-ddl-lock-timeout-ms", "0"),
+        ("--migrate-ddl-lock-timeout-ms", "5000"),
+        ("--migrate-attempts", "0"),
+        ("--instance-beat-secs", "0"),
+        ("--operator-gate-wait-ms", "0"),
+        ("--beat-reorder-secs", "0"),
+        ("--beat-reorder-secs", "45"),
+    ] {
+        let mut wrong = args.clone();
+        wrong.extend(flags(&[(flag, value)]));
+        assert_eq!(exit_code(wrong), ExitCode::from(2), "{flag} {value}");
+    }
+}
+
+/// Proves: a serve over the database started with `--initial-admin-file` adopts the file's user
+/// once into the `users` row (the file's id, the duty to change the password, a hash and never the
+/// password) and audits `user_bootstrap` once; a second serve on the same database with the same
+/// file finds it adopted: the row is as it was and the audit holds no second entry; the user is
+/// read back from the row at the second start.
+///
+/// Catches: a database start that ignores the file, one that adopts at every start (a new hash
+/// and an audit entry each time), and one that keeps the user in memory only.
+#[test]
+fn a_serve_over_the_database_adopts_the_initial_admin_file_once() {
+    let files = Files::new("database-initial-admin");
+    let database = Database::new();
+    let mut args = database_args(&files, &database);
+    let valid_until = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after 1970")
+        .as_secs()
+        + 600;
+    files.put(
+        "initial-admin.toml",
+        &format!(
+            "id = \"file-1\"\nuser = \"admin\"\npassword = \"k7Pq9xWm3Rt5Vb2NcH8dZs4F\"\n\
+             valid_until = {valid_until}\n"
+        ),
+        0o400,
+    );
+    args.extend(flags(&[
+        ("--initial-admin-file", &path(&files, "initial-admin.toml")),
+        ("--password-memory-kib", "8"),
+        ("--password-iterations", "1"),
+    ]));
+    let row = |database: &Database| {
+        in_schema(database)
+            .query(
+                "SELECT record->>'initial_id', record->>'hash', record->>'must_change' \
+                 FROM users WHERE name = 'admin'",
+                &[],
+            )
+            .expect("the users row")
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<_, Option<String>>(0),
+                    row.get::<_, Option<String>>(1),
+                    row.get::<_, Option<String>>(2),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let audited = |database: &Database| -> i64 {
+        in_schema(database)
+            .query_one(
+                "SELECT count(*) FROM audit WHERE action = 'user_bootstrap'",
+                &[],
+            )
+            .expect("the audit table")
+            .get(0)
+    };
+
+    let parts = start(args.clone());
+    let held = parts.coordinator.accounts().snapshot();
+    assert!(held.user("admin").is_some_and(|admin| admin.must_change));
+    let rows = row(&database);
+    assert_eq!(rows.len(), 1);
+    let (id, hash, must_change) = rows[0].clone();
+    assert_eq!(id.as_deref(), Some("file-1"));
+    assert!(hash.is_some_and(|hash| hash.starts_with("$argon2id$v=19$m=8,t=1,p=1$")));
+    assert_eq!(must_change.as_deref(), Some("true"));
+    assert_eq!(audited(&database), 1);
+    drop(parts);
+    database.lock_is_free();
+
+    let parts = start(args);
+    assert_eq!(row(&database), rows, "the row is as it was");
+    assert_eq!(audited(&database), 1, "the second start audits nothing");
+    assert!(
+        parts
+            .coordinator
+            .accounts()
+            .snapshot()
+            .user("admin")
+            .is_some_and(|admin| admin.initial_id.as_deref() == Some("file-1")),
+        "the user is read back from the row"
+    );
+    drop(parts);
+}
+
+/// The names of the jobs `periodic_jobs` holds, in order.
+fn job_names(database: &Database) -> Vec<String> {
+    in_schema(database)
+        .query("SELECT name FROM periodic_jobs ORDER BY name", &[])
+        .expect("periodic_jobs")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+/// Proves: a `serve` on a database without `--xcode-feed-url` holds no row for the job
+/// `xcode-feed`, and a `serve` on it with the flag adds the row.
+///
+/// Catches: a database-backed start that does not pass the feed address on to the jobs it claims,
+/// or one that claims the job with no address to read.
+#[test]
+fn a_serve_on_a_database_claims_the_xcode_feed_job_only_with_its_address() {
+    let files = Files::new("database-xcode-feed");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+
+    drop(start(args.clone()));
+    assert!(!job_names(&database).contains(&"xcode-feed".to_owned()));
+
+    let mut with_feed = args;
+    with_feed.extend(flags(&[(
+        "--xcode-feed-url",
+        "https://xcodereleases.com/data.json",
+    )]));
+    drop(start(with_feed));
+    assert!(job_names(&database).contains(&"xcode-feed".to_owned()));
 }

@@ -9,7 +9,12 @@
 //! - [`plist`]: the XML property lists of the daemon, of a step job and of a service package's
 //!   job.
 //! - [`launchctl`]: the [`Launchctl`] port (one `launchctl` command), its real adapter
-//!   [`LaunchctlProcess`], and the reading of `launchctl print system/<label>`.
+//!   [`LaunchctlProcess`], the reading of `launchctl print system/<label>`, and the reading of
+//!   the override database `launchctl print-disabled system` ([`parse_disabled`]).
+//! - [`stdin_process`]: the [`StdinRun`] port (one run of a program with bytes on its standard
+//!   input, which is a pipe), its real adapter [`StdinProcess`], and [`stdin_process::run_ok`]:
+//!   the runner of a program that reads a password on its standard input, whose errors name the
+//!   step and the exit code alone.
 //! - [`manager`]: [`LaunchdServiceManager`], the observer's
 //!   [`ServiceManager`](hostkeeper_observe::ServiceManager) over `launchctl print`.
 //! - [`procid`]: [`LaunchdProcessProbe`], the observer's
@@ -24,7 +29,8 @@
 //!   daemon's job once any copy loaded before is booted out.
 //! - [`platform`]: [`Platform`], the paths and unit directory that differ between Linux under
 //!   systemd, Linux under OpenRC and macOS, and which of them the host runs ([`Platform::host`]).
-//! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives.
+//! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives, and
+//!   [`FakeStdinRun`], the scripted [`StdinRun`].
 //!
 //! Nothing here is compiled for macOS only except the real `PidInfo` of [`procid`], the host's
 //! launcher (`LaunchdLauncher::system` and its clock, in [`launcher`]) and the sysctl read of
@@ -41,16 +47,17 @@ pub mod platform;
 pub mod plist;
 pub mod postinstall;
 pub mod procid;
+pub mod stdin_process;
 pub mod unit_control;
 
 #[cfg(target_os = "macos")]
 pub use bootid::SysctlBootId;
 pub use bootid::{BOOT_SESSION_UUID, parse_boot_session_uuid};
-pub use fake::FakeLaunchctl;
+pub use fake::{FakeLaunchctl, FakeStdinRun, StdinCall};
 pub use label::{Label, LabelError, REVERSE_DNS_PREFIX};
 pub use launchctl::{
     JobInfo, JobState, JobStatus, LAUNCHCTL, Launchctl, LaunchctlError, LaunchctlOutput,
-    LaunchctlProcess, ParseError, PrintError, parse_print,
+    LaunchctlProcess, ParseError, PrintError, parse_disabled, parse_print, print_disabled_args,
 };
 pub use launcher::{LaunchdLauncher, Pace};
 pub use manager::LaunchdServiceManager;
@@ -59,4 +66,5 @@ pub use plist::{
     DaemonJob, PlistError, ServiceJob, StepJob, daemon_plist, service_plist, step_plist,
 };
 pub use procid::{FileIdentity, LaunchdProcessProbe, PidInfo, PidInfoError, StdFileIdentity};
+pub use stdin_process::{StdinError, StdinProcess, StdinRun};
 pub use unit_control::LaunchdUnitControl;

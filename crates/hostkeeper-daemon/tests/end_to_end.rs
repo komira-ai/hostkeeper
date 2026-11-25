@@ -158,6 +158,7 @@ fn first_beat() -> Heartbeat {
         agent_version: Version::from(OWN),
         features: ANNOUNCED.to_vec(),
         services: vec![ServiceFacts {
+            local_halt: None,
             name: ServiceName::new(SERVICE).expect("a service"),
             version: Version::new(BEFORE).expect("a version"),
             health: Health::Healthy,
@@ -176,6 +177,14 @@ fn first_beat() -> Heartbeat {
         installers: vec!["apt".to_owned()],
         repositories: None,
         facts_generation: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        ssh: None,
+        prerequisites: None,
+        maintenance: None,
+        bmc: None,
+        serial_console: None,
     }
 }
 
@@ -204,6 +213,15 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             trusted_root: Arc::new(NoTrustedRoot),
             repositories: None,
             facts: None,
+            remote_login_probe: None,
+            full_disk_access: None,
+            operator_keys: None,
+            ssh: None,
+            prerequisites: None,
+            maintenance: None,
+            maintain: None,
+            bmc: None,
+            serial_console: None,
         },
     )
 }
@@ -224,6 +242,14 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
         console: None,
+        identity: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        prerequisites: None,
+        maintenance: None,
+        bmc: None,
+        serial_console: None,
     }
 }
 

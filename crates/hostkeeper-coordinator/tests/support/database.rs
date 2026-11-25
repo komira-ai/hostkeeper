@@ -117,6 +117,22 @@ impl Database {
             .expect("the lock is taken and freed");
     }
 
+    /// Whether a session holds the coordinator's lock, shared or exclusive: whether an exclusive
+    /// try is refused.
+    pub fn lock_is_held(&self) -> bool {
+        let mut session = client(Some(&self.name));
+        let taken: bool = session
+            .query_one("SELECT pg_try_advisory_lock($1)", &[&COORDINATOR_LOCK])
+            .expect("a try")
+            .get(0);
+        if taken {
+            session
+                .batch_execute(&format!("SELECT pg_advisory_unlock({COORDINATOR_LOCK})"))
+                .expect("the lock is freed");
+        }
+        !taken
+    }
+
     /// The audit numbers the database holds.
     pub fn audit_numbers(&self) -> Vec<i64> {
         client(Some(&self.name))

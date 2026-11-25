@@ -1,0 +1,17 @@
+hk tailnet-wait [--attempts N] [--interval-secs S]
+    Waits, right after a CI runner joined the tailnet, until the coordinator answers at
+    --endpoint, and rejoins the tailnet once when it does not. In order:
+    1. Round 1: up to N requests GET <endpoint>/v1/version, with no token, trusting --ca-file
+       alone, each limited by --timeout-secs, S seconds apart. Any HTTP status is an answer. A
+       request with none prints one line on stderr saying why.
+    2. When round 1 had no answer: tailscale down, then tailscale up with no flag (the settings
+       of the join), each stopped after 120 seconds. The join must have made this user the
+       node's operator (tailscale up --operator=<user>), so neither needs root.
+    3. Round 2: as round 1.
+    It exits 0 at the first answer, printing one line on stdout that says which attempt of
+    which round it was; and 1 when neither round had one, or the rejoin failed, with one line
+    that says how each ended.
+
+--attempts N is 1 to 100, 6 by default; --interval-secs S is 0 to 600, 10 by default. It takes
+the global flags --endpoint and --ca-file, both required, and --timeout-secs. It takes no token:
+--token-file, --token-stdin, --github-oidc-audience and --response-file are not taken.

@@ -1,0 +1,39 @@
+[package]
+name = "hostkeeper-console"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The coordinator's console library: the console operators, targets and BMC credential files, the reason of a console audit line, the ipmitool port and the BMC calls over it, and the console sessions."
+
+# docs/design/console-broker.md decision D1: the pure part of the console. It reads files and
+# opens no socket, starts no process and reads no clock; the coordinator serves the calls,
+# implements the ipmitool port with a process, and dials the sockets the bridge's channels carry.
+[features]
+# `hostkeeper_console::scripted`, the ipmitool port's scripted double, for the coordinator's tests.
+testing = []
+
+[dependencies]
+# `MacAddress`, the inventory's own MAC type: a target's MAC is compared with a record's.
+hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
+# `read_secret`: the BMC credential file is held to the secret file rule.
+hostkeeper-wire = { path = "../hostkeeper-wire" }
+serde.workspace = true
+thiserror.workspace = true
+# The bridge's bounded channels and its select over the two directions; no runtime, socket or
+# clock of tokio's.
+tokio = { workspace = true, features = ["macros", "sync"] }
+toml.workspace = true
+
+[dev-dependencies]
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+
+[lints]
+workspace = true
+
+[package.metadata.buildrules]
+# The Buck2 build's policy for this package (docs/farm.md): none of its own; it takes
+# [workspace.metadata.buildrules] of the root Cargo.toml.

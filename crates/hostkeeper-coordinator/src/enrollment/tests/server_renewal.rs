@@ -25,6 +25,8 @@ use x509_parser::prelude::X509Certificate;
 use super::support::{FixedClock, NOW, Rig, SERVER_NAME, coordinator_over};
 use crate::enrollment::{ServerCertificate, ServerFile, os_random};
 use crate::listen::reload_all;
+use crate::operator_keys::OperatorKeys;
+use crate::prerequisites::HostPrerequisites;
 use crate::testutil::{Log, OPERATOR};
 use crate::tokens::OperatorTokens;
 
@@ -338,8 +340,12 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
     // A whole tick: the renewal fails again and the listener keeps the certificate in use.
     reload_all(
         Some(&rig.enrollment),
+        true,
         std::slice::from_ref(&source),
         &tokens,
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(served_leaf(&rig, &source).await, first);
@@ -348,8 +354,12 @@ async fn a_renewal_that_cannot_be_written_keeps_the_certificate_in_use_and_says_
     fs.fail.store(false, Ordering::SeqCst);
     reload_all(
         Some(&rig.enrollment),
+        true,
         std::slice::from_ref(&source),
         &tokens,
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     let renewed = leaf_of(&rig.files.server_cert);
@@ -443,8 +453,12 @@ async fn one_look_of_the_tick_renews_a_due_certificate_and_the_listener_serves_i
     rig.clock.set(start + DUE - 1);
     reload_all(
         Some(&rig.enrollment),
+        true,
         std::slice::from_ref(&source),
         &tokens,
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     assert_eq!(leaf_of(&rig.files.server_cert), first);
@@ -453,8 +467,12 @@ async fn one_look_of_the_tick_renews_a_due_certificate_and_the_listener_serves_i
     rig.clock.set(start + DUE);
     reload_all(
         Some(&rig.enrollment),
+        true,
         std::slice::from_ref(&source),
         &tokens,
+        &OperatorKeys::default(),
+        &HostPrerequisites::default(),
+        &crate::console::ConsoleFiles::default(),
     )
     .await;
     let renewed = leaf_of(&rig.files.server_cert);

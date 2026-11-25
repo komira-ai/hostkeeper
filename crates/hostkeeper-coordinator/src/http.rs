@@ -25,7 +25,11 @@
 //!   ([`Coordinator::login`]) also answers `POST /v1/login`, `POST /v1/logout`, `GET /v1/session`
 //!   and `POST /v1/password` ([`crate::login_routes`]), which a browser signs in and out and
 //!   changes its password with; the heartbeat surface never serves those either, and an
-//!   operator's bearer never reads or sets the cookie they use. `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   operator's bearer never reads or sets the cookie they use. With a sign-in it also answers
+//!   `GET /v1/ssh/terminal?host=<host id>`, the WebSocket upgrade of the UI's Remote SSH
+//!   ([`crate::ssh_terminal_route`]), which takes a session and no bearer. With or without a
+//!   sign-in it answers `GET /console/v1/stream/<session>`, the WebSocket of a console session,
+//!   which takes the operator's bearer in its subprotocol, or a signed-in browser's session cookie and CSRF token ([`crate::console::route`]). `GET /v1/version[?at_least=<X.Y.Z>]`
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
@@ -109,6 +113,10 @@ pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
 /// group lists up to 64 packages of up to 255 bytes and names a policy.
 pub const MAX_HOST_GROUPS_PUT_BYTES: usize = 64 * 1024;
 
+/// The most bytes of one frame of an `Ssh.Tunnel` stream read: 16 KiB of `data` and the 64 bytes
+/// its message adds. The stream is gRPC only.
+pub const MAX_TUNNEL_FRAME_BYTES: usize = 16 * 1024 + 64;
+
 /// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
 pub const DENIED: &str = "denied";
 
@@ -123,7 +131,8 @@ pub enum Surface {
 }
 
 /// The address a connection came from, put in the extensions of each request it carries by
-/// the listener, when its transport has one. Nothing reads it yet.
+/// the listener, when its transport has one. A heartbeat's is the address the coordinator
+/// dials the host at ([`crate::ssh_book`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerAddr(pub SocketAddr);
 
@@ -206,6 +215,25 @@ where
         && let Some(rest) = path.strip_prefix(crate::ui::PREFIX)
     {
         return ui.answer(&method, rest).await;
+    }
+    if surface == Surface::Control
+        && path == crate::ssh_terminal_route::PATH
+        && let Some(login) = coordinator.login()
+    {
+        return if method == Method::GET {
+            crate::ssh_terminal_route::answer(coordinator, login, request, patience)
+        } else {
+            error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
+        };
+    }
+    if surface == Surface::Control
+        && let Some(session) = path.strip_prefix(crate::console::route::PREFIX)
+    {
+        return if method == Method::GET {
+            crate::console::route::answer(coordinator, request, session)
+        } else {
+            error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
+        };
     }
     if surface == Surface::Control
         && crate::login_routes::is_route(&path)
@@ -340,7 +368,7 @@ pub(crate) fn beat(
 ) -> Result<(WireAnswer, Option<Order>), BeatRefused> {
     let BeatCaller { identity, retiring } = caller;
     let HeartbeatRead {
-        beat,
+        mut beat,
         services_dropped,
         extras_dropped,
         extras_dropped_facts,
@@ -351,6 +379,7 @@ pub(crate) fn beat(
     if let Some(why) = extras_dropped {
         coordinator.note_extras_dropped(&identity, &why, &extras_dropped_facts);
     }
+    coordinator.settle_maintenance(&identity, &mut beat);
     if retiring {
         // Heard for its final report only: a slot it held is freed once the report is
         // final, and the host is refused all the same.

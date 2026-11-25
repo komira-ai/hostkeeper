@@ -26,10 +26,13 @@ one credential is the OIDC token GitHub issues to the job.
 
 1. **Build and sign.** A push to `main` runs `ci`, `privileged` and `artifacts`. `artifacts`
    builds every file of the release and attests it ([Verify a release](verify-a-release.md)).
-2. **Release.** When all three have passed for the commit, `release.yml` plans the release
-   (`plan`), checks every file and attestation again (`verify`), and publishes the GitHub
-   release `v<X.Y.Z>` (`publish`). Nothing is rebuilt.
-3. **Into the repository.** The release's package-channel jobs (`testing-apt-*`) put the
+2. **Release.** When `ci` (the unit tests) and `artifacts` (the build) have passed for the
+   commit, `release.yml` plans the release (`plan`), checks every file and attestation again
+   (`verify`), and publishes the GitHub release `v<X.Y.Z>` (`publish`). Nothing is rebuilt. No
+   release waits for `privileged`, which runs beside it: a red run of it opens an issue
+   `RELEASE-RED: hostkeeper privileged: ...` (`release-red.yml`) and releases go on.
+3. **Into the repository.** The release's package-channel jobs (`testing-apt-*`), which start
+   once `verify` passed, beside `publish`, put the
    daemon's `.deb` into the repository's `testing` suite. The deploy does not wait for the
    repository: a host ordered before the `.deb` is in the suite defers its `stage`
    (`not_in_repository`, an environment deferral) and tries again on the deferral's schedule.
@@ -89,14 +92,14 @@ one credential is the OIDC token GitHub issues to the job.
    its settings (`enabled` `true`). Before that a host would defer the release
    (`not_in_repository`). A failed write, or a channel without its settings, leaves
    `set-desired` skipped: nothing is set. The job calls the CI client
-   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
-   joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
-   service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
-   call through a pipe, never a file or an argument. The call names the release by its targets
+   ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's command line (`hk`),
+   joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hk releases set-desired` for the
+   service `hostkeeper` at `<X.Y.Z>`; hk requests the OIDC token itself and sends it in
+   the request's header, never a file or an argument. The call names the release by its targets
    alone, so each host is ordered its own platform's native package; a
    daemon before `target-v1`, or one that announces no `apt`, is ordered nothing
    (`installer_dropped`): stage 9's counts are zero before this release is set.
-   `hkctl releases get-release --service hostkeeper --version <X.Y.Z>` answers the targets the
+   `hk releases get-release --service hostkeeper --version <X.Y.Z>` answers the targets the
    coordinator stored, one list per platform (`--host-group <group>` asks as that group, which must
    list `hostkeeper`).
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
@@ -117,16 +120,18 @@ one credential is the OIDC token GitHub issues to the job.
    The hosts of a stage update in parallel, up to the policy's `max_updating` (by default the whole stage).
    Only one service rolls in the cluster at a time, so a release of another service waits for it
    (`rollout_elsewhere`) and the services queue in the order their versions were set; the caller chaining the groups one after the other (a canary group first) is a
-   later change, with the CI client's `host_group` input. A host whose update fails keeps its
-   update slot until it is healthy, and its stage is not done until an operator resolves it, so
-   the next stage is not ordered the version meanwhile
+   later change, with the CI client's `host_group` input. A host whose update fails stays at its
+   version and is an alert; under the group's default `failed_hosts` (continue) its stage counts
+   it as done, failed, and the other hosts are still ordered, unless it failed as a canary or as
+   many hosts failed as `rollback_after_failed`; under `failed_hosts = FAILED_HOSTS_STOP` its
+   stage is not done until an operator resolves it
    ([rollout-plans.md](../operations/rollout-plans.md); design, section 5.4).
 10. **Each host updates itself.** At its next heartbeat an ordered host stages the `.deb` from its
    repository entry, checks it against the pinned SHA-256, and updates hostkeeper by the
    hand-over, installing the package once the new binary has confirmed itself
    ([packages-native.md](../design/packages-native.md), section 10.4).
 
-Watch the roll on the UI's Packages page (open the package), or with `hkctl releases converge --service hostkeeper`.
+Watch the roll on the UI's Packages page (open the package), or with `hk releases converge --service hostkeeper`.
 
 ## Turning it on and off
 
@@ -156,7 +161,7 @@ federation's client ID are all public values, so they are variables, not secrets
 | `HOSTKEEPER_CI_AUDIENCE` | The audience of the OIDC token, as the allow-list entry names it (shared). |
 | `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity (shared). Set: both calls of the CI client and the job `coordinator` join the tailnet. Empty: none joins, and the coordinator must be reachable from the runner some other way. |
 | `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity (shared). |
-| `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the CI client's join pings until it answers (shared). |
+| `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet (shared). The CI client no longer reads it (its join pings nothing; it waits for the coordinator at `HOSTKEEPER_COORDINATOR_URL`); its callers still pass it. |
 | `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
 
 The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`), its ACL and its federation
@@ -184,7 +189,7 @@ host has its repository entry and key ([package-repositories.md](package-reposit
 converged on every host.
 
 **hostkeeper's rollout** is the policy of each host group, which lists `hostkeeper` besides its
-other packages; the policy is the one each group's `hkctl host-groups put` carries
+other packages; the policy is the one each group's `hk host-groups put` carries
 ([hostgroups.md](../operations/hostgroups.md#policy)), with its canary and bake:
 
 ```json
@@ -196,7 +201,7 @@ other packages; the policy is the one each group's `hkctl host-groups put` carri
 
 `bakeBeats` is the healthy heartbeats at the new version before the next stage, and `canary` one
 host that goes first, alone, and bakes. These are keys of the group's `policy`, put with
-`hkctl host-groups put`.
+`hk host-groups put`.
 
 **The allow-list entry.** `release.yml` calls the CI client as `hello-desired.yml` does, at the
 same revision ([Pinning the client](#pinning-the-client)), so the entry for this repository
@@ -246,7 +251,7 @@ OIDC token is a published release, verified before it runs, never the commit bei
 
 Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
 `2c767d1842a88edb7120073d2dff3b4bfccc834c`, release `v0.1.184`, the first whose
-`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hkctl
+`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hk
 (one set, and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
 coordinator is updated to one that does before the pin moves. For a release, the job `coordinator`
 holds `set-desired` until the coordinator runs that release. The workflow
@@ -258,6 +263,14 @@ new commit (above).
 
 ## When it fails
 
+A red run of `release.yml` on `main`, in any job, opens (or brings up to date) the issue
+`RELEASE-RED: hostkeeper release: a job of the release run failed` (`release-red.yml`, `cargo xtask
+release red`). It names the run, its commit and the jobs that failed, and says whether the deploy
+went out: a failure of the Mac's beta stage, an install check or the promotion to stable, which run
+beside or after the deploy, holds nothing and is not released again; a failure of a deploy job
+(`set-desired` or a job it waits for) is released again by the next release run (`release plan`).
+The next release run that releases something and succeeds closes the issue.
+
 A failure of any of the four jobs (`targets`, `coordinator`, `no-downgrade`, `set-desired`) leaves the release published; only the deploy did not happen.
 Once the cause is fixed, use **Re-run failed jobs** on the release run: it runs the jobs that
 failed and those that depend on them (`no-downgrade` among them, which checks again that no newer
@@ -266,14 +279,24 @@ itself failed, **Re-run failed jobs** re-runs it alone, and it is skipped: the c
 was made in an earlier attempt. Re-run the job `no-downgrade` instead (**Re-run job** on it),
 which re-runs `set-desired` after it.
 
+The release verbs ask GitHub's API again when it fails to answer a read (the runs, the jobs, the
+issues, the releases) with a server error, `(HTTP 500)`, `(HTTP 502)`, `(HTTP 503)` or
+`(HTTP 504)`: after 10, 30 and 60 seconds, four attempts in all. A write (a draft, an upload, the
+publication, an issue) is asked once, since one that timed out may have been done. When `publish`
+fails all the same, after its draft was created, the release is left a draft with the assets
+uploaded so far. **Re-run failed jobs** completes it: the job uploads only the assets the draft
+lacks, checks the draft, and publishes it. The next release run does the same, since a draft is
+not a release and that run plans its version again.
+
 | job and step | what it means | what to do |
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
 | `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says which (`No coordinator updater reported this release ... (is the timer installed?)` for the first), and `set-desired` did not run: the hosts' desired version is not set. | With the control-plane deploy on, check that `HOSTKEEPER_COORDINATOR_URL` names the coordinator `cp-deploy` deployed. Without it, on the coordinator's machine, install the timer of `hostkeeper-coordinator-update` from the release asset if it is not there, or read its journal ([coordinator-update.md](coordinator-update.md)). Once the coordinator runs the release, **Re-run failed jobs**. |
 | `testing-apt-write`, `testing-apt-write-3` or `testing-pkg-upload` | A package channel was not written (the last apt attempt lost the race for the index too, or a write failed), so `set-desired` did not run: nothing is set. A channel without its settings ends green with a notice, and `set-desired` is skipped too. | Fix the channel ([package-repositories.md](package-repositories.md)), then **Re-run failed jobs**. |
+| `stable-apt-write-5` | The promotion of the release to the apt suite `stable` lost the race for the shared index in all five attempts (another product's promotion wrote it each time between the read and the write); `stable` still lists the previous release. Nothing else waits for it: the release is published, in `testing`, and set on the fleet. | Nothing: the next release's run promotes the newer release, which carries this one's changes; until then `stable` lists the previous one. Re-running this run does not help: **Re-run failed jobs** replays the same read and loses the same way, and **Re-run all jobs** plans nothing, since the release is published already. |
 | `no-downgrade`: Say that an older release is not set | A newer release than this run's is published (this run is a re-run of an older release's jobs, or a late run), so `set-desired` was skipped and nothing is set; the job is green. | Nothing: the newest release's own run sets the fleet. A move back is an operator's step on the coordinator. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin, then **Re-run job** on `no-downgrade`. |
-| `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above, its `host_groups` included), `not_in_host_group` (no group lists `hostkeeper`), `limits_in_host_group` (the set carried `max_updating` or `min_up`), `target_invalid` (a list the coordinator's checks refuse), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then **Re-run job** on `no-downgrade` (it re-runs `set-desired`; **Re-run failed jobs** would skip it, above). |
+| `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above, its `host_groups` included), `not_in_host_group` (no group lists `hostkeeper`), `limits_in_host_group` (the set carried `max_updating` or `min_up`), `target_invalid` (a list the coordinator's checks refuse), `held_bad`, `below_min_version`, `store_failed` or `state_changed` (nothing was set; running the job again is safe), `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then **Re-run job** on `no-downgrade` (it re-runs `set-desired`; **Re-run failed jobs** would skip it, above). |
 
 A run that published several releases (each run releases every commit since the last release whose
 runs are done, so one run can publish several) sets only the newest:

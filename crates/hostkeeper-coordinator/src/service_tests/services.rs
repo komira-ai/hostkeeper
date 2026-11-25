@@ -79,6 +79,7 @@ fn new_beat(kbf: &str, other: &str) -> hostkeeper_wire::wire::Heartbeat {
 fn service_beat(running: &str) -> hostkeeper_wire::wire::ServiceBeat {
     let b = beat(running);
     hostkeeper_wire::wire::ServiceBeat {
+        local_halt: None,
         name: "other".to_owned(),
         version: b.version,
         health: b.health,

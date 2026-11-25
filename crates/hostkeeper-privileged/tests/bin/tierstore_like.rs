@@ -27,12 +27,15 @@
 //!   writes `staged-<v>`.
 //! - `cutover` starts the new run units, waits until each port answers `version=<v>`, then stops
 //!   the previous release's run units that the new release does not run.
-//! - `verify` fails when the param `tierstore_like_fail_verify` is true, else asks every port once.
+//! - `verify` halts when the param `tierstore_like_halt_verify` is true (writing `verify-<v>` as
+//!   `halted`), fails when the param `tierstore_like_fail_verify` is true, else asks every port
+//!   once.
 //! - `rollback` starts the previous run units and stops the new ones the previous does not run.
 //! - `cleanup` removes `staged-<v>`.
 //!
-//! Each step ends by writing `<step>-<v>` (`ok` or `failed`) and a last stdout line, the JSON
-//! report of the hook contract. The exit code is `hostkeeper_hook`'s: 0 ok, 1 failure.
+//! Each step ends by writing `<step>-<v>` (`ok` or `failed`, or `halted` for a `verify` that
+//! halts) and a last stdout line, the JSON report of the hook contract. The exit code is
+//! `hostkeeper_hook`'s: 0 ok, 1 failure, 76 halt.
 
 use std::convert::Infallible;
 use std::error::Error;
@@ -58,6 +61,9 @@ const TREE_RELEASE: &str = "tree/usr/share/hostkeeper-ci-tierstore/release.toml"
 const RECORD_DIR_KEY: &str = "tierstore_like_record_dir";
 /// The param that makes `verify` fail.
 const FAIL_VERIFY_KEY: &str = "tierstore_like_fail_verify";
+/// The param that makes `verify` halt: the release is broken in a way no version repairs by the
+/// hook's steps, so the daemon must run nothing more.
+const HALT_VERIFY_KEY: &str = "tierstore_like_halt_verify";
 /// The gate file the test writes: `busy` holds `prepare`, `idle` or absent lets it go.
 const GATE_FILE: &str = "drain-gate";
 /// Where `systemctl` is on the runner.
@@ -323,7 +329,9 @@ fn hook(args: &[OsString]) -> Fallible<Outcome> {
         Step::Verify => verify(&ctx),
         Step::Rollback => rollback(&ctx),
         Step::Cleanup => cleanup(&ctx),
-        Step::Uninstall => Err("the fixture has no uninstall step".into()),
+        Step::Uninstall | Step::Drain | Step::Resume => {
+            Err(format!("the fixture has no {step} step").into())
+        }
     };
     // A step that cannot finish says so in its record, for the test to read, before it fails.
     if result.is_err() {
@@ -391,8 +399,13 @@ fn cutover(ctx: &Ctx) -> Fallible<Outcome> {
     done(r#"{"reversible":true}"#)
 }
 
-/// `verify`: fails on request, else asks every port of the new release once.
+/// `verify`: halts or fails on request, else asks every port of the new release once.
 fn verify(ctx: &Ctx) -> Fallible<Outcome> {
+    if ctx.params.get_bool(HALT_VERIFY_KEY) == Some(true) {
+        ctx.record("verify", "halted")?;
+        println!(r#"{{"class":"release","reason":"fixture_verify_halted"}}"#);
+        return Ok(Outcome::Halt);
+    }
     let refused = ctx.params.get_bool(FAIL_VERIFY_KEY) == Some(true);
     let serving = !refused
         && ctx

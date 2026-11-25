@@ -226,6 +226,21 @@ fn every_key_of_the_policy_is_held_to_its_range() {
             |p| p.rollback = proto::RollbackMode::Automatic.into(),
             true,
         ),
+        (
+            "a failed-hosts mode the proto lacks",
+            |p| p.failed_hosts = 9,
+            false,
+        ),
+        (
+            "failed hosts stop",
+            |p| p.failed_hosts = proto::FailedHosts::Stop.into(),
+            true,
+        ),
+        (
+            "failed hosts continue",
+            |p| p.failed_hosts = proto::FailedHosts::Continue.into(),
+            true,
+        ),
     ];
     let world = World::new("hg-put-policy-bounds");
     let before = world.state();
@@ -271,6 +286,7 @@ fn a_policy_is_read_back_as_it_was_put() {
             percent: Some(30),
             min_hosts: Some(3),
         }),
+        failed_hosts: proto::FailedHosts::Stop.into(),
         defer_backoff: Some(proto::DeferBackoff {
             initial_secs: Some(10),
             factor: Some(5),
@@ -279,6 +295,16 @@ fn a_policy_is_read_back_as_it_was_put() {
         max_updating: Some(0),
         min_up: 2,
         live_rollouts: Some(4),
+        maintenance: Some(proto::MaintenancePolicy {
+            xcode_keep: 3,
+            xcode_default: Some("26.1".to_owned()),
+            macos_major: true,
+            linux_scope: proto::LinuxScope::All.into(),
+            batch: Some(2),
+            min_serving: Some(0),
+            drain_deadline_secs: 600,
+            return_secs: 1800,
+        }),
     };
     world
         .put_with("alpha", &[SELF], Some(policy.clone()), None)
@@ -307,4 +333,17 @@ fn a_policy_is_read_back_as_it_was_put() {
     assert_eq!(default.max_updating, None);
     assert_eq!(default.stages, Vec::new());
     assert_eq!(default.live_rollouts, None);
+    assert_eq!(
+        default.maintenance,
+        Some(proto::MaintenancePolicy {
+            xcode_keep: 0,
+            xcode_default: Some("latest".to_owned()),
+            macos_major: false,
+            linux_scope: i32::from(proto::LinuxScope::Security),
+            batch: Some(1),
+            min_serving: Some(1),
+            drain_deadline_secs: 0,
+            return_secs: 0,
+        })
+    );
 }

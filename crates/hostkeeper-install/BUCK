@@ -1,0 +1,19 @@
+load("//:buildrules.bzl", "cargo_package")
+
+# The Linux farm compiles out this member's code and tests under cfg(target_os = "macos"); release.yml's job macos-test runs them on a Mac (docs/farm.md).
+
+cargo_package(path = ".")
+
+# Read by other members (their extra_srcs); exported by reference, so each stays at its path.
+[
+    export_file(
+        name = path,
+        src = path,
+        mode = "reference",
+        visibility = ["PUBLIC"],
+    )
+    for path in [
+        "tests/macos_pkg/support",
+        "tests/support",
+    ]
+]

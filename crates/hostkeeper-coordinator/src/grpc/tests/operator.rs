@@ -201,6 +201,7 @@ fn audit(
         at_unix: None,
         by_name: Some("operator".to_owned()),
         host_group: None,
+        api_token: None,
     })
 }
 
@@ -516,7 +517,9 @@ fn a_failed_operator_action_is_refused_by_releases_with_the_value_its_cause_name
     );
 }
 
-/// Proves the refusal of `Releases` for every way CI's set of a desired state is refused.
+/// Proves the refusal of `Releases` for every way CI's set of a desired state is refused: a set
+/// whose commit found the desired state changed in the store each time it was made is
+/// `state_changed`, which tells it from a store that did not take the write (`store_failed`).
 #[test]
 fn every_way_a_set_of_the_desired_state_fails_is_refused_with_its_value() {
     use proto::ReleasesRefusal as R;
@@ -551,6 +554,10 @@ fn every_way_a_set_of_the_desired_state_fails_is_refused_with_its_value() {
             R::StoreFailed,
         ),
         (SetError::Ops(disk_full()), R::StoreFailed),
+        (
+            SetError::Ops(crate::ops::OpsError::DesiredChanged),
+            R::StateChanged,
+        ),
     ];
     for (why, refusal) in cases {
         let text = why.to_string();
@@ -763,7 +770,7 @@ async fn a_call_is_from_the_operator_the_router_admitted_and_from_no_one_otherwi
     let operator = as_operator(&world.coordinator, ()).await;
     assert!(matches!(
         caller_of(&operator),
-        Caller::Operator(name) if name.as_str() == "operator"
+        Caller::Operator(name) if name.name() == "operator"
     ));
 
     let unadmitted = Request::new(());

@@ -24,17 +24,20 @@ fn settings(root: &Path) -> Settings {
         run_dir: root.join("run"),
         trusted_uid: 0,
         package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        keep_versions: hostkeeper_daemon::prune::DEFAULT_KEEP_VERSIONS,
     }
 }
 
-/// Catches a daemon that reads `--packages-dir` before making it: on an empty root, each
-/// directory tmpfiles makes is there after the call, with its mode.
+/// Catches a daemon that reads `--packages-dir` before making it, makes it listable by other
+/// users, or makes it one a service's user cannot pass through: on an empty root, each directory
+/// tmpfiles makes is there after the call, with its mode (the packages directory 0711, as
+/// tmpfiles makes it).
 #[test]
 fn an_empty_root_gets_the_packages_and_hooks_directories_with_their_modes() {
     let scratch = Scratch::new("state-dirs-empty");
     let settings = settings(scratch.path());
     ensure_state_dirs(&settings).expect("make them");
-    assert_eq!(mode(&settings.packages_dir), 0o755);
+    assert_eq!(mode(&settings.packages_dir), 0o711);
     let hooks = scratch.path().join("var/lib/updater/hooks");
     assert_eq!(mode(&hooks), 0o700);
     assert!(hooks.is_dir());

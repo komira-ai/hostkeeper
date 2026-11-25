@@ -446,6 +446,42 @@ fn each_update_hook_step_reaches_its_step() {
     fs::remove_file(setup.path("params.toml")).expect("remove");
 }
 
+/// `update-hook drain` and `update-hook resume` parse and reach the hook, which refuses each with
+/// valid params: exit 1, `pxe <step>: <detail>` on standard error, and the report of class
+/// `environment` and reason `unsupported_step` on standard output. pxe's manifest names neither
+/// step, so the updater never runs them.
+///
+/// Catches either word refused by the command line instead of the hook (exit 2), or taken for a
+/// step pxe has.
+#[test]
+fn update_hook_drain_and_resume_are_refused_by_the_hook() {
+    let setup = Setup::new("verbs-maintenance");
+    setup.versions(&["1.0.0", "1.2.3"]);
+    let params = setup.params(Some("1.2.3"), None, "").display().to_string();
+    for step in ["drain", "resume"] {
+        let (status, out, err) = run_step(
+            &["update-hook", step, "--params", &params],
+            setup.owner,
+            &[],
+        );
+        assert_eq!(status, 1, "{step}");
+        assert_eq!(
+            err,
+            format!("pxe {step}: the pxe hook has no such step\n"),
+            "{step}"
+        );
+        assert!(out.contains("\"class\":\"environment\""), "{step}: {out}");
+        assert!(
+            out.contains("\"reason\":\"unsupported_step\""),
+            "{step}: {out}"
+        );
+        assert!(
+            out.ends_with('\n') && out.lines().count() == 1,
+            "{step}: {out}"
+        );
+    }
+}
+
 /// `prepare`'s staged release must be the params' `updater.staged_release` byte for byte: one
 /// that differs, or a params file without the key, is refused as `bad_params` before anything is
 /// done, and the one that equals it goes on to the step (here to the settings, which are the

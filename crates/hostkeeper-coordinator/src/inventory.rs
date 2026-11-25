@@ -49,6 +49,11 @@
 //! ([`show_inventory`]), and `Enrollment.ListRecords` marks each record a host is enrolled
 //! against (`enrolled`), and lists only those, or only the others, when asked.
 //!
+//! An enrolled host no record matches is given one by the coordinator, from its claims: right
+//! after an operator approves it, and at the coordinator's start for one enrolled before
+//! (`inventory_enrolled.rs`). The record is added by `coordinator`, names no group and has no
+//! window, so it approves nothing.
+//!
 //! Apart from the match, each record says what the enrollment store holds for its host id
 //! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
 //! one. It is read from the store by host id, so it holds after a restart and for a host never
@@ -79,6 +84,7 @@ pub use window::{
 use crate::enrollment::groups::{group_in, held_in};
 use crate::host_groups::HostGroups;
 use crate::operator::{Caller, entry_proto, valid_reason};
+use crate::ops::AuditBy;
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
 
@@ -104,6 +110,10 @@ mod window;
 /// `Enrollment.UpdateRecord`.
 #[path = "inventory_update.rs"]
 mod update;
+
+/// The record the coordinator writes for a host enrolled without one.
+#[path = "inventory_enrolled.rs"]
+mod enrolled;
 
 /// Whether `n` is zero: a window a record does not have is left out of the ops file.
 fn is_zero(n: &u64) -> bool {
@@ -541,7 +551,7 @@ fn macs_of(
 /// of them, as the module says, or none; without, a role or none.
 fn record_of(
     request: proto::AddRecordRequest,
-    by: &str,
+    by: &(impl AuditBy + ?Sized),
     at_unix: u64,
     window: &RecordWindow,
     held: Option<&HostGroups>,
@@ -594,7 +604,7 @@ fn record_of(
         bmc_mac,
         serial,
         notes,
-        by: by.to_owned(),
+        by: by.by_name().to_owned(),
         at_unix,
         approve_until_unix,
         used: None,
@@ -647,6 +657,29 @@ pub fn show_match(
             pending.candidate_host_ids = ids;
         }
     }
+}
+
+/// Why `record` may not join `records`, if it may not: `record_exists` when one holds its host
+/// id, `record_conflict` when one holds one of its MACs or its serial (letters compared without
+/// case), `capacity` when they are [`MAX_RECORDS`].
+fn refused_beside(
+    records: &[InventoryRecord],
+    record: &InventoryRecord,
+) -> Option<proto::EnrollmentRefusal> {
+    if records.iter().any(|r| r.host_id == record.host_id) {
+        return Some(proto::EnrollmentRefusal::RecordExists);
+    }
+    let mac_taken = records
+        .iter()
+        .any(|r| r.macs().any(|held| record.macs().any(|new| new == held)));
+    let serial_taken = !record.serial.is_empty()
+        && records
+            .iter()
+            .any(|r| r.serial.eq_ignore_ascii_case(&record.serial));
+    if mac_taken || serial_taken {
+        return Some(proto::EnrollmentRefusal::RecordConflict);
+    }
+    (records.len() >= MAX_RECORDS).then_some(proto::EnrollmentRefusal::Capacity)
 }
 
 /// The page `limit` asks for: [`MAX_PAGE`] for 0 or for a limit above it.
@@ -738,21 +771,8 @@ impl Coordinator {
         let mut enrolled = false;
         let done = self.ops.try_change(Write::BeforeMemory, audit, |state| {
             let records = &mut state.inventory;
-            if records.iter().any(|r| r.host_id == record.host_id) {
-                return Err(proto::EnrollmentRefusal::RecordExists);
-            }
-            let mac_taken = records
-                .iter()
-                .any(|r| r.macs().any(|held| record.macs().any(|new| new == held)));
-            let serial_taken = !record.serial.is_empty()
-                && records
-                    .iter()
-                    .any(|r| r.serial.eq_ignore_ascii_case(&record.serial));
-            if mac_taken || serial_taken {
-                return Err(proto::EnrollmentRefusal::RecordConflict);
-            }
-            if records.len() >= MAX_RECORDS {
-                return Err(proto::EnrollmentRefusal::Capacity);
+            if let Some(refusal) = refused_beside(records, &record) {
+                return Err(refusal);
             }
             let at = records.partition_point(|r| r.host_id < record.host_id);
             records.insert(at, record.clone());

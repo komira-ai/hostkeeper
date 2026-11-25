@@ -1,6 +1,9 @@
 # The coordinator's state: where it is, backing it up and restoring it
 
-The coordinator keeps its durable state in one of two stores, chosen by the flags of `serve`:
+The coordinator keeps its durable state in one of two stores, chosen by the flags of `serve`. The
+file store is for one process: its lock keeps a second coordinator off the same files. The database
+store may be shared by several coordinators at once ([Several coordinators](#several-coordinators-on-one-database)
+below):
 
 - **The file store**: files named by three flags, `--state-file`, `--ops-file` (by default the state
   file's name with `.ops` added) and, when it is the hosts' CA, `--enrollment-dir`.
@@ -46,27 +49,148 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   Enrollment is on when `--ca-key-file` is given (with `--server-cert-file` and `--server-name`, as
   with the file store); the enrollment store is the database's.
 - **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
-  without waiting, runs the migrations the database lacks (each in its own transaction, recorded in
-  `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
-  before the lock is held. It refuses to start, naming why, when:
+  shared and without waiting (several coordinators hold it together), runs the migrations the database lacks (each in its own transaction, recorded in
+  `schema_version`), raises the lease's epoch, makes its row of the `instances` table, loads the
+  state, and opens the rest of its writing sessions (`--database-pool`, below), each holding the
+  lock shared too. Nothing is read or written before the lock is held. Each migration runs with
+  `lock_timeout` set to `--migrate-ddl-lock-timeout-ms` (default 3000, 1 to 4999): a statement of it
+  that waits longer for a lock, behind a running coordinator's transaction, rolls the whole migration
+  back, so the running coordinator's statements queued behind it wait no longer than that. The start
+  then lets go of the migrations' lock, waits `--migrate-retry-secs` (default 5) and tries again from
+  that migration, `--migrate-attempts` times in all (default 6). It refuses to start, naming why,
+  when:
   - the database is not up (`the database is not up: ...`): nothing listens, or it is starting up.
     The supervisor starts the coordinator again; the code has no wait loop;
   - the server refuses (`the database refused the coordinator: ...`): a login, a database that is
     not there, or a setting. A database with `fsync`, `synchronous_commit` or `full_page_writes`
     off is refused, naming the setting: the coordinator acknowledges what is committed;
-  - another session holds the lock: `another coordinator holds the lock of this database`;
+  - a session holds the lock exclusively (the release before this one, an `import` or an `export`):
+    `another coordinator holds the lock of this database`;
   - the database holds a migration this release does not know, and that migration says older
     releases must not run on it: `the database's schema is newer than this coordinator (migration
     <n>, <name>)`;
-  - a migration fails: it is rolled back whole, and the start names it.
-- **One writer.** Every write goes through the session that holds the lock. Each transaction moves
-  the lease's commit counter on, and the database refuses that from any session without the lock,
-  so a coordinator that lost its session can commit nothing. Reads that are not decisions
+  - a migration fails: it is rolled back whole, and the start names it;
+  - a migration could not have its locks at any of its attempts: `migration <n> (<name>) could not
+    have its locks within its lock timeout in <attempts> attempts, each rolled back: ...`.
+- **The writing sessions.** Every write goes through one of the coordinator's writing sessions
+  (`--database-pool`, default 4, at least 1), each holding the lock: a write takes a free session,
+  and waits only while every one is busy. A Postgres that serves N coordinators needs N x
+  (`--database-pool` + 1) connections. Each transaction first inserts its row of the `tx_ledger`
+  table, which names it if its commit is lost, and deletes up to 100 rows older than an hour that
+  no other transaction holds, so it never waits for another transaction's purge. A coordinator that lost any of its sessions commits
+  nothing, on any of them, until the next heartbeat's revival has opened every lost one again with
+  the lock. Reads that are not decisions
   (`Audit.List`, the enrollment lists, the alerts' scans) run on a second, read-only session.
-  Decisions read memory: a heartbeat in the steady state runs no query.
+  A heartbeat is decided in one transaction, and its host's enrollment and deny rows are read
+  fresh ("A heartbeat's decision", below), so a deny another coordinator recorded is seen at once.
+- **The fleet's rows.** Every heartbeat a coordinator answers is kept, in one statement on a writing
+  session and outside a transaction, in the tables of migration `0024`: the host's row of
+  `fleet_hosts` (the heartbeat as read, the database's time it was heard, the host's own clock in
+  it and the instance that heard it), a row of `fleet_bakes` for each service the heartbeat names
+  (the healthy beats in a row at one version, the bake of `docs/design/host-updates.md`), and the
+  removal of the host's row of `fleet_orders` for a service whose ordered version it reports. A
+  heartbeat older by its host's clock than the one stored is dropped unless the stored one is
+  `--beat-reorder-secs` old (default 30, 1 to 44): two coordinators can receive one host's
+  heartbeats out of order. When the newest row of `fleet_hosts` is 45 seconds old or older, or
+  there is none (a database restart, an outage, a first start), the statement raises
+  `cluster_quiet.until_unix` to `--quiet-secs` past its moment. A heartbeat whose row cannot be
+  written is answered all the same (`a beat is not kept` in the log). The decision reads these
+  rows (next bullet).
+- **A heartbeat's decision.** Over the database a heartbeat is decided in one transaction
+  (`store/postgres/decide.rs`, `store/decision.rs`). It takes the row of `rollout_gate` without
+  waiting: a gate held, or asked for by an operator's edit that waits, leaves the host told
+  nothing new until its next heartbeat. Under the gate it reads again every part another
+  coordinator changed since this one read it, and the fleet's rows, so the decision is the same
+  whichever coordinator hears the host. The halts, the stages entered, the marks and rollbacks
+  it makes, and the orders it gives (each written against the row as read) are written in that
+  transaction, and a decision that cannot be made or committed gives no order: the host keeps
+  what it runs and asks again. The quiet time after a start is read from `cluster_quiet`, so it
+  holds for the whole database and not for one process. The services waiting for their turn to
+  roll are ordered by `desired.set_seq` and `group_desired.set_seq`, taken in the transaction
+  that sets a version, so every coordinator orders them alike. Over the files there is one
+  process, nothing to take, and the heartbeat is decided over the fleet in its memory.
+- **Edits, and the copies in memory.** Each change of the state (an operator's, CI's, or one the
+  coordinator makes itself) is one transaction that locks, after its row of `tx_ledger`, the row
+  of `rollout_gate` when it changes what a rollout decision reads (the desired state, the
+  operations state, the layout, the verdicts), then the row of each part of the state it changes
+  in `state_versions`, then the row of `audit_counter` when it writes audit lines; it reads afresh
+  any part another coordinator changed since this one read it, makes the change on that, writes the
+  rows that differ, and moves each part's version on. An edit waits for the gate at most
+  `--operator-gate-wait-ms` (default 30000), and is refused `store_failed` with nothing changed
+  when the wait runs out; a heartbeat's own write (its verdicts) never waits, and is made at a
+  later heartbeat when the gate is held. A change decided on the desired state in memory and
+  committed with the operations state (a set in host groups, a force, a host group's or a
+  repository's change) is not made when its transaction finds the desired state read afresh: a
+  commit came between, another coordinator's, or this one's own set just before it, whose
+  `set_seq` memory does not hold. A set in host groups is then decided again on the state as read,
+  up to three times in all, and is refused `state_changed` (nothing changed; asking again is safe)
+  when the state changed each time; the other changes are refused `store_failed`, and the log
+  line of the refusal says why. A refusal by the database names its SQLSTATE, and the table and
+  constraint the database names. Audit lines are numbered by `audit_counter` in the order
+  their transactions commit, with no gap; each start sets it past the newest line, which a release
+  before this one numbered without it. Every request, a heartbeat among them, first reads the
+  parts' versions (one query on the read-only session) and reads again, in one snapshot, each part
+  whose version moved on; otherwise decisions and answers read memory. A host's facts generation
+  is `enrollment_hosts.facts_generation`, raised to the audit number of the change that changes
+  the host's facts, in its transaction.
+- **The instances.** Each start makes a row of the `instances` table with an id of its own (random),
+  the time it started and was last seen (the database's clock), its release, and the addresses of
+  its listeners, and moves `seen_unix` on every `--instance-beat-secs` (default 5) while it runs,
+  making the row again if it is gone. It says which coordinators serve on the database and since
+  when (`SELECT * FROM hostkeeper.instances ORDER BY seen_unix DESC`); no decision reads it, and the
+  row of a coordinator that stopped stays as it was last seen until the job `prune` deletes it, a
+  day after it was last seen.
+- **Periodic jobs.** Every `--job-tick-secs` (default 5) a coordinator claims the periodic jobs that
+  are due, one statement over the `periodic_jobs` table (migration `0025`) that moves each claimed
+  job's due time on by its period, so of all the coordinators on the database one runs a job in a
+  period; a coordinator that stops after a claim loses that run, and the job is due again one
+  period later for any of them. The periods are `--job-every NAME=SECS` (repeatable): `alerts`
+  (default 15) observes the alerts, and the coordinator whose insert into the `alerts` table made
+  an alert's row logs its `alert=` line, once (a cleared alert's row is deleted, so one that comes
+  back is logged again; the `alert=` lines are in the logs of the service, not of one instance);
+  `request-expiry` (default 15) expires the enrollment requests no operator approved in time, by
+  a write that lands only on the requests as read, and audits each `request_expired` once; `prune` (default 3600) deletes
+  the expired sessions, the failure counts the limiter forgot, the `instances` rows not seen
+  for a day and the orders of `fleet_orders` that aged out (120 seconds after they were given). `xcode-feed` (default 86400, claimed only with `--xcode-feed-url`) reads the list of Xcode releases and replaces the table `xcode_releases` with it; a read that fails is a warning in the log, and the job is due again a day later. Over files the alerts are observed every 15 seconds and the requests expire at the
+  `--tls-reload-secs` tick, as before. `SELECT * FROM hostkeeper.periodic_jobs` shows each job's
+  next due time and the instance that ran it last.
+- **Maintenance runs.** Migration `0029` adds the tables `maintenance_runs` (one row per run an
+  operator scheduled with `Maintenance.Schedule`, by its id, with its kinds, hosts, host group,
+  window, batch, drain deadline, reason, who scheduled it and when, and when it was cancelled) and
+  `maintenance_hosts` (one row per host's turn of a run, keyed by the run's id and the host's node
+  id, with its step, the time it entered it, its kinds, what it applied and, for a host left out,
+  why), both in the order they are held in (`docs/design/maintenance-updates.md`, sections 5.1 and
+  5.7). A host's row changes when the coordinator starts its turn (its step becomes `staging`,
+  audited `maintenance_start`) and when the host's daemon reports another step of it
+  (`maintenance_step`), each in the heartbeat's decision. A database that holds no row holds no
+  run, which is how a coordinator of this release
+  starts on a database the release before migrated. `0029` says older releases may run on it
+  (`may-run`): the release before never reads either table, so going back below this release needs
+  no restore for it; it serves no maintenance run while it runs, and the rows wait for this release
+  to come back. A shipped migration is never edited: its SHA-256 is pinned. `export` counts both
+  tables, and the file store keeps the runs under the key `maintenance_runs` of the ops file.
+  Migration `0030` adds two counts to `maintenance_hosts`, each 0 by default: `offered_again`, how
+  many times a host whose turn deferred was offered it again (its order id is the run's, then
+  `-2`, `-3` and on), and `baked_beats`, the healthy heartbeats in a row a host whose turn is done
+  has sent toward its group's `bake_beats`, until which it holds its batch place. The count is
+  written at each such heartbeat with no audit entry; the heartbeat that ends the bake is audited
+  `maintenance_step` (`run <id> baked`). `0030` is `may-run`: the release before reads and writes
+  the table by its other columns, so it never offers a deferred host again and frees a done host's
+  place without the bake. In the ops file the two counts are the keys `offered_again` and
+  `baked_beats` of a host's turn, written only when not 0; a coordinator before them refuses the
+  file then, as with the run's other keys.
+  Migration `0031` adds two columns to `maintenance_hosts` for a halted host: `queued`, the act an
+  operator queued for it (`retry` or `put_back`, NULL for none; the check refuses any other name),
+  and `order_try`, the last try of the order of its turn the coordinator made (0 by default, never
+  negative), which each queued act raises so that it reaches the daemon as a new try. `0031` is
+  `may-run`: the release before reads and writes the table by its other columns, leaving these as
+  they are (NULL and 0 in a row it adds), and queues no act. In the ops file they are the keys
+  `queued` and `order_try` of a host's turn, written only when set or not 0; a file written before
+  them reads as none and 0, and a name other than `retry` or `put_back` is refused; a coordinator
+  before them refuses an ops file that holds them, as with the run's other keys.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
-  force), the write id of the last set (`hkctl releases set-desired --write-id`, 1 to
+  force), the write id of the last set (`hk releases set-desired --write-id`, 1 to
   128 visible ASCII characters), and the version and minimums the last change of version replaced.
   `Releases.SetDesired` answers them as its `record` and `Releases.Converge` shows them, so a writer
   that lost an answer can look up whether its write landed. A set with `--if-generation <n>` is
@@ -155,28 +279,30 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   SHA-256 stays pinned. The file store drops the group `all` and what is keyed by it from the
   state file and the ops file when it reads them, and writes the `host_groups` key without it.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
-  waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
-  that runs out loses the session. The same bounds hold at start, for each statement of a
-  migration and of the load.
+  waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A
+  connect or a connection that runs out loses the session. A statement whose wait for a lock, or
+  whose run, runs out is refused: its write is rolled back, the log names what it waited for
+  (`a statement of this write ran out its bounded wait (for a lock another transaction held, or
+  for its own run): ...`, then the server's text naming the lock), and the
+  session stays, so the next write is made without waiting for a revival (and waits as long
+  again while what it waits for is held). The same bounds hold at start, for each
+  statement of a migration and of the load.
 - **A lost session.** When a write finds the session gone (the server restarted, the network
-  dropped, a wait ran out), the coordinator orders nothing (its status says it is quiet, and an
+  dropped, a connect ran out), the coordinator orders nothing (its status says it is quiet, and an
   operator's force or abort waits too), refuses every change that lowers protection
   `store_failed`, keeps a change that raises protection (a halt, a bad mark, a pause, an abort) in
   memory, still answers heartbeats, and raises the critical alert `store_unreachable`
   ([holds-and-force.md](holds-and-force.md)). At each heartbeat it opens a new session and takes the
-  lock again, on a thread of its own. With the lock it reads the lease:
-  - the same epoch: no other coordinator led meanwhile. A commit whose session was lost while it was
-    in flight is settled by the lease's counter (when it landed, memory takes it and the log says
-    so), the changes in memory are committed, and the coordinator orders again;
-  - another epoch: another coordinator led the database meanwhile and this one's memory is stale.
-    It logs every change it drops by its audit number, removes the marker, and exits non-zero
-    (`another coordinator led the database while this one's session was lost ...`); its supervisor
-    starts it again on the database as the other left it.
+  lock again (shared: another coordinator may have started meanwhile, which changes nothing), on a
+  thread of its own. With the lock, a commit whose session was lost while it was in flight is
+  settled by its row of the `tx_ledger` table (when it landed, memory takes it and the log says
+  so), the changes in memory are committed, and the coordinator orders again.
 - **The marker** (`--halt-marker-file`, on a local disk that stays writable when the database is
   not) lists the audit number of every change in memory and not yet committed, with the epoch:
   `{"unwritten":[41,42],"epoch":3}`. It is written before such a change's commit is tried and
   removed once nothing is pending. A start that finds it removes it when the database is still at
-  the epoch the marker names and every number it lists has its row in the `audit` table (each such
+  the epoch the marker names (each start of any coordinator of the database raises the epoch by
+  one) and every number it lists has its row in the `audit` table (each such
   change commits its audit row with it); otherwise it refuses to start, naming the numbers that did
   not land (every number, when another coordinator led the database since, as its rows can carry
   the same numbers): look each up in the log, make it again by
@@ -191,6 +317,53 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   ([docs/deploy/coordinator](../deploy/coordinator/README.md)) dumps it every six hours and keeps a
   week of dumps; its runbook has the one-time setup, the restore (into an empty database, then the
   serial counter moved on) and the monthly restore drill.
+
+## Several coordinators on one database
+
+Any number of coordinators may serve on one database (`docs/design/coordinator-multi-instance.md`).
+There is no leader: each takes the lock shared, each decides inside a transaction, and any of them
+answers any host or operator.
+
+- **What is shared.** Everything the database store holds ([above](#the-database-store)): the desired
+  state, the operators' changes, the fleet's rows and the decisions over them, the enrollment
+  records and the deny rows, the users, the sessions and the limiter's failure counts, the periodic
+  jobs and the audit log. A change one coordinator commits is read by the others at their next
+  request, by the versions of `state_versions`. What a coordinator keeps in memory is a copy that
+  it reads again when that version moves, or a cache that can only refuse earlier (the spent CI
+  token ids).
+- **What a restart or a deploy does.** It signs no operator out (the sessions are rows), loses no
+  halt, plan position or queue place, and leaves each periodic job to the other coordinators. The
+  files of the file store are one process's: a restart there signs everyone out ("The sign-in",
+  below) and the lock refuses a second coordinator.
+- **What stays per coordinator.** Its listeners, its row of `instances`, its console and SSH
+  tunnels, the counts `clock_skew_beats` and the heartbeats' skip sets of the enrollment store,
+  and its server certificate. The listeners one coordinator serves are its own: a
+  console stream or a tunnel lives on the coordinator that opened it.
+- **The Xcode store is a directory, not rows.** `--xcode-dir` is not in the database: every instance
+  mounts the same directory, and each reads and writes it as files ([xcode-releases.md](xcode-releases.md)).
+  An upload is checked against the directory under the instance's own lock, so two uploads of one
+  release that reach two instances at once are not serialised between them; push each release once.
+  The refusal of a second build under a version (`xcode_version_taken`) is one instance's memory.
+  Each instance names its upload files with a random token of its own, and a start removes only the
+  `.upload-` files last written over 24 hours ago, so a starting instance does not remove an upload
+  another instance has in progress.
+- **What is not built.** The edge's health checks, the start-first update and the Mac listener
+  through the edge are not in this repository: the deploy runs one coordinator and replaces it
+  stop-first ([../deploy/coordinator-health.md](../deploy/coordinator-health.md), section 17 of the design).
+
+### Stopping, and the two health routes
+
+`--health-listen` answers two routes, `/healthz` (the process is alive) and `/readyz` (the
+coordinator takes traffic now), and `--drain-delay-secs` (default 15) says how long a stopping
+coordinator keeps serving after it is told to stop; both are the same over either store
+([../deploy/coordinator-health.md](../deploy/coordinator-health.md)). From SIGTERM or SIGINT
+`/readyz` answers 503 `draining` at once and `/healthz` stays 200, every listener keeps accepting
+for the delay, and then the listeners accept no more, the open connections finish, held
+`Releases.WaitConverged` calls are answered, and the process exits 0 once no connection is open.
+`/readyz` also answers 503 `store_unreachable` while a database session is lost ("A lost session",
+above), where `/healthz` stays 200: the process is alive, and a restart would not bring the database
+back. The delay and the container's `stop_grace_period` are checked once at deploy, by the person
+who deploys, against the edge's values; the coordinator does not read them at run time.
 
 ## Moving from the database to the files
 
@@ -239,11 +412,12 @@ The rest of this page is the file store.
 | `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
-| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hkctl`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
+| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hk`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.layout` | The lab's layout (`docs/design/ui-shell-lab.md`): the one cluster's name, its numbered rows, the numbered racks of each row with their height in U, and the placements of servers (an inventory entry, or a host no entry matches) in racks, each with its lowest U and its height in U. Written whole when a change of the layout commits, and only then; a file that is not there is an empty layout, and one that breaks a rule of it (a placement outside its rack, two on one U) stops the start, naming the file. Backed up and restored with the state file. | The Home page shows an empty lab and every server unplaced; rows, racks and placements are made again on the page. |
+| `--xcode-dir` | The private Xcode store ([xcode-releases.md](xcode-releases.md)): per archive, `<sha256>.xip` (the bytes as Apple ships them) and `<sha256>.json` (its version, build, size, who pushed it and when), each mode 0600. Not written by `backup`, which copies the state files only; with the file store or the database, it is the directory the operator makes and mounts. | The archives are gone; an archive is pushed again, and the alert `xcode_release_waiting` stands until it is. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
-| `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), the `trusted_publishers` key of a service (its trusted publishers, [ci-client.md](../deploy/ci-client.md#trusted-publishers); written only once an operator changed the package's list; a coordinator before it refuses the file then), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
-| `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
+| `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), the `trusted_publishers` key of a service (its trusted publishers, [ci-client.md](../deploy/ci-client.md#trusted-publishers); written only once an operator changed the package's list; a coordinator before it refuses the file then), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. The key `maintenance_runs` holds the maintenance runs (`Maintenance.Schedule`, [maintenance-updates.md](../design/maintenance-updates.md)), each with its hosts; it is written only while a run is held, and a coordinator before maintenance runs refuses the file then, as with `host_groups`. | All of it. |
+| `<ops-file>.audit` | Every change to the ops file, one JSON line each, and the console's audit-only lines (`console_open`, `power_action` and the rest), numbered with the changes, which change nothing and never enter the ops file's ring; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
 | `<ops-file>.audit.<n>` | The sealed segments of the audit file, the older changes, one JSON line each ([holds-and-force.md](holds-and-force.md#the-audit-file)). Written once the audit file has been rotated. | The audit history before the newest rotation. |
 | `<ops-file>.halts` | The halt reports, who raised each halt, the reports kept while a halt stood, each service's clear generation, and each service's update plan position (`rollouts`: the version it is for, the stages entered, the hosts recorded done, an operator's pause; [rollout-plans.md](rollout-plans.md#what-a-restart-keeps)). Written once there is a halt or a plan that went past its first stage or was paused. | The halt reports and the clear generations: a halted service halts again after its clear. The plan positions: each plan starts at its first stage with no host recorded done, and an operator's pause is gone, so a paused plan goes on until it is paused again. |
 | `<ops-file>.halts.next` | Only after a crash in the middle of a change: the halts file that change staged. The next start settles it. | The ops file holds that change and the halts file does not: what the change added to the halts file (a clear's generation, the reports of its acknowledgements) is lost. |
@@ -291,8 +465,8 @@ is the binary, so `backup ...` is the container's arguments, as `serve ...` is.
 
 ## Restoring after a lost disk
 
-1. Put the CA's key and its `.cert` back from the sealed copy, at the path `--ca-key-file` names
-   ([ca-backup.md](ca-backup.md)). The server certificate file need not be restored: the start
+1. Put the CA's key and its `.cert` back from the sealed copy, at the path `--ca-key-file` names,
+   checked with `hostkeeper-coordinator check-ca enrollment` ([ca-backup.md](ca-backup.md)). The server certificate file need not be restored: the start
    makes it when it is missing.
 2. Restore the snapshot to the paths `serve` will run with:
 
@@ -390,6 +564,13 @@ The coordinator reads it at start and on every `--tls-reload-secs`, by its own w
   cannot write after the entry repeats the entry at the next look. Expiry is in the same order (void, audit, delete), and a
   file already gone when it is deleted counts as deleted.
 
+Over a database every coordinator reads the same file (the volume is mounted by each), and what it asks for is written once:
+the user's row is written unless it holds the file's `id` already, and only the coordinator whose write changed the row audits
+`user_bootstrap` (the row first, then the entry); a coordinator that finds the `id` in the row does nothing, without hashing.
+At expiry the void is written unless the row is void already, and audited by the coordinator that voided it; a file whose `id`
+the user's row does not hold is audited by the coordinator whose delete removed the file; a delete that finds the file gone, or
+its volume read-only, counts as done.
+
 A file that asks for a `valid_until` further than `--initial-password-secs` (default 3600, at most 3600) past the clock, a
 password under the policy, a bad mode or a text this build cannot read is refused naming the flag: at start the coordinator does
 not start, and on a tick it is logged as a warning and nothing changes. The file is deleted when it has expired, and when the
@@ -427,8 +608,16 @@ carries an `Authorization` header never has its cookie read, and a gRPC call nev
 (`docs/gateway.md`) a call with the cookie and no `Authorization` header is made as the signed-in user, under the same checks.
 A session that must change its password may call `/v1/password`, `/v1/logout` and `/v1/session` and nothing else.
 
-Sessions are kept in memory: a restart signs everyone out. They end 30 minutes after their last use, or 12 hours after the
-login. The flags, each with its default from the start:
+A session also opens the UI's Remote SSH terminal, `GET /v1/ssh/terminal?host=<host id>` (a WebSocket upgrade, private listener only; `docs/operations/ssh-ca.md`, "Remote SSH from the UI"): the terminal's tunnels live as long as the session does, and what is typed in the terminal counts as use of it.
+
+Over the files sessions are kept in memory: a restart signs everyone out. Over a database they are rows of the `sessions`
+table (keyed by the SHA-256 of the cookie's id, never the id) and the failure counts rows of `login_failures` (migration `0025`):
+every coordinator on the database answers the same cookie and counts the same failures, and a restart or a deploy signs no one
+out; a session's last use is written at most every `--session-touch-secs` (default 30), so its idle deadline may count from up
+to that long before its last use. When the database cannot be reached no session is made or found and every name is told
+locked; a logout or a password change that cannot end its sessions answers 503 `store_unreachable`, and a user's disable,
+removal or password reset `store_failed` (the change stands; making it again ends them). Sessions end 30 minutes after their last use, or 12 hours after the login. The flags, each with its default from the
+start:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -446,8 +635,8 @@ routes exist even with no user, and no one can sign in until `--initial-admin-fi
 ## Users and API tokens
 
 The operator API has two services for the accounts of the sign-in (`docs/design/operator-login.md`, section 7), served on the private
-listener as every operator call is, by gRPC and on the JSON gateway (`docs/gateway.md`), and by `hkctl users ...` and
-`hkctl api-tokens ...` (`docs/cli.md`). Every operator is equal: a token of the tokens file, a stored API token and a signed-in user
+listener as every operator call is, by gRPC and on the JSON gateway (`docs/gateway.md`), and by `hk users ...` and
+`hk api-tokens ...` (`docs/cli.md`). Every operator is equal: a token of the tokens file, a stored API token and a signed-in user
 call both, and the audit's `by` is the name of whichever called. A CI token is refused `forbidden`.
 
 - `Users.Create` takes a name and makes the user with a temporary password, which the answer carries once and the coordinator
@@ -462,10 +651,13 @@ call both, and the audit's `by` is the name of whichever called. A CI token is r
   user's audit rows stay. `Users.List` tells each user's name, whether it is enabled and must change its password, who made it and
   when, when it last signed in and until when a temporary password works; never a hash.
 - `ApiTokens.Create` takes a name and makes a token of 32 random bytes, `hkt_` and 43 base64url characters (the prefix lets a secret
-  scanner find a leaked one), which the answer carries once; the store holds its SHA-256, the creator and the time. The token is
-  an operator's bearer under its name from then on, and `ApiTokens.Revoke` ends that. A token cannot sign in: the login route
+  scanner find a leaked one), which the answer carries once; the store holds its SHA-256, its owner, the creator and the time. The
+  owner is the user `owner` names, or else the caller (a token of the tokens file must name one; a name that is no user's is
+  `unknown_owner`). The token is an operator's bearer acting as its owner from then on: every check reads the owner's name, and
+  the audit is by the owner with the token as `api_token`. `ApiTokens.Revoke` ends it, and so does disabling the owner (until the
+  owner is enabled again) or deleting them, which removes their tokens. A token cannot sign in: the login route
   reads passwords only. `ApiTokens.List` tells each token's name, whether it comes from the store or the tokens file, and for a
-  stored one who made it and when; tokens of the tokens file are read-only, and removing one means editing the file, which
+  stored one its owner and who made it and when; tokens of the tokens file are read-only, and removing one means editing the file, which
   `Revoke` answers `unknown_token` for.
 - A bearer is looked up in the tokens file and in the store in one pass, each compared in constant time. Users and tokens share one
   name space, the tokens file's names in it: a name that is already a user's, a stored token's or the tokens file's is
@@ -480,7 +672,7 @@ A coordinator before this release has neither service: it answers the paths `UNI
 ## The lab layout
 
 The operator API has one service for the lab (`docs/design/ui-shell-lab.md`), `Layout`, which takes an operator only (a CI token is
-`forbidden`) and which `hkctl layout ...` (`docs/cli.md`) and the Home page call. A hostkeeper runs one lab: the layout has one
+`forbidden`) and which `hk layout ...` (`docs/cli.md`) and the Home page call. A hostkeeper runs one lab: the layout has one
 cluster name, rows numbered 0, 1, 2, racks numbered within their row (each 1 to 60 U high, 42 by default) and placements. A
 placement puts a server in a rack from its lowest U, so many U high; U 1 is the bottom. It belongs to the physical server, which
 is its inventory entry when one matches the host (so a wipe and a new enrollment keep the place), else the host.

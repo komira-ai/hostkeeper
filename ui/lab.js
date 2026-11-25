@@ -12,6 +12,7 @@
 // pure function of the replies it is given.
 
 import { ApiError } from "./api.js";
+import { isDegraded, reasonsOf } from "./health.js";
 import { h, list } from "./view.js";
 
 const KIND_HOST = "LAYOUT_SUBJECT_KIND_HOST";
@@ -177,12 +178,29 @@ function versionOf(host) {
   return own !== undefined && typeof own.installedVersion === "string" ? own.installedVersion : "";
 }
 
+// Whether a host's last heartbeat said it runs Linux (on either architecture); a host that has
+// not sent one is not known to.
+export function isLinux(host) {
+  const platform = host.heartbeat && typeof host.heartbeat.platform === "string" ? host.heartbeat.platform : "";
+  return platform.startsWith("PLATFORM_LINUX_");
+}
+
+// Whether a host's last heartbeat said it is a Mac: its console is its screen (the Desktop page),
+// not a serial port. A host that has not sent one is not known to be.
+export function isMac(host) {
+  return Boolean(host.heartbeat) && host.heartbeat.platform === "PLATFORM_DARWIN_ARM64";
+}
+
 // Every server the lab knows, joined with its place: one for each enrolled host (its entry's
 // place when an entry matches it, else its own), one for each inventory entry no host is enrolled
 // against (pending), and one for each placement whose host or entry is gone (offline, `gone`).
-// A server is `{key, kind, id, name, state, group, version, host, placement}`; `host` is the node
-// id when a host is enrolled, `placement` the placement or null.
-export function serversOf(layout, hosts, records) {
+// A server is `{key, kind, id, name, state, why, group, version, host, linux, mac, placement}`;
+// `host` is the node id when a host is enrolled, `linux` whether that host's last heartbeat said it
+// is a Linux server (which has a serial Console), `mac` whether it said it is a Mac (which has a
+// Desktop), `placement` the placement or null. `why` is the short words of every reason the host
+// is not healthy (`health.js`, from the host and the alerts of Alerts.List that name it, `alerts`,
+// empty when they were not read), and a live host with one is `failed`.
+export function serversOf(layout, hosts, records, alerts = []) {
   const placed = new Map(layout.placements.map((p) => [p.key, p]));
   const seen = new Set();
   const out = [];
@@ -193,22 +211,26 @@ export function serversOf(layout, hosts, records) {
   const entries = new Set(records.map((r) => r.hostId));
   for (const host of hosts) {
     const entry = host.inventoryRecordId || (entries.has(host.nodeId) ? host.nodeId : "");
+    const reasons = reasonsOf(host, alerts);
     take({
       key: entry === "" ? `host:${host.nodeId}` : `inventory:${entry}`,
       kind: entry === "" ? "host" : "inventory",
       id: entry === "" ? host.nodeId : entry,
       name: host.nodeId,
-      state: hostState(host),
+      state: isDegraded(host, reasons) ? "failed" : hostState(host),
+      why: Array.from(new Set(reasons.map(({ group }) => group))),
       group: host.hostGroup || "",
       version: versionOf(host),
       host: host.nodeId,
+      linux: isLinux(host),
+      mac: isMac(host),
     });
   }
   for (const record of records) {
     if (!seen.has(`inventory:${record.hostId}`)) {
       take({
         key: `inventory:${record.hostId}`, kind: "inventory", id: record.hostId, name: record.hostId,
-        state: "pending", group: record.hostGroup || "", version: "", host: null,
+        state: "pending", why: [], group: record.hostGroup || "", version: "", host: null, linux: false, mac: false,
       });
     }
   }
@@ -216,8 +238,8 @@ export function serversOf(layout, hosts, records) {
   for (const p of layout.placements) {
     if (!seen.has(p.key) && !gear.has(p.key)) {
       take({
-        key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", group: "", version: "",
-        host: p.kind === "host" ? p.id : null, gone: true,
+        key: p.key, kind: p.kind, id: p.id, name: p.id, state: "offline", why: [], group: "", version: "",
+        host: p.kind === "host" ? p.id : null, linux: false, mac: false, gone: true,
       });
     }
   }
@@ -275,6 +297,60 @@ export function dropStart(layout, rackId, height, u, except) {
     }
   }
   return null;
+}
+
+// The U a sled `height` U high with its lowest U at `u` takes, in words: "U5", or "U5-7".
+export function uSpan(u, height) {
+  return height > 1 ? `U${u}-${u + height - 1}` : `U${u}`;
+}
+
+// Where the next sled `height` U high goes in `rackId` after one was put at `from`: the lowest start
+// at or above `from` where it fits, else the lowest anywhere in the rack, else null (no room).
+export function nextSledStart(layout, rackId, height, from) {
+  const starts = freeSledStarts(layout, rackId, height);
+  const above = starts.find((u) => u >= from);
+  if (above !== undefined) {
+    return above;
+  }
+  return starts.length > 0 ? starts[0] : null;
+}
+
+// The tallest a rack is made (the coordinator's limit), and the height a drag of a rack's bottom edge
+// asks for: the rack's height `from`, plus one U for each `unit` pixels the pointer moved down (`dy`;
+// up is negative), to the nearest U, never below 1 nor above the limit.
+export const MAX_RACK_HEIGHT = 60;
+export function dragHeight(from, dy, unit) {
+  const by = unit > 0 ? Math.round(dy / unit) : 0;
+  return Math.min(Math.max(from + by, 1), MAX_RACK_HEIGHT);
+}
+
+// Why `rackId` cannot be made `height` U high, in words, or null when it can: the height is 1 to the
+// limit, and a rack keeps every U a sled of it stands on (its U count from the bottom, so a shrink
+// takes U off the top). The words name each sled the shrink would cut, where it stands and what is
+// on it, and the least height the rack can have.
+export function rackHeightProblem(layout, rackId, height) {
+  if (!Number.isInteger(height) || height < 1 || height > MAX_RACK_HEIGHT) {
+    return `A rack is 1 to ${MAX_RACK_HEIGHT}U high.`;
+  }
+  const cut = sledsIn(layout, rackId).filter((s) => s.u + s.height - 1 > height);
+  if (cut.length === 0) {
+    return null;
+  }
+  const least = Math.max(...cut.map((s) => s.u + s.height - 1));
+  const said = cut.map((s) => {
+    const on = occupants(layout, s.id).map((p) => p.id);
+    return `${s.address} at ${uSpan(s.u, s.height)}${on.length === 0 ? "" : ` with ${on.join(", ")}`}`;
+  });
+  return `${rackName(layout, rackId)} cannot be ${height}U: that would cut off ${cut.length === 1 ? "the sled" : "the sleds"} ${said.join("; ")}. `
+    + `Move or remove ${cut.length === 1 ? "it" : "them"} first, or keep the rack at least ${least}U.`;
+}
+
+// The free slots of the sleds of `rackId`, `[{sled, slot, address, u, height}]` by address.
+export function freeSlotsIn(layout, rackId) {
+  const sleds = new Map(sledsIn(layout, rackId).map((s) => [s.id, s]));
+  return freeSlots(layout, "")
+    .filter((f) => sleds.has(f.sled))
+    .map((f) => ({ ...f, u: sleds.get(f.sled).u, height: sleds.get(f.sled).height }));
 }
 
 // The numbers of an address, `C0-R0-R1-S2-S0` -> [0, 0, 1, 2, 0], to order addresses by place.

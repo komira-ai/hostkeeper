@@ -6,6 +6,10 @@
 //! file's mode and synced, is hard-linked to the path, which fails when the file appeared
 //! meanwhile (that file is kept), and the temporary file is removed, with no copy left behind on
 //! any failure.
+//!
+//! A private file ([`write_private`], the update-account file) is written the same way with mode
+//! 0600, and one that is there is kept only when it is a regular file of the trusted owner with
+//! mode 0600 exactly, what the daemon's reader requires; any other file there is refused and left.
 
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
@@ -30,6 +34,14 @@ pub enum FileError {
     /// A file that is there is writable by its group or others, so it is not trusted as it is.
     #[error("{} is writable by its group or others; it is not trusted", path.display())]
     Writable { path: PathBuf },
+    /// A private file that is there has another owner or another mode than 0600.
+    #[error("{} is owned by uid {uid} with mode {mode:04o}, not by uid {owner} with mode 0600; it is not replaced", path.display())]
+    NotPrivate {
+        path: PathBuf,
+        uid: u32,
+        mode: u32,
+        owner: u32,
+    },
     #[error("{}: {source}", path.display())]
     Io {
         path: PathBuf,
@@ -63,6 +75,25 @@ fn existing(path: &Path) -> Result<Option<Written>, FileError> {
 /// Writes `text` to `path` with `mode` unless a regular file is there.
 pub fn write_if_absent(path: &Path, text: &str, mode: u32) -> Result<Written, FileError> {
     write_if_absent_with(path, text, mode, &|| {})
+}
+
+/// Writes `text` to `path` with mode 0600 unless a regular file is there; one that is there must
+/// be owned by `owner` with mode 0600, or it is refused and left.
+pub fn write_private(path: &Path, text: &str, owner: u32) -> Result<Written, FileError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta)
+            if meta.file_type().is_file()
+                && (meta.uid(), meta.mode() & 0o7777) != (owner, 0o600) =>
+        {
+            Err(FileError::NotPrivate {
+                path: path.to_path_buf(),
+                uid: meta.uid(),
+                mode: meta.mode() & 0o7777,
+                owner,
+            })
+        }
+        _ => write_if_absent(path, text, 0o600),
+    }
 }
 
 /// [`write_if_absent`], with `between` run after the temporary file is written and before it is

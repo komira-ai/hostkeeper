@@ -38,8 +38,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-There is no other build system in this repository. Tests are hermetic: they need no network,
-no fixed port and no root, and they write only under Cargo's target directory.
+Cargo is the build of record: CI's gate, the coverage and every release use it. The same
+workspace also builds with Buck2 through [buildrules](https://github.com/komira-ai/buildrules),
+on a remote-execution build farm, in the advisory farm lane ([docs/farm.md](docs/farm.md)). Tests
+are hermetic: they need no network, no fixed port and no root, and they write only under Cargo's
+target directory.
 
 ## What CI checks on a pull request
 
@@ -81,14 +84,148 @@ Nothing for macOS or linux-arm64 runs on a pull request, and nothing privileged 
 a job on any other platform in any workflow that runs on `pull_request`, refuses a job as root
 (`sudo`, a privileged container) in any workflow but `privileged.yml`, `net-install.yml`, the two
 copies of `privileged.yml`'s jobs in `pr-device.yml` and the job `macos-device` of `release.yml`,
-refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
+refuses a write scope, a secret or the token in every workflow that runs on `pull_request` (but
+the `id-token: write` of `farm.yml`'s job `build`, below), and it
 also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
 to the order of its steps: the release is verified before any step can request an OIDC token or
-run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, that job is the only
-one that may hold `id-token: write`.
+run the hostkeeper program. Besides `artifacts.yml`'s `attest`, which signs, and `farm.yml`'s
+`build`, which joins the build farm's network (below), that job is the only one that may hold
+`id-token: write`.
+
+`.github/workflows/farm.yml` is the farm lane: `buck2 build //:ci` of the workspace on the build
+farm, with `local: 0` asserted, on every push to `main` and every pull request from a branch of
+this repository. It is advisory, never required: `ci.yml` stays the gate. Its job holds
+`id-token: write` so that komira's farm-connect action can join the farm's private network with
+the job's OIDC token, under the exact `if:` the workflow lint gives it (a fork's pull request and
+Dependabot's are skipped; a fork's gets no OIDC token), and the lint holds that action's inputs to the organisation's variables
+of their names. What it builds, what it leaves to `ci.yml` and why, and how to run it yourself:
+[docs/farm.md](docs/farm.md).
+
+## The merge queue
+
+`main` takes pull requests through GitHub's merge queue. A pull request whose checks passed is
+added to the queue. The queue makes a branch `gh-readonly-queue/main/pr-<n>-<sha>` holding `main`,
+the pull requests ahead of it in the queue and this pull request's squash commit, runs the checks
+`main` requires on it (the event `merge_group`), and moves `main` to that commit when they pass.
+So a pull request is checked once more, on top of exactly what will be ahead of it, and is not
+brought up to date and checked again every time `main` moves.
+
+`main` requires four checks: `lint` and `test` from `ci.yml`, and `privileged` and `openrc-device`
+from `pr-device.yml`. Both workflows run for a merge group (`merge_group` of `checks_requested` on
+`main`) and report each check under the same name as for a pull request. The workflow lint
+(`crates/xtask/tests/workflows/merge_queue.rs`) holds them to that:
+
+- the triggers: every pull request, every merge group of `main`, and (`ci.yml`) a push to `main`;
+- no job `if:` but `always()`: GitHub counts a skipped job as a passed check, so the queue would
+  merge what nothing tested;
+- nothing reads which event started the run (`github.event*`, `github.ref*`, `github.head_ref`,
+  `github.base_ref`, or their `GITHUB_*` variables) but the `if:` of the cache saves, which starts
+  `github.event_name == 'push' &&`: a pull request and a merge group both skip those steps, so a
+  merge group runs every step a pull request runs;
+- the concurrency: a pull request's newer run cancels its older one (the group is the pull
+  request's ref), and any other run, a merge group's included, has a group of its own (its run id),
+  so no merge group cancels another (a merge group has no pull request number to key on);
+- each required check is the check of exactly one job, and no other workflow runs for a merge
+  group.
+
+The pull-request rules of the lint hold for a merge group too: no write scope, no secret or token,
+nothing as root but `pr-device.yml`'s two jobs, and no runner that is not Linux x86_64. A merge
+group's run of `ci` starts no release: `release.yml` runs after a `ci` run of a push to `main`.
+
+The queue is a rule of the ruleset of `main`. The workflow lint holds the checks this ruleset
+requires to the workflows' and its queue parameters to these:
+
+```json
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": ["squash"],
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [
+          { "context": "lint", "integration_id": 15368 },
+          { "context": "test", "integration_id": 15368 },
+          { "context": "privileged", "integration_id": 15368 },
+          { "context": "openrc-device", "integration_id": 15368 }
+        ]
+      }
+    },
+    {
+      "type": "merge_queue",
+      "parameters": {
+        "merge_method": "SQUASH",
+        "grouping_strategy": "ALLGREEN",
+        "max_entries_to_build": 5,
+        "min_entries_to_merge": 1,
+        "max_entries_to_merge": 5,
+        "min_entries_to_merge_wait_minutes": 5,
+        "check_response_timeout_minutes": 360
+      }
+    }
+  ]
+}
+```
+
+and the repository's squash-message settings are:
+
+```json
+{ "squash_merge_commit_title": "PR_TITLE", "squash_merge_commit_message": "BLANK" }
+```
+
+Why each:
+
+- **Squash.** `main` gets one commit per pull request, as before. A stack of pull requests lands
+  as one squash commit per pull request, in the order of the queue.
+- **The commit message is the pull request's title alone.** The queue writes its commits with the
+  repository's default squash message; nobody passes one when queueing. The title gives
+  `<title> (#<n>)`. The body is left blank: the repository is public, and the default
+  (`COMMIT_MESSAGES`) would copy every branch commit's message into `main`'s history, where none
+  of them was written to be.
+- **Each pull request is checked on its own (`ALLGREEN`).** Every queued pull request's own commit
+  must pass the checks before it merges, so a red commit never reaches `main`, not even inside a
+  group whose last commit is green.
+- **Up to five build at once, one to five merge together, after at most five minutes.** A run of
+  the checks takes about half an hour. Five queued pull requests building at once give up to five
+  merges per run instead of one. `min_entries_to_merge: 1` means a pull request never waits for
+  others to make a group, so the five minutes of `min_entries_to_merge_wait_minutes` never apply.
+  When the first ones of the queue pass together they reach `main` in one push, and `release.yml`
+  runs once for them.
+- **The branch need not be up to date (`strict_required_status_checks_policy: false`).** The
+  queue checks each pull request on top of what is ahead of it; requiring the branch up to date
+  would bring back the check after every move of `main` that the queue replaces.
+- **A check that has not reported in 360 minutes fails** (`check_response_timeout_minutes`, the
+  most GitHub allows). The jobs end before that: `privileged` and `openrc-device` at their
+  `timeout-minutes` (60 and 45), and the jobs of `ci.yml` at GitHub's own bound of 360 minutes per
+  job.
+
+**A pull request whose group fails leaves the queue.** GitHub removes it, and rebuilds the groups
+behind it without it; those are checked again and are not counted against. The pull request stays
+open with its failed check, and comes back only when it is added to the queue again, after a fix.
+
+**The Mac's checks keep their place.** No merge group runs a macOS job, as no pull request does:
+the Mac's tests stay in `release.yml`'s beta stage after the merge
+([The Mac's beta stage](#the-macs-beta-stage)), and hold only the macOS installer's promotion.
 
 ## The privileged workflow: real systemd, after a merge
 
@@ -96,8 +233,10 @@ Everything a pull request runs proves hostkeeper against fakes of the host.
 `.github/workflows/privileged.yml` is the one place where the adapters behind those fakes meet the
 real thing: it runs the tests of `crates/hostkeeper-privileged` as root against the systemd of a
 GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
-(`workflow_dispatch`), never on a pull request. A release waits for a successful run of it on its
-commit. A red run on `main` is a defect: fix it forward in a new pull request.
+(`workflow_dispatch`), never on a pull request. No release waits for it: a release waits for the
+unit tests (`ci.yml`) and the build (`artifacts.yml`) alone. A red run on `main` is a defect: it
+opens the issue `RELEASE-RED: hostkeeper privileged: ...` (`release-red.yml`), and you fix it
+forward in a new pull request; the next green run closes the issue.
 
 Network install end to end (below) runs as root too, in `.github/workflows/net-install.yml`, on its
 own triggers, and no release waits for it: an emulated install takes hours. It runs on a push to
@@ -120,7 +259,7 @@ pull-request workflow with a job on a macOS runner, on `ubuntu-*-arm` or on any 
 is not Linux x86_64.
 
 `.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its two checks are
-required of every pull request:
+required of every pull request, and of every merge group ([The merge queue](#the-merge-queue)):
 
 - `privileged`: the privileged tests as root against systemd.
 - `openrc-device`: the daemon under OpenRC in an Alpine Linux container, as root. The job builds
@@ -130,7 +269,7 @@ required of every pull request:
 
 Both are copies of `privileged.yml`'s jobs of those names, key for key (the workflow lint compares
 them), so a pull request runs what will run after its merge. These jobs hold no write scope and
-name no secret or token, and save no cache. A newer push to the same pull request cancels the older
+name no secret or token, and save no Cargo cache (only a checked pinned tool archive, on a miss). A newer push to the same pull request cancels the older
 run.
 
 ### The Mac's beta stage
@@ -260,6 +399,14 @@ desired version and reads the coordinator's answer through the generated tonic c
   rolled back by its hook, the old release serves again and the coordinator marks `1.2.0` bad;
 - `force_back_to_previous_needs_no_fetch`: a force to the previous version with the release
   channel stopped fetches nothing, and exactly two versions stay on disk;
+- `a_force_repairs_a_hooked_package_halted_after_its_cutover_past_a_bad_mark`: `1.3.0`, whose
+  `verify` halts after its `cutover`, leaves the host on it with the service halted; a force to
+  `1.1.0`, which an operator marked bad, lifts that mark, marks `1.3.0` bad, clears the halt on
+  the coordinator and on the host, and runs no step of any hook while the host goes back to
+  `1.1.0`;
+- `a_force_passes_a_held_host_only_with_include_held`: on the same halted host, held by an
+  operator, a force without `include_held` orders nothing (the host stays on `1.3.0`, its halt
+  lifted by the new generation), and with `include_held` it repairs the host and the hold stands;
 - `the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass`: `systemctl start` of the
   daemon returns after its boot pass relinked a placed path;
 - `fixture_attestation_is_checked_by_the_production_verifier`: the fixture's attestation passes
@@ -341,12 +488,12 @@ path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: cer
 enrollment-nonce validity, and the time stamp of the coordinator's audit file, which no decision
 reads.
 
-A command an operator doc gives is an `hkctl` command ([docs/cli.md](docs/cli.md)), written out
-in full in a fenced block: `hkctl --endpoint https://<private-listener> --ca-file <ca.pem>
+A command an operator doc gives is an `hk` command ([docs/cli.md](docs/cli.md)), written out
+in full in a fenced block: `hk --endpoint https://<private-listener> --ca-file <ca.pem>
 --token-file <token-file> <service> <method> [flags]`. `cargo test -p xtask --test enrollment_doc`
-reads each such line of every Markdown file but the design documents (`docs/design/`) as hkctl
+reads each such line of every Markdown file but the design documents (`docs/design/`) as `hk`
 reads it, against its command table and global flags, and the method and flags an inline
-`` `hkctl ...` `` span names; it refuses a fenced `hostkeeper ctl` line.
+`` `hk ...` `` span names; it refuses a fenced `hostkeeper ctl` line.
 
 ## Small pull requests
 

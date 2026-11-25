@@ -7,7 +7,7 @@
 //!   with [`BUILD_HELLO_PKG`] into `pkg/` (not `dist/`,
 //!   which its `assets-*` artifact uploads) and uploads them as [`UNSIGNED_ARTIFACT`].
 //! - **The key is held by one job that runs no repository code.** [`SIGN_JOB`] runs under
-//!   [`SIGN_IF`] (a push to main) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
+//!   [`SIGN_JOB_IF`] (a push to main, or a signing run: [`super::signing_run`]) in the environment [`SIGN_ENV`], on `macos-15`, needs exactly
 //!   `version` and `build-macos`, holds `contents: read` alone, and its steps are exactly
 //!   [`SIGN_STEPS`], in order: no checkout, no cargo. It imports the identity into a keychain of
 //!   the job (never the login keychain), signs each pkg with a trusted timestamp ([`SIGN`],
@@ -15,20 +15,27 @@
 //!   before it uploads the signed pkgs as [`SIGNED_ARTIFACT`].
 //! - **The secrets are named there alone.** No other job of the file, and nothing beside the
 //!   jobs, names a secret; that job names exactly [`SECRETS`], each only in the `env:` of a step.
-//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_IF`]
+//! - **Each signed pkg is checked before it is published.** [`CHECK_JOB`] runs under [`SIGN_JOB_IF`]
 //!   after [`SIGN_JOB`], with `contents: read` alone, and runs [`CHECK_SIGNATURE`] and the
 //!   comparison [`SAME_FILES`] of the expanded signed and unsigned installer, then
 //!   [`CHECK_HELLO_SIGNATURE`] and [`SAME_HELLO_FILES`] for hello's, and
 //!   [`CHECK_BOOTSTRAP_SIGNATURE`] and [`SAME_BOOTSTRAP_FILES`] for the bootstrap pkg's, before the one upload of the
 //!   files as [`PUBLISHED_ARTIFACT`], which no other job uploads.
 //! - **The sums wait for it.** `sums` needs [`CHECK_JOB`] under [`SUMS_IF`], so on a push to main
-//!   SHA256SUMS, the attestation and the release take the signed pkgs, and a run by hand, which
-//!   signs nothing, still makes the sums.
+//!   SHA256SUMS, the attestation and the release take the signed pkgs (a signing run sums them
+//!   too and attests nothing), and a run by hand that signs nothing still makes the sums.
 //!
-//! Both jobs name the identity [`IDENTITY`] in their `env:`.
+//! Both jobs name the identity [`IDENTITY`] in their `env:`. The signing of the programs inside
+//! the pkgs, by [`SIGN_CODE_JOB`], is held by [`super::code_signing`]; [`CHECK_STEPS`] also reads
+//! each signed pkg's payload with `check-code-signature`.
 
+use super::code_signing::{
+    self, CHECK_BOOTSTRAP_CODE, CHECK_HELLO_CODE, CHECK_HOSTKEEPER_CODE, CODE_SECRETS,
+    EXPAND_BOOTSTRAP_FULL, EXPAND_FULL, EXPAND_HELLO_FULL, SIGN_CODE_JOB, SIGN_CODE_STEPS,
+};
 use super::lint::{entries, entry, scalars};
-use super::release::{SIGN_IF, job, names, steps, text_of};
+use super::release::{job, names, steps, text_of};
+use super::signing_run::SIGN_JOB_IF;
 use super::yaml::Node;
 
 /// The job that signs.
@@ -91,6 +98,9 @@ pub enum Step {
     /// `actions/upload-artifact` of the directory (`path`) as the artifact (`name`), with
     /// `retention-days: 90` and `if-no-files-found: error`, and no other input.
     Upload(&'static str, &'static str),
+    /// A `run:`, exactly, with the `id` and `continue-on-error: true` and no other key: its
+    /// failure does not stop the job, and a later step judges it by `steps.<id>.outcome`.
+    Kept { id: &'static str, run: &'static str },
 }
 
 const fn run(run: &'static str) -> Step {
@@ -168,7 +178,7 @@ pub const DELETE_P12: &str = "rm -f \"$RUNNER_TEMP/installer.p12\"";
 /// The steps of [`CHECK_JOB`], exactly and in this order: the signature checked and the files
 /// compared before the one upload, and nothing between them that could put other bytes in
 /// `dist/`.
-pub const CHECK_STEPS: [Step; 17] = [
+pub const CHECK_STEPS: [Step; 23] = [
     Step::Checkout,
     run("rustup toolchain install"),
     Step::Download(UNSIGNED_ARTIFACT, "unsigned"),
@@ -177,14 +187,20 @@ pub const CHECK_STEPS: [Step; 17] = [
     run(EXPAND_UNSIGNED),
     run(EXPAND_SIGNED),
     run(SAME_FILES),
+    run(EXPAND_FULL),
+    run(CHECK_HOSTKEEPER_CODE),
     run(CHECK_HELLO_SIGNATURE),
     run(EXPAND_HELLO_UNSIGNED),
     run(EXPAND_HELLO_SIGNED),
     run(SAME_HELLO_FILES),
+    run(EXPAND_HELLO_FULL),
+    run(CHECK_HELLO_CODE),
     run(CHECK_BOOTSTRAP_SIGNATURE),
     run(EXPAND_BOOTSTRAP_UNSIGNED),
     run(EXPAND_BOOTSTRAP_SIGNED),
     run(SAME_BOOTSTRAP_FILES),
+    run(EXPAND_BOOTSTRAP_FULL),
+    run(CHECK_BOOTSTRAP_CODE),
     Step::Upload(PUBLISHED_ARTIFACT, "dist/"),
 ];
 
@@ -233,6 +249,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     problems.extend(sign_problems(doc));
     problems.extend(secret_problems(doc));
     problems.extend(check_problems(doc));
+    problems.extend(code_signing::problems(doc));
     let sums = job(doc, "sums");
     if !names(sums.and_then(|j| entry(j, "needs"))).contains(&CHECK_JOB.to_owned())
         || text_of(sums, "if") != Some(SUMS_IF)
@@ -244,17 +261,17 @@ pub fn problems(doc: &Node) -> Vec<String> {
     problems
 }
 
-fn uses_of(step: &Node) -> &str {
+pub fn uses_of(step: &Node) -> &str {
     text_of(Some(step), "uses").unwrap_or_default()
 }
 
 /// The `name` and `path` of an upload or download step.
-fn artifact(step: &Node) -> (Option<&str>, Option<&str>) {
+pub fn artifact(step: &Node) -> (Option<&str>, Option<&str>) {
     let with = entry(step, "with");
     (text_of(with, "name"), text_of(with, "path"))
 }
 
-fn is_upload(step: &Node) -> bool {
+pub fn is_upload(step: &Node) -> bool {
     uses_of(step).starts_with("actions/upload-artifact@")
 }
 
@@ -303,7 +320,7 @@ const JOB_KEYS: [&str; 7] = [
     "timeout-minutes",
 ];
 
-/// The `env:` of both jobs, exactly.
+/// The `env:` of [`SIGN_JOB`] and [`CHECK_JOB`], exactly.
 const JOB_ENV: [(&str, &str); 2] = [
     ("RELEASE_VERSION", "${{ needs.version.outputs.version }}"),
     ("IDENTITY", IDENTITY),
@@ -311,21 +328,27 @@ const JOB_ENV: [(&str, &str); 2] = [
 
 /// What is wrong with the job-level keys of the job `name`: a key outside [`JOB_KEYS`] (and
 /// `environment` for [`SIGN_JOB`]), another `if`, runner, `needs`, `permissions` or `env`.
-fn job_problems(doc: &Node, name: &str, needs: &[&str]) -> Vec<String> {
+pub fn job_problems(
+    doc: &Node,
+    name: &str,
+    (needs, condition): (&[&str], &str),
+    env: &[(&str, &str)],
+) -> Vec<String> {
     let j = job(doc, name);
     let mut problems = Vec::new();
     let Some(node) = j else {
         return vec![format!("artifacts.yml: has no job {name}")];
     };
     for key in entries(node).iter().filter_map(|(k, _)| k.as_str()) {
-        let allowed = JOB_KEYS.contains(&key) || (name == SIGN_JOB && key == "environment");
+        let allowed = JOB_KEYS.contains(&key)
+            || ((name == SIGN_JOB || name == SIGN_CODE_JOB) && key == "environment");
         if !allowed {
             problems.push(format!("artifacts.yml: job {name} has the key {key}"));
         }
     }
-    if text_of(j, "if") != Some(SIGN_IF) {
+    if text_of(j, "if") != Some(condition) {
         problems.push(format!(
-            "artifacts.yml: job {name} needs the exact `if: {SIGN_IF}`"
+            "artifacts.yml: job {name} needs the exact `if: {condition}`"
         ));
     }
     if text_of(j, "runs-on") != Some("macos-15") {
@@ -347,16 +370,16 @@ fn job_problems(doc: &Node, name: &str, needs: &[&str]) -> Vec<String> {
             "artifacts.yml: job {name} must hold `contents: read` and nothing else"
         ));
     }
-    if pairs(entry(node, "env")) != JOB_ENV {
+    if pairs(entry(node, "env")) != env {
         problems.push(format!(
-            "artifacts.yml: job {name} must have exactly the env {JOB_ENV:?}"
+            "artifacts.yml: job {name} must have exactly the env {env:?}"
         ));
     }
     problems
 }
 
 /// The scalar entries of the mapping `node`, in order.
-fn pairs(node: Option<&Node>) -> Vec<(&str, &str)> {
+pub fn pairs(node: Option<&Node>) -> Vec<(&str, &str)> {
     node.map_or(&[][..], entries)
         .iter()
         .filter_map(|(k, v)| Some((k.as_str()?, v.as_str()?)))
@@ -365,7 +388,7 @@ fn pairs(node: Option<&Node>) -> Vec<(&str, &str)> {
 
 /// One line per way the steps of the job `name` differ from `want`, named `list`: another
 /// count, or a step that is not the one at its place.
-fn steps_problems(name: &str, found: &[Node], want: &[Step], list: &str) -> Vec<String> {
+pub fn steps_problems(name: &str, found: &[Node], want: &[Step], list: &str) -> Vec<String> {
     let mut problems = Vec::new();
     if found.len() != want.len() {
         problems.push(format!(
@@ -388,7 +411,12 @@ fn steps_problems(name: &str, found: &[Node], want: &[Step], list: &str) -> Vec<
 /// What is wrong with [`SIGN_JOB`]: its job keys, its environment, or a step that differs from
 /// [`SIGN_STEPS`] (one missing, added, changed or moved).
 fn sign_problems(doc: &Node) -> Vec<String> {
-    let mut problems = job_problems(doc, SIGN_JOB, &["build-macos", "version"]);
+    let mut problems = job_problems(
+        doc,
+        SIGN_JOB,
+        (&["build-macos", "version"], SIGN_JOB_IF),
+        &JOB_ENV,
+    );
     let j = job(doc, SIGN_JOB);
     if j.is_none() {
         return problems;
@@ -408,7 +436,7 @@ fn sign_problems(doc: &Node) -> Vec<String> {
 }
 
 /// Whether `step` is `want`: every key of it but `name`, and every input of its `with`.
-fn step_is(step: &Node, want: &Step) -> bool {
+pub fn step_is(step: &Node, want: &Step) -> bool {
     let mut keys: Vec<&str> = entries(step)
         .iter()
         .filter_map(|(k, _)| k.as_str())
@@ -437,6 +465,12 @@ fn step_is(step: &Node, want: &Step) -> bool {
                 ("if-no-files-found", "error"),
             ],
         ),
+        Step::Kept { id, run } => {
+            keys == ["continue-on-error", "id", "run"]
+                && text_of(Some(step), "id") == Some(id)
+                && text_of(Some(step), "run") == Some(run)
+                && text_of(Some(step), "continue-on-error") == Some("true")
+        }
         Step::Run {
             run,
             secret,
@@ -464,8 +498,20 @@ fn step_is(step: &Node, want: &Step) -> bool {
     }
 }
 
+/// The steps and the secrets of a job that may name secrets: [`SIGN_JOB`] and
+/// [`SIGN_CODE_JOB`], and the name of the list of the steps in a message.
+fn secret_holder(name: &str) -> Option<(&'static [Step], &'static [&'static str], &'static str)> {
+    match name {
+        SIGN_JOB => Some((&SIGN_STEPS, &SECRETS, "SIGN_STEPS")),
+        SIGN_CODE_JOB => Some((&SIGN_CODE_STEPS, &CODE_SECRETS, "SIGN_CODE_STEPS")),
+        _ => None,
+    }
+}
+
 /// One line per job (or the part beside the jobs) of artifacts.yml that names a secret but
-/// [`SIGN_JOB`], and one per secret [`SIGN_JOB`] names that is not one of [`SECRETS`].
+/// [`SIGN_JOB`] and [`SIGN_CODE_JOB`], and one per secret either names that is not one of its
+/// own list ([`SECRETS`] and [`CODE_SECRETS`]), or not once in the `env:` of each of its steps
+/// that takes one.
 fn secret_problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
     let mut beside = Vec::new();
@@ -487,15 +533,15 @@ fn secret_problems(doc: &Node) -> Vec<String> {
             .iter()
             .flat_map(|s| s.match_indices("secrets").map(move |(at, _)| &s[at..]))
             .collect();
-        if name != SIGN_JOB {
+        let Some((steps, allowed, list)) = secret_holder(name) else {
             if !named.is_empty() {
                 problems.push(format!(
-                    "artifacts.yml: job {name} names a secret; only {SIGN_JOB} may"
+                    "artifacts.yml: job {name} names a secret; only {SIGN_JOB} and {SIGN_CODE_JOB} may"
                 ));
             }
             continue;
-        }
-        let in_steps = SIGN_STEPS
+        };
+        let in_steps = steps
             .iter()
             .filter(|s| {
                 matches!(
@@ -509,7 +555,7 @@ fn secret_problems(doc: &Node) -> Vec<String> {
             .count();
         if named.len() != in_steps {
             problems.push(format!(
-                "artifacts.yml: job {SIGN_JOB} names a secret {} times, not once in the env of each step of SIGN_STEPS that takes one ({in_steps})",
+                "artifacts.yml: job {name} names a secret {} times, not once in the env of each step of {list} that takes one ({in_steps})",
                 named.len()
             ));
         }
@@ -519,9 +565,9 @@ fn secret_problems(doc: &Node) -> Vec<String> {
                 .map(|rest| rest.split(|c: char| !c.is_ascii_alphanumeric() && c != '_'))
                 .and_then(|mut words| words.next())
                 .unwrap_or_default();
-            if !SECRETS.contains(&secret) {
+            if !allowed.contains(&secret) {
                 problems.push(format!(
-                    "artifacts.yml: job {SIGN_JOB} names a secret other than {SECRETS:?} (`{}`)",
+                    "artifacts.yml: job {name} names a secret other than {allowed:?} (`{}`)",
                     text.lines().next().unwrap_or_default()
                 ));
             }
@@ -533,7 +579,12 @@ fn secret_problems(doc: &Node) -> Vec<String> {
 /// What is wrong with [`CHECK_JOB`]: its job keys, a step that differs from [`CHECK_STEPS`],
 /// or another job uploading an `assets-pkg-*` artifact.
 fn check_problems(doc: &Node) -> Vec<String> {
-    let mut problems = job_problems(doc, CHECK_JOB, &["sign-pkg", "version"]);
+    let mut problems = job_problems(
+        doc,
+        CHECK_JOB,
+        (&["sign-pkg", "version"], SIGN_JOB_IF),
+        &JOB_ENV,
+    );
     if let Some(j) = job(doc, CHECK_JOB) {
         problems.extend(steps_problems(
             CHECK_JOB,

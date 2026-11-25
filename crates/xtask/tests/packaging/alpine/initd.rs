@@ -550,6 +550,14 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
         (
             altered(
                 &initd,
+                "--mode 0711 --owner root:root /var/lib/hostkeeper/packages",
+                "--mode 0700 --owner root:root /var/lib/hostkeeper/packages",
+            ),
+            "start_pre makes",
+        ),
+        (
+            altered(
+                &initd,
                 " /var/lib/updater/hooks\n",
                 " /var/lib/updater/hooks /var/lib/other\n",
             ),
@@ -558,16 +566,16 @@ fn init_script_runs_the_units_flags_and_makes_the_tmpfiles_directories() {
         (
             altered(
                 &initd,
-                " /var/lib/hostkeeper/packages /var/lib/updater\n",
-                " /var/lib/hostkeeper/packages\n",
+                " /var/lib/hostkeeper /var/lib/updater\n",
+                " /var/lib/hostkeeper\n",
             ),
             "start_pre makes",
         ),
         (
             altered(
                 &initd,
-                "/etc/hostkeeper /var/lib/hostkeeper /var/lib/hostkeeper/packages /var/lib/updater",
-                "/etc/hostkeeper /var/lib/hostkeeper/packages /var/lib/hostkeeper /var/lib/updater",
+                "\tcheckpath --directory --mode 0755 --owner root:root /etc/hostkeeper /var/lib/hostkeeper /var/lib/updater\n\tcheckpath --directory --mode 0711 --owner root:root /var/lib/hostkeeper/packages\n",
+                "\tcheckpath --directory --mode 0711 --owner root:root /var/lib/hostkeeper/packages\n\tcheckpath --directory --mode 0755 --owner root:root /etc/hostkeeper /var/lib/hostkeeper /var/lib/updater\n",
             ),
             "start_pre makes /var/lib/hostkeeper/packages before its parent /var/lib/hostkeeper",
         ),

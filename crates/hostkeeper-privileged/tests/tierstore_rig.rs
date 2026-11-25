@@ -13,7 +13,7 @@ use std::process::{Child, Command};
 use std::{io, io::Write};
 
 use e2e::aptrepo;
-use e2e::package::{FixtureVersion, PackageBuilder};
+use e2e::package::{FixtureVersion, PackageBuilder, Verify};
 use e2e::{
     FIXTURE_BINARY, HeldPort, REPOSITORY_NAME, SERVICE, UNIT_TEMPLATE, instance, served_version,
     wait_for,
@@ -63,7 +63,7 @@ fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
     let fixture = FixtureVersion {
         version: "1.0.0",
         ports: [e2e::free_port(), e2e::free_port()],
-        fail_verify: false,
+        verify: Verify::Serves,
     };
     let builder = PackageBuilder::new(&records, Path::new(FIXTURE_BINARY));
     let deb = builder.deb(&fixture);
@@ -207,4 +207,56 @@ impl Drop for Serving {
         drop(self.0.kill());
         drop(self.0.wait());
     }
+}
+
+/// The mount options of the mount that holds `path`: the options of the longest mount point of
+/// `mountinfo` that is a prefix of `path`.
+fn mount_options_of(mountinfo: &str, path: &Path) -> Option<String> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let point = fields.nth(4)?;
+            let options = fields.next()?;
+            path.starts_with(point)
+                .then(|| (point.len(), options.to_string()))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, options)| options)
+}
+
+/// Catches an end-to-end host made where systemd cannot exec the daemon staged in it: a hosted runner may
+/// mount `/run` `noexec` (`203/EXEC`), and the unit having no start limit, it is retried for good,
+/// so the test's `systemctl start` never returns. The mount that holds it is not `noexec`.
+#[test]
+fn the_end_to_end_tree_mount_allows_exec() {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").expect("read the mount table");
+    let path = e2e::host_root::tree_of("x1back", 4242);
+    let options = mount_options_of(&mountinfo, &path).expect("a mount holds the path");
+    assert!(
+        !options.split(',').any(|o| o == "noexec"),
+        "the mount of {} is noexec: {options}",
+        path.display()
+    );
+}
+
+/// The mount table lookup takes the longest mount point, and shows `noexec` in its options.
+#[test]
+fn the_end_to_end_tree_mount_lookup_takes_the_longest_mount_point() {
+    let table = "1 0 8:1 / / rw,relatime - ext4 /dev/sda1 rw\n\
+                 2 1 0:5 / /run rw,nosuid,noexec - tmpfs tmpfs rw\n\
+                 3 2 0:6 / /run/x ro - tmpfs tmpfs rw\n";
+    assert_eq!(
+        mount_options_of(table, Path::new("/var/lib/a")).as_deref(),
+        Some("rw,relatime")
+    );
+    assert_eq!(
+        mount_options_of(table, Path::new("/run/hk")).as_deref(),
+        Some("rw,nosuid,noexec")
+    );
+    assert_eq!(
+        mount_options_of(table, Path::new("/run/x/y")).as_deref(),
+        Some("ro")
+    );
+    assert_eq!(mount_options_of("", Path::new("/run")), None);
 }

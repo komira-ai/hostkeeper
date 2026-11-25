@@ -15,7 +15,9 @@ const AT: u64 = 1_900_000_000;
 
 /// The operator token named `name`.
 fn named(name: &str) -> Caller {
-    Caller::Operator(name.parse().expect("a token name"))
+    Caller::Operator(crate::tokens::Operator::named(
+        name.parse().expect("a token name"),
+    ))
 }
 
 /// A rig over `web` and `db` whose audit file is stamped `AT`.
@@ -91,6 +93,7 @@ fn audit_list_returns_time_and_token_name() {
             at_unix: Some(AT),
             by_name: Some("alice".to_owned()),
             host_group: None,
+            api_token: None,
         }]
     );
 }

@@ -134,7 +134,8 @@ pub fn from_json(bytes: &[u8]) -> Result<Target, TargetError> {
 }
 
 /// Writes `entry` as `target.json` in the staging directory `stage`, and the empty
-/// [`MANIFEST_HOOK_FILE`] beside it, each mode 0444, durably.
+/// [`MANIFEST_HOOK_FILE`] beside it, each mode 0400 (root's alone, like the rest of the
+/// version), durably.
 pub fn write(stage: &Path, entry: &Target) -> Result<(), TargetError> {
     let json = to_json(entry)?;
     for (name, bytes) in [
@@ -144,10 +145,10 @@ pub fn write(stage: &Path, entry: &Target) -> Result<(), TargetError> {
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o444)
+            .mode(0o400)
             .open(stage.join(name))?;
         file.write_all(bytes)?;
-        file.set_permissions(fs::Permissions::from_mode(0o444))?;
+        file.set_permissions(fs::Permissions::from_mode(0o400))?;
         file.sync_all()?;
     }
     Ok(())
@@ -279,6 +280,8 @@ pub fn of_entry(
         hook: Hook {
             command,
             boot: hook.boot,
+            drain: hook.drain,
+            resume: hook.resume,
             verify_deadline_secs: hook.verify_deadline_secs,
             promotion_ceiling_secs: hook.promotion_ceiling_secs.and_then(NonZeroU64::new),
             cleanup_retries: hook.cleanup_retries.unwrap_or(DEFAULT_CLEANUP_RETRIES),

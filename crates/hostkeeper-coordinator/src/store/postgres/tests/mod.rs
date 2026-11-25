@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex, Once, PoisonError};
 use postgres::{Client, NoTls};
 use tracing_subscriber::fmt::MakeWriter;
 
+use super::migrate::RETRY;
 use super::session::Session;
-use super::{Dsn, Postgres, TIMEOUTS, Timeouts};
+use super::{Dsn, Options, Postgres, TIMEOUTS, Timeouts};
 use crate::audit_file::UnixClock;
 use crate::store::Loaded;
 
@@ -129,6 +130,17 @@ impl TestDatabase {
         })
     }
 
+    /// How many write transactions the stores over it have committed (and not yet purged): each
+    /// inserts its row of `tx_ledger` first, and a read inserts none. What a test counts to say
+    /// that a call wrote nothing, whatever it read.
+    pub(crate) fn commits(&self) -> u64 {
+        self.rows("SELECT count(*) FROM tx_ledger")
+            .first()
+            .and_then(|row| row.first().cloned().flatten())
+            .and_then(|count| count.parse().ok())
+            .expect("a count")
+    }
+
     /// The rows `sql` answers, each as text, beside the store.
     pub(crate) fn rows(&self, sql: &str) -> Vec<Vec<Option<String>>> {
         let (name, sql) = (self.name.clone(), sql.to_owned());
@@ -153,9 +165,19 @@ impl TestDatabase {
         })
     }
 
-    /// The store opened on it, as a start opens it, holding the lock as `holder`.
+    /// The store opened on it, as a start opens it, holding the lock as `holder`, with the
+    /// default pool ([`options`]).
     pub(crate) fn open(&self, holder: &str) -> Result<(Postgres, Loaded), super::DatabaseError> {
         self.open_with(TIMEOUTS, holder)
+    }
+
+    /// [`TestDatabase::open`] with `options`.
+    pub(crate) fn open_options(
+        &self,
+        options: &Options,
+        holder: &str,
+    ) -> Result<(Postgres, Loaded), super::DatabaseError> {
+        self.open_tuned(TIMEOUTS, options, holder)
     }
 
     /// The store opened on a connection string of the test's own making.
@@ -163,7 +185,14 @@ impl TestDatabase {
         dsn: &Dsn,
         holder: &str,
     ) -> Result<(Postgres, Loaded), super::DatabaseError> {
-        Postgres::open_with(dsn, TIMEOUTS, holder, &unix(), Arc::new(|| SPENT_NOW))
+        Postgres::open_with(
+            dsn,
+            TIMEOUTS,
+            &options(),
+            holder,
+            &unix(),
+            Arc::new(|| SPENT_NOW),
+        )
     }
 
     /// [`TestDatabase::open`] with the bounded waits `timeouts`.
@@ -172,9 +201,20 @@ impl TestDatabase {
         timeouts: Timeouts,
         holder: &str,
     ) -> Result<(Postgres, Loaded), super::DatabaseError> {
+        self.open_tuned(timeouts, &options(), holder)
+    }
+
+    /// [`TestDatabase::open`] with the bounded waits `timeouts` and `options`.
+    pub(crate) fn open_tuned(
+        &self,
+        timeouts: Timeouts,
+        options: &Options,
+        holder: &str,
+    ) -> Result<(Postgres, Loaded), super::DatabaseError> {
         Postgres::open_with(
             &self.dsn(),
             timeouts,
+            options,
             holder,
             &unix(),
             Arc::new(|| SPENT_NOW),
@@ -194,6 +234,20 @@ impl TestDatabase {
                     &[&name],
                 )
                 .expect("the sessions are ended");
+            // A backend told to end ends a moment later: wait until none is left, so the next
+            // use of a store's session finds it gone.
+            while client
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = $1 \
+                     AND pid <> pg_backend_pid()",
+                    &[&name],
+                )
+                .expect("the sessions are counted")
+                .get::<_, i64>(0)
+                > 0
+            {
+                std::thread::yield_now();
+            }
         });
     }
 }
@@ -219,8 +273,34 @@ impl Drop for TestDatabase {
 /// The coordinator's wall clock in the tests: a fixed second.
 pub(crate) const AT: u64 = 1_900_000_000;
 
+/// The id of a transaction of the ledger, for a landing a test makes by hand.
+pub(crate) const ID: &str = "00000000-0000-0000-0000-000000000001";
+
 /// The second CI's spent ids are judged by in the tests.
 pub(crate) const SPENT_NOW: u64 = 150;
+
+/// The options the tests open a store with: the flags' default pool, migration retry and wait for
+/// the gate, and an instance's row upserted once an hour, so no upsert of it lands inside a test
+/// that counts the ledger's rows (the upserts are tested by a store of their own).
+pub(crate) fn options() -> Options {
+    Options {
+        pool: std::num::NonZeroUsize::new(4).expect("four is not zero"),
+        migrate: RETRY,
+        beat: std::time::Duration::from_secs(3600),
+        release: "test-release".to_owned(),
+        listen: "heartbeat=127.0.0.1:8443".to_owned(),
+        gate_wait: std::time::Duration::from_secs(30),
+        fleet: super::Timing::of(30, 30),
+    }
+}
+
+/// [`options`] with a pool of `pool` sessions.
+pub(crate) fn pooled(pool: usize) -> Options {
+    Options {
+        pool: std::num::NonZeroUsize::new(pool).expect("a pool of at least one"),
+        ..options()
+    }
+}
 
 /// The clock of the tests' audit lines and lease.
 pub(crate) fn unix() -> UnixClock {
@@ -241,17 +321,43 @@ pub(super) fn with_session<R: Send + 'static>(
 }
 
 mod accounts;
+mod admin_rows;
+mod alert_rows;
+mod audit_api_token;
+mod audit_only;
 mod connect;
 mod coordinator;
+mod copies;
+mod decide;
+mod deciding;
+mod edits;
+mod enrollment_races;
+mod fleet_rows;
+mod gate;
 mod generations;
+mod group_sets;
 mod host_groups;
+mod instance;
+mod jobs_rows;
 mod layout;
+mod login_rows;
 mod lost;
+mod maintenance_operator;
+mod maintenance_rows;
+mod maintenance_turns;
+mod migrate_ddl;
+mod numbers;
+mod periodic;
+mod pool;
+mod queue_seq;
 mod reads;
+mod recorded;
 mod records;
 mod records_errors;
 mod releases;
+mod reload;
 mod repositories;
+mod revocation;
 mod running;
 mod schema;
 pub(crate) mod seed;
@@ -259,9 +365,16 @@ mod serve;
 mod service_repository;
 mod serving;
 mod session;
+mod sessions_and_jobs;
+mod shared_login;
+mod ssh;
+mod ssh_book;
 mod start;
 pub(crate) mod store;
 mod unused_mdm_tables;
+mod waits;
+mod xcode_jobs;
+mod xcode_rows;
 
 /// What the process logged since it started, as the tests' subscriber wrote it.
 static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());

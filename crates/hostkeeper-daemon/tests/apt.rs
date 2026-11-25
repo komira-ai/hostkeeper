@@ -16,11 +16,14 @@ use hostkeeper_daemon::link_adapters::DaemonObserver;
 use hostkeeper_daemon::target::{self, TARGET_FILE};
 use hostkeeper_daemon::{Daemon, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_link::{Drift, ServiceObserver};
+use hostkeeper_link::{Drift, Liveness, ServiceObserver};
 use hostkeeper_placed::testing::{Event, UnitCall};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
 use support::{install, uninstall, update};
-use support_apt::{AptRig, Inst, PROGRAM, SERVICE, UNIT, entry, package, with_entry};
+use support_apt::{
+    AptRig, Deb, HOOK_PROGRAM, Inst, PROGRAM, SERVICE, UNIT, entry, hooked_entry, package,
+    with_entry,
+};
 
 fn succeeded() -> Reply {
     Reply::Finished {
@@ -384,4 +387,50 @@ fn a_stage_that_fails_says_why_in_the_log() {
             ),
         ]
     );
+}
+
+/// The config package of the service at `version` (hostgroups.md section 6.1): its file under
+/// `/etc/web/` and its hook program, and no unit file.
+fn config_package(version: &str) -> Deb {
+    Deb::new(SERVICE, version, "amd64")
+        .file(
+            "etc/web/web.toml",
+            0o644,
+            &format!("version = \"{version}\"\n"),
+        )
+        .file(HOOK_PROGRAM, 0o755, "#!/bin/sh\nexit 0\n")
+}
+
+/// Proves a config package installs end to end from an apt entry: a manifest with a hook command
+/// and no `run` unit is staged, activated, installed, held and recorded with no enablement
+/// link, the hook's `cutover` runs, `current` names it, the daemon stops and starts no unit,
+/// and the heartbeat reports the service `unmonitored` with no drift.
+///
+/// Catches: a hook-only apt entry refused `manifest_invalid` for its 0 run units before the
+/// stage, so no Linux host group can take a config package.
+#[test]
+fn a_hook_only_apt_package_installs_with_no_run_unit_and_is_unmonitored() {
+    let apt = AptRig::new("apt-hook-only");
+    let daemon = Arc::new(apt.daemon());
+    let one = apt.publish(config_package("1.0.0-1"));
+    let command = [&format!("/{HOOK_PROGRAM}")[..], "update-hook"];
+    let mut target = hooked_entry("1.0.0-1", &one, &command);
+    target.manifest.as_mut().expect("a manifest").run = Vec::new();
+    let order = with_entry(install(SERVICE, "1.0.0", &one, 1), &target);
+    assert_eq!(daemon.order(&order), succeeded());
+    assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
+    assert_eq!(linked(&apt, "current").as_deref(), Some("1.0.0"));
+    let tree = apt.version_dir("1.0.0").join("tree");
+    assert!(tree.join("etc/web/web.toml").is_file());
+    assert!(tree.join(HOOK_PROGRAM).is_file());
+    let record = recorded(&daemon).expect("an installed entry");
+    assert_eq!(record.version.as_deref(), Some("1.0.0-1"));
+    assert!(record.links.is_empty(), "{:?}", record.links);
+    assert!(!record.pending);
+    assert!(!apt.rig.host("/etc/systemd/system").exists());
+    assert!(apt.rig.launcher.steps(SERVICE).contains(&Step::Cutover));
+    assert_eq!(unit_calls(&apt), Vec::<UnitCall>::new());
+    let seen = DaemonObserver::new(Arc::clone(&daemon)).observe(&web());
+    assert_eq!(seen.liveness, Liveness::Unmonitored);
+    assert_eq!(seen.drift, None);
 }

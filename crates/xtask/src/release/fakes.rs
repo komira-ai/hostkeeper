@@ -10,7 +10,7 @@ use std::path::Path;
 
 use super::contract::{
     Commit, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer, Version, attested_names,
-    bundle_of, hkctl_name, summed_names,
+    bundle_of, summed_names,
 };
 use super::file_sha256;
 use super::image_index;
@@ -52,16 +52,15 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
                 .expect("write an image");
             continue;
         }
+        if name.starts_with("hk-") && name.ends_with(".tar.gz") {
+            let tarball = tarball(&[Member::File("hk", format!("{name} {marker}\n"))]);
+            std::fs::write(dir.join(name), tarball).expect("write the command line");
+            continue;
+        }
         write(name, format!("{name} {marker}\n"));
     }
     let image = image_index::index_bytes(dir, version).expect("the image index");
     std::fs::write(dir.join(image_index::index_name(version)), image).expect("write the index");
-    // The command line passes `release check` as the script `release hkctl` writes, stamped with
-    // the 12 digits every commit of [`nth_commit`] below 2^32 starts with.
-    write(
-        &hkctl_name(version),
-        format!("#!/usr/bin/env bash\n# {marker}\n_hk_version='hkctl {version}+000000000000'\n"),
-    );
     let mut sums = String::new();
     for name in &summed {
         let digest = file_sha256(&dir.join(name)).expect("hash an asset");
@@ -71,6 +70,52 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     for name in attested_names(version) {
         write(&bundle_of(&name), "{}\n".to_owned());
     }
+}
+
+/// One member of a tarball made by [`tarball`].
+pub(crate) enum Member<'a> {
+    /// A regular file of this name and text.
+    File(&'a str, String),
+    /// A symbolic link of this name to this target.
+    Link(&'a str, &'a str),
+    /// A directory of this name.
+    Dir(&'a str),
+}
+
+/// A gzip tar archive of `members`, in the order given.
+pub(crate) fn tarball(members: &[Member<'_>]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for member in members {
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o555);
+        match member {
+            Member::File(name, text) => {
+                header.set_size(text.len() as u64);
+                header.set_entry_type(tar::EntryType::Regular);
+                builder
+                    .append_data(&mut header, name, text.as_bytes())
+                    .expect("append a file");
+            }
+            Member::Link(name, target) => {
+                header.set_size(0);
+                header.set_entry_type(tar::EntryType::Symlink);
+                builder
+                    .append_link(&mut header, name, target)
+                    .expect("append a link");
+            }
+            Member::Dir(name) => {
+                header.set_size(0);
+                header.set_entry_type(tar::EntryType::Directory);
+                builder
+                    .append_data(&mut header, name, std::io::empty())
+                    .expect("append a directory");
+            }
+        }
+    }
+    let tar = builder.into_inner().expect("finish the archive");
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut gz, &tar).expect("compress");
+    gz.finish().expect("finish the gzip")
 }
 
 /// The commit numbered `n` of a fake history: `n` in hex, 40 digits.
@@ -661,6 +706,45 @@ impl Exec for FakeExec {
     }
 }
 
+/// A `codesign` that answers every program the same: what `--verify`, `--display` and
+/// `--display --requirements -` printed. Each call is recorded as `<verb> <binary>`.
+#[derive(Default)]
+pub(crate) struct FakeCodeSign {
+    pub(crate) verify: Option<Result<super::ports::Codesigned, PortError>>,
+    pub(crate) display: Option<Result<super::ports::Codesigned, PortError>>,
+    pub(crate) requirements: Option<Result<super::ports::Codesigned, PortError>>,
+    pub(crate) calls: RefCell<Vec<String>>,
+}
+
+impl FakeCodeSign {
+    fn answer(
+        &self,
+        verb: &str,
+        binary: &Path,
+        said: &Option<Result<super::ports::Codesigned, PortError>>,
+    ) -> Result<super::ports::Codesigned, PortError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("{verb} {}", binary.display()));
+        said.clone()
+            .unwrap_or_else(|| Err(PortError::new("codesign", "not scripted")))
+    }
+}
+
+impl super::ports::CodeSign for FakeCodeSign {
+    fn verify(&self, binary: &Path) -> Result<super::ports::Codesigned, PortError> {
+        self.answer("verify", binary, &self.verify)
+    }
+
+    fn display(&self, binary: &Path) -> Result<super::ports::Codesigned, PortError> {
+        self.answer("display", binary, &self.display)
+    }
+
+    fn requirements(&self, binary: &Path) -> Result<super::ports::Codesigned, PortError> {
+        self.answer("requirements", binary, &self.requirements)
+    }
+}
+
 /// A registry whose answers are scripted, one per call in order: each `copy` takes the next of
 /// `copies` and each `served` the next of `served` (none left: the call fails). Each call is
 /// recorded as `copy <layout> <tag> <repository>` or `served <repository>@<digest>`.
@@ -717,6 +801,7 @@ pub(crate) struct Fakes {
     pub(crate) verifier: FakeVerifier,
     pub(crate) run_version: FakeRunVersion,
     pub(crate) pkgbuild: FakePkgbuild,
+    pub(crate) codesign: FakeCodeSign,
     pub(crate) advisories: FakeAdvisories,
     pub(crate) registry: FakeRegistry,
     pub(crate) wait: FakeWait,
@@ -741,6 +826,7 @@ impl Fakes {
                 },
             },
             pkgbuild: FakePkgbuild::default(),
+            codesign: FakeCodeSign::default(),
             advisories: FakeAdvisories {
                 said: Said {
                     success: true,
@@ -763,6 +849,7 @@ impl Adapters for Fakes {
             verifier: &self.verifier,
             run_version: &self.run_version,
             pkgbuild: &self.pkgbuild,
+            codesign: &self.codesign,
             advisories: &self.advisories,
             registry: &self.registry,
             wait: &self.wait,

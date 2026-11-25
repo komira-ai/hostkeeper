@@ -116,9 +116,9 @@ fn the_opt_in_takes_an_address_of_one_interface_as_without_it() {
 }
 
 /// Proves: the opt-in is for the private listener only. With it and a wildcard
-/// `--private-listen`, a wildcard `--lan-listen` is still refused (`LanListen`), and a
-/// `--health-listen` that is not loopback (a wildcard, or a private network's address) is still
-/// refused (`HealthListen`), each with exit 1.
+/// `--private-listen`, a wildcard `--lan-listen` is still refused (`LanListen`), and a wildcard
+/// `--health-listen` (each spelling) is still refused (`HealthListen`), each with exit 1: only
+/// `--health-listen-wildcard` takes that one.
 ///
 /// Catches: an opt-in that also opens the LAN listener, whose address the server certificate
 /// names, or the health listener, which answers with no token and no TLS.
@@ -149,7 +149,7 @@ fn the_opt_in_leaves_the_other_listeners_checked_as_before() {
     );
     assert_eq!(exit_code(lan), ExitCode::from(1));
 
-    for health in ["0.0.0.0:9", "[::]:9", "192.0.2.1:9"] {
+    for health in ["0.0.0.0:9", "[::]:9", "[::ffff:0.0.0.0]:9"] {
         let mut given = args.clone();
         given.extend([OsString::from("--health-listen"), OsString::from(health)]);
         let why = refusal(given.clone());

@@ -16,6 +16,9 @@ const CHECK: &str = "      - run: cargo xtask release check dist --version \"$RE
 /// The coordinator updater's linux-x86_64 tarball, which release 0.1.208 does not have.
 const UPDATER: &str = "hostkeeper-coordinator-update-<version>-linux-x86_64.tar.gz";
 
+/// The command line's linux-x86_64 tarball, which release 0.1.208 does not have.
+const HK_TARBALL: &str = "hk-<version>-linux-x86_64.tar.gz";
+
 /// hostkeeper's linux-x86_64 tarball, which every release since 0.1.208 has.
 const HOSTKEEPER: &str = "hostkeeper-<version>-linux-x86_64.tar.gz";
 
@@ -116,6 +119,47 @@ fn release_yml_runs_the_coordinator_updater_only_when_the_release_has_its_tarbal
 }
 
 #[test]
+fn release_yml_runs_the_command_line_only_when_the_release_has_its_tarball() {
+    // Catches: the verify job's unpacking of the command line's tarball with no `if:` (so a release
+    // of a commit from before it fails), or its run of the binary under another `if:` than its
+    // unpacking.
+    let text = release_yml();
+    let condition = guard(HK_TARBALL);
+    let unpacking =
+        format!("      - if: {condition}\n        run: tar -xzf \"dist/hk-$RELEASE_VERSION");
+    let running = format!(
+        "        if: {condition}\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/hk\""
+    );
+    assert_eq!(release_problems(&text), Vec::<String>::new());
+    assert_eq!(
+        release_problems(&with_in(
+            &text,
+            &unpacking,
+            "      - run: tar -xzf \"dist/hk-$RELEASE_VERSION"
+        )),
+        vec![
+            unguarded("release.yml", "verify", 17, HK_TARBALL),
+            format!(
+                "release.yml: job verify step 18 runs $RUNNER_TEMP/binary/hk under `if: {condition}`, not the `if:` of the step that unpacks it, `(none)`"
+            ),
+        ]
+    );
+    let both = with_in(
+        &with_in(
+            &text,
+            &unpacking,
+            "      - run: tar -xzf \"dist/hk-$RELEASE_VERSION",
+        ),
+        &running,
+        "        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/hk\"",
+    );
+    assert_eq!(
+        release_problems(&both),
+        vec![unguarded("release.yml", "verify", 17, HK_TARBALL)]
+    );
+}
+
+#[test]
 fn a_file_the_floor_has_needs_no_if_and_one_it_lacks_runs_under_its_guard_after_the_check() {
     // Catches: the rule refusing a file every released commit makes, or passing a file the floor
     // lacks with no `if:`, with the `if:` of another file, or before the commit's own check has
@@ -186,7 +230,7 @@ fn a_withdrawn_unknown_or_unread_name_is_refused() {
     // `${RELEASE_VERSION}` is read as the version too, and a `dist/` inside a longer word is not
     // a file of dist.
     let steps = format!(
-        "{RELEASE_CHECKOUT}      - run: cat dist/SHA256SUMS \"dist/hkctl-${{RELEASE_VERSION}}\" \"$RUNNER_TEMP/apt-dist/x\"\n"
+        "{RELEASE_CHECKOUT}      - run: cat dist/SHA256SUMS \"dist/hostkeeper-${{RELEASE_VERSION}}-linux-x86_64.tar.gz\" \"$RUNNER_TEMP/apt-dist/x\"\n"
     );
     assert_eq!(job_problems(&steps), Vec::<String>::new());
 }

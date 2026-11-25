@@ -1,4 +1,4 @@
-//! `install-tool --download <file> --sha256 <hex> --out <path> [--extract tar.gz --member <path>]`:
+//! `install-tool --download <file> --sha256 <hex> --out <path> [--extract tar.gz --member <path> | --extract zst]`:
 //! installs a pinned tool for a CI job from a file the job restored from the actions cache or
 //! downloaded.
 //!
@@ -11,8 +11,9 @@
 //! 1. The whole download is read into memory.
 //! 2. Its SHA-256 is compared with `--sha256`. A mismatch is refused here, before any byte is
 //!    unpacked or written: nothing is created on disk.
-//! 3. It is unpacked in memory: as is, or one regular file (`--member`, its path inside the
-//!    archive) out of a gzip tar (`--extract tar.gz`).
+//! 3. It is unpacked in memory: as is, one regular file (`--member`, its path inside the
+//!    archive) out of a gzip tar (`--extract tar.gz`), or the one file a zstd stream holds
+//!    (`--extract zst`, the way buck2's releases ship it).
 //! 4. The file is written to a temporary file of this invocation's own beside `--out`, created
 //!    exclusively (an existing file or symbolic link of that name is never opened), made
 //!    executable (0755) through its open handle, and renamed over `--out`. When a step fails,
@@ -81,6 +82,9 @@ pub(crate) enum Format {
     /// A gzip-compressed tar: the file is its `--member`.
     #[value(name = "tar.gz")]
     TarGz,
+    /// A zstd-compressed file: the file is what it decompresses to.
+    #[value(name = "zst")]
+    Zst,
 }
 
 /// How the installed file comes out of the download.
@@ -91,6 +95,8 @@ pub(crate) enum Unpack {
     /// The download is a gzip-compressed tar archive; the file is the regular file at
     /// `member` in it.
     TarGz { member: PathBuf },
+    /// The download is one file compressed with zstd.
+    Zst,
 }
 
 /// `--extract` and `--member` that do not fit together.
@@ -100,6 +106,8 @@ pub(crate) enum UnpackFlags {
     ExtractWithoutMember,
     #[error("--member is a file in a tar: it needs --extract tar.gz")]
     MemberWithoutExtract,
+    #[error("--extract zst is one compressed file: it takes no --member")]
+    MemberOfZst,
 }
 
 impl Unpack {
@@ -112,6 +120,8 @@ impl Unpack {
             (None, None) => Ok(Unpack::Raw),
             (Some(Format::TarGz), Some(member)) => Ok(Unpack::TarGz { member }),
             (Some(Format::TarGz), None) => Err(UnpackFlags::ExtractWithoutMember),
+            (Some(Format::Zst), None) => Ok(Unpack::Zst),
+            (Some(Format::Zst), Some(_)) => Err(UnpackFlags::MemberOfZst),
             (None, Some(_)) => Err(UnpackFlags::MemberWithoutExtract),
         }
     }
@@ -126,6 +136,14 @@ impl Unpack {
                     .read_to_end(&mut tar)
                     .map_err(unpack_error)?;
                 tar_member(&tar, member)
+            }
+            Unpack::Zst => {
+                let mut file = Vec::new();
+                ruzstd::decoding::StreamingDecoder::new(bytes)
+                    .map_err(unpack_error)?
+                    .read_to_end(&mut file)
+                    .map_err(unpack_error)?;
+                Ok(file)
             }
         }
     }

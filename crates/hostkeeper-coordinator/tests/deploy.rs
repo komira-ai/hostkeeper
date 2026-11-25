@@ -30,11 +30,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hostkeeper_coordinator::config::{Parts, StartError};
+use hostkeeper_coordinator::config::Parts;
 use postgres::{Client, SimpleQueryMessage};
 use support::OPERATOR;
 use support::database::{COORDINATOR_LOCK, Database, client, server_url, with_catalog_lock};
-use support::serve::{Files, build_given, flags_of, refusal};
+use support::serve::{Files, build_given, flags_of};
 use yaml::{Node, Value};
 
 /// The deployment's directory in this checkout.
@@ -342,7 +342,7 @@ fn verifier(admin: &mut Client, role: &str) -> String {
 /// `--ca-init`, as the runbook's first start of a new farm, and the legacy service the test's
 /// allow-list admits), makes its schema owned by the role,
 /// raises the lease's epoch to 1 under the first `--server-name`, takes the operator's change,
-/// and holds the lock, so a second start is refused; and `password.sql` run again sets the new
+/// and holds the lock (shared, so an exclusive taker such as the release before is refused); and `password.sql` run again sets the new
 /// password of the secret file.
 ///
 /// Catches: SQL that psql would stop on, a role made a superuser or without a login, a database
@@ -418,7 +418,7 @@ fn the_committed_setup_makes_the_database_the_committed_command_starts_on_and_lo
     // allow-list admits the legacy service, which a coordinator then names (the runbook's "any
     // other flag the coordinator runs with today").
     args.extend(["--ca-init", "--legacy-service", "kbf"].map(OsString::from));
-    let parts: Parts = build_given(&flags_of(args.clone())).expect("the committed command starts");
+    let parts: Parts = build_given(&flags_of(args)).expect("the committed command starts");
     let mut db = client(Some(&made.database));
     db.batch_execute("SET search_path = hostkeeper")
         .expect("the coordinator's schema");
@@ -444,10 +444,13 @@ fn the_committed_setup_makes_the_database_the_committed_command_starts_on_and_lo
             br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("an operator's change");
-    let why = refusal(args);
+    let taken: bool = db
+        .query_one("SELECT pg_try_advisory_lock($1)", &[&COORDINATOR_LOCK])
+        .expect("a try")
+        .get(0);
     assert!(
-        matches!(why, StartError::Database(_)),
-        "a second coordinator: {why}"
+        !taken,
+        "the coordinator holds the lock: an exclusive taker is refused"
     );
     drop(parts);
 
@@ -566,7 +569,7 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
         .map(str::to_owned)
         .collect();
     assert_eq!(counted, lines);
-    assert_eq!(counted.len(), 45, "{counted:?}");
+    assert_eq!(counted.len(), 47, "{counted:?}");
     assert!(
         counted.contains(&"  spent_tokens: 2 rows".to_owned()),
         "{counted:?}"

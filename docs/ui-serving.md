@@ -35,12 +35,14 @@ browser keeps the session in a cookie the page cannot read; the page keeps only 
 token, in memory, and sends it in the `X-HK-CSRF` header of each API call. Reloading the page asks
 the coordinator for the session again, so a reload does not sign you out. A first sign-in, or a
 sign-in with a temporary password an admin set, shows only the form for choosing a new password.
-Sign out ends the session on the coordinator.
+Sign out ends the session on the coordinator. The host page's Remote SSH terminal speaks to the coordinator over one WebSocket to the same origin
+(`/v1/ssh/terminal`, `docs/operations/ssh-ca.md`), and so does the Console page (`/console/v1/stream/<session>`), which
+`connect-src 'self'` allows. Signing out, or leaving the page, closes either.
 
 ## The frame and the lab
 
 After sign-in the app opens on **Home**, the lab (`docs/design/ui-shell-lab.md`). The frame around every page is a side menu with
-the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Packages, Inventory and Enrollment) and, at the bottom, **Settings**
+the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Packages, Inventory, Enrollment and Maintenance) and, at the bottom, **Settings**
 (one page with the tabs Users, API tokens and Audit), the theme (the browser's own, light or dark; kept in memory only),
 Sign out and a button that collapses the menu to icons; on a narrow screen it is a drawer opened by the top bar's Menu button.
 The top bar says where you are and who is signed in. The menu's icons are small inline SVG drawings (`icon` in `ui/view.js`; no image or font is loaded). Banners come in three kinds: `error` (red), `warning` (amber) and `notice` (blue, for what is true and needs no action); an empty one shows nothing. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
@@ -52,16 +54,65 @@ by their route and are not in the menu.
   state and its name, a blank panel over a free run of U; a click on a server opens its host page, and hover says its name, group,
   version and state. A click on a rack's head opens that rack with its servers in a table. Breadcrumbs lead back
   (`Lab > Row > Rack > Host`). Below the floor plan: the servers not placed yet (the Unplaced list), the alerts of `Alerts.List`
-  and a table of every host. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
+  and a table of every host. Under the alerts, the degraded hosts: how many, and each reason with the hosts that have it (most
+  hosts first), each host a link to its page. A live host is degraded when it has a reason: an alert of `Alerts.List` that names
+  it and says it is not healthy (a halt, a duplicate identity, a failed canary, a silent host, a trusted root, a failed
+  prerequisite; an operator's hold, an abandon or an approval that waits is no reason), or a service of it halted, unhealthy or
+  whose last update failed; it is drawn `failed`, and its row says why under Why. When `Alerts.List` fails, the count is of the
+  hosts' own reports, and says so. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
   row (its height from a list, 42 U by default), resize, move to another row or remove a rack, remove a row, and move a server by
   picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
   holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
+  Above the alerts, the updates notice: when `Alerts.List` answers `updates_due` alerts (one per host group with hosts that have
+  updates due, "Updates due on 4 hosts of mac-build"), it shows each one's words with an **Update** button (one `Maintenance.Schedule` call for the group, with the one
+  Reason field of the notice, after one confirmation) and an **Open Maintenance** button that opens
+  the Maintenance page; these alerts are not repeated in the alerts strip, and with none the notice is not shown.
   Calls: `Hosts.List`, `Releases.Status`, `Alerts.List`, `Layout.Get`, `Enrollment.ListRecords`; on a button `Layout.PutName`,
-  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`.
+  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`; on the notice's Update `Maintenance.Schedule`.
 - **Enrollment** (approval): besides the host group, the Height (1U to 4U, 1U by default), Row, Rack and U position of the server.
   All four are choices from the layout, the U position only among the free slots of the rack for that height; Row's first choice,
   Unplaced, places nothing. The placement is sent with the approval, which is refused whole when the slot is taken.
 - **Host** (Placement): where the host stands, and the same four choices to place or move it (Place, Move) and Unplace.
+- **Host** (why it is not healthy): under the header, every reason the host is not healthy in plain words, with the time it
+  began (by the coordinator's clock for an alert, the host's for a failed update) and the one action that fixes it: **Clear halt**
+  (`Releases.ClearHalt` of the service, with a reason typed once for the section; it lifts the service's halt on every host, and
+  the question says so), **Retry update** (`Hosts.Retry` of the host and the service; the host is ordered the version again
+  when its update plan and holds let it), or words saying why there is no button (a
+  failed prerequisite, which the host's daemon tries again by itself; a service that reports itself unhealthy; another alert).
+  For a js-agent taint (a halt report with the reason `tainted`) it shows what the agent said and the hook's last log lines; the
+  hook tells hostkeeper no check and no run id, so they read "not reported to hostkeeper", and since hostkeeper has no action
+  that clears a taint, the page says to clear it on the host first. `Alerts.List` is the page's last read; when it fails, the
+  page says so and shows the reasons the host's own report gives.
+- **Host** (Updates; `ui/updates.js`): the header shows what the host's maintenance report (`Host.maintenance` of `Hosts.Get`)
+  lists as due, a short phrase each: "kernel update, restart needed" (a Linux kernel package, or a newer kernel installed and not
+  running), "restart needed" (another reboot the host needs), "12 security updates", "3 other updates", "macOS 26.1 to 26.2,
+  restart", "Xcode 27.2 available", and "and 4 more" for the items the report left out; a look the coordinator calls stale
+  (`maintenance_stale`) shows "stale look" with its age, since an empty list then does not mean nothing is due. A host with
+  nothing due and a fresh look, or with no report, shows nothing there. The **Updates** tab shows the report: the operating
+  system and its build, the running and newest installed kernel, when the host booted, the last look and how old it is, each due
+  item (kind, from, to, whether it needs a restart, whether it is a security update, label), and on a Mac what an update needs
+  (FileVault, authrestart, free space, the update account, the Command Line Tools, device-management conflicts) and the Xcodes
+  installed. For a host with a report the tab also has an **Update** button with a Reason field (one `Maintenance.Schedule` call for
+  the host, after one confirmation: everything due, now, the group's batch) and the **Schedule** form (`ui/schedule.js`): which
+  kinds, which hosts, now or in a window (typed in the operator's time zone, shown in UTC), batch, drain deadline, whether to take
+  the group's last host (at most 32 hosts when they are ticked one by one), a reason, a **Check** that sends the request without `confirm` and shows which hosts would be taken and
+  which are left out and why (a second Check names the hosts ticked again), and **Schedule**, which stores the run. `ui/updates.js` itself makes no call.
+- **Maintenance** (`ui/pages/maintenance.js`): the fleet's count ("Updates due on 7 hosts in 2 groups"), then each host group
+  (in name order, Unassigned last) with its hosts, those with something due first, each with what is due, its last look and how
+  old it is (", stale" for a stale one), and a link to its Host page; a host whose daemon sends no report says "no report". It
+  reads `Hosts.List` (every page) when opened and again every 60 seconds; a read again that fails keeps the last answer and
+  says so. After the fleet's count comes the runs (`ui/runs.js`): `Maintenance.List` (the last 10) and `Maintenance.Get` of each
+  run that is not done, read when opened, every 10 seconds (the page is drawn again only when the runs changed) and after a stored run; a list that fails is said there and the rest of
+  the page stays. Each run shows its state, scope, window, batch, reason and its hosts with each one's step, with a Console or
+  Desktop link while it restarts (the Console link opens the host's Console page), and **Cancel** (a run not ended), **Retry** and **Put back** (a halted host), each with a reason
+  and one confirmation, one call per click. Each group's card has an **Update** button on each due host's row, a Reason field,
+  **Update the group** (not for Unassigned) and **Schedule...**, which opens the Schedule form for the group's hosts after reading
+  the group's maintenance policy with `HostGroups.Get`. A refusal of `Maintenance.Schedule`, `Cancel`, `RetryHost` or `PutBack`
+  that the operator can act on is said in words (an Update or Schedule on the host page, this page or Home's notice, and
+  Cancel, Retry and Put back here): nothing due (`nothing_due`), the group's last host (`last_host`, with the way to take it:
+  the Schedule form's "Take the group's last host"), a host already in a run, a window that has ended, an unknown host, group or run, a host not in the run, a run that
+  has ended, a host no longer halted, and an audit entry that could not be written; any other refusal is shown as its code
+  and token. In the Schedule form, a window field left empty is said to be "not set".
 
 ## What the pages do for services
 
@@ -71,7 +122,7 @@ by their route and are not in the menu.
   the text is sent as typed). Setting the desired version asks first. It still shows the Assign and
   Unassign buttons, but a coordinator places by host group alone, so it refuses both with
   `placed_by_host_group`, and the page shows that refusal as it is; put a package in a group with
-  `hkctl host-groups put` instead.
+  `hk host-groups put` instead.
   The section also shows the service's update plan from `Releases.Status`: the stage sizes with
   their percents (a stage an operator enters is marked manual) against the eligible hosts, the
   stage the plan is in ("2 of 3"), why it waits (and for which stage, or that an operator paused
@@ -141,6 +192,45 @@ by their route and are not in the menu.
   group selected and, for a host in none, the blank "Unassigned" (a host in no group is ordered no package). Pages label a host with no group "Unassigned". Choosing another group
   and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
   console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
+  The Overview (`ui/serialbaseline.js`) shows a "Serial console" row, the port and the state of the daemon's serial console
+  baseline from the last heartbeat (`heartbeat.serialConsole`; no row when the heartbeat carries none), and a warning while the state
+  is reboot pending (the kernel's console moves to the port at the host's next reboot; hostkeeper does not reboot the host) or failed.
+- **Remote SSH** (a tab of the Host page, `ui/sshpanel.js`; design:
+  [SSH through the coordinator](design/ssh-through-coordinator.md) section 13): the tab says whether the host's SSH host keys are
+  pinned (`Ssh.HostKeys`, read with the page) and lists them. When none is pinned, or the host reports others than the pinned ones, and
+  its last heartbeat reported its keys, it lists the reported keys and **Pin these host keys** asks first, then sends
+  `Ssh.PinHostKeys` with exactly those keys. **Open a terminal** opens one socket to `/v1/ssh/terminal?host=<host id>` of the page's own
+  origin (over TLS), sends `{csrf, cols, rows}` first (the session's CSRF token and a terminal of 120 by 36), then keystrokes and
+  pastes as binary messages; the host's output comes back as binary messages and is drawn by the app's own terminal (`ui/terminal.js`,
+  `ui/terminal_render.js`, `ui/terminal_keys.js`; no third-party code), into elements classed by `ui/styles/terminal.css`, so no inline
+  style or script is used. The coordinator's `status` messages show how far it has got and its last
+  message, `closed`, gives the cause, which the tab shows in words (every refusal of `SshRefusal`, every close cause of a tunnel,
+  `no_pin`, `host_key_mismatch`, `auth_refused`, `shell_refused`, `bad_request` and `exit`); a socket that closes without it says so.
+  **Close** closes the socket. The terminal has no resize (it is always 120 by 36) and keeps the last 200 lines that scrolled off.
+  A proxy in front of the private listener must pass WebSocket upgrades on that path.
+- **Console** (`ui/pages/serialconsole.js`, reached from the Console link of Home's list of servers on the row of each host whose
+  last heartbeat says Linux; design: [console design](design/console-broker.md)): a Linux server's serial port (COM2, `ttyS1`)
+  through its BMC's Serial over LAN. **Open the console** calls `Console.Open` with the host and the operator's reason (required,
+  1 to 256 bytes, no control character), then opens one socket to `/console/v1/stream/<session>`, offering the subprotocols
+  `hostkeeper.console.v1` and `csrf.<the session's CSRF token>` (the browser sends its sign-in as for every call; the coordinator
+  answers with the first name alone), and hands that socket, open, to the vendored terminal (xterm.js with its attach addon,
+  `ui/vendor/`), which writes the host's bytes and sends what the operator types; the page sends one carriage return so that a
+  waiting login prompt is drawn again. When no byte has come for the session's `quietSecs` (the coordinator's
+  `--console-quiet-s`, 10 by default), the page says "No output yet: the host's serial port must be ttyS1." A close is said in
+  words from its reason token (every close code of the console design's section 12); a close with none says the coordinator
+  refused the connection, or that it was lost. **Close** closes the socket. The page also shows the host page's Power and boot
+  section and every open session (`Console.List`), each with a **Close** that asks first and calls `Console.Close`. A session
+  that is not serial (a Mac's screen) is closed at once.
+- **Desktop** (`ui/pages/desktop.js`, reached from the Desktop link of Home's list of servers on the row of each host whose last
+  heartbeat says `PLATFORM_DARWIN_ARM64`; design: [console design](design/console-broker.md) sections 3 and 11.2): a Mac's screen
+  through the coordinator. The page names who holds the Mac's console (`Console.List`), with a **Close it** that asks first and
+  calls `Console.Close`. **Open the desktop** calls `Console.Open` with the host and a reason (as the Console page), opens one socket
+  to `/console/v1/stream/<session>` with the same two subprotocols, and in the socket's `open` handler hands it, open, to the vendored
+  noVNC viewer (`ui/screen.js`, `ctx.viewScreen`), which is never given an address. When the Mac asks for its login the page shows a
+  form for what it asks and hands what is typed to the viewer alone, keeping no copy of the password. A close is said in the Console
+  page's words; a refusal of the login by the Mac stays said when the viewer then closes the socket itself. **Close**, leaving the
+  page and signing out close it, and each end empties the screen box. An answer that is not a Mac's screen gives the session back
+  with `Console.Close`. The Mac's Power buttons are not on the page yet.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
@@ -148,10 +238,11 @@ by their route and are not in the menu.
   only and is not in the status line, so a reload of the page or the list never shows it again). Disable, Reset password
   and Delete ask to confirm first, as each ends the user's sessions. The coordinator refuses to disable or delete the last
   enabled user and to reset the password of the user who asks; the page shows the refusal as the API gives it.
-- **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, maker and time. Create
-  takes a name and shows the token once, as Users does a password. Revoke asks first and is offered for the tokens of the
+- **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, owner, maker and time. Create
+  takes a name, makes a token owned by the signed-in user and shows it once, as Users does a password. Revoke asks first and is offered for the tokens of the
   store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name or the token's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name, by an API token's owner with the token in
+  `api_token`, or by a tokens file token's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
@@ -161,16 +252,39 @@ by their route and are not in the menu.
 - `/ui/` is the directory's `index.html`, and a path ending in `/` is the `index.html` of that
   directory.
 - Only files ending in `.html`, `.css`, `.js`, `.json`, `.svg`, `.png` or `.ico`, of at most
-  4 MiB, are served; anything else is `404`. So `ui/gen/client.d.ts`, the TypeScript declarations
-  of the generated client `ui/gen/client.js`, is in the image but not served: the app does not
-  load it. A path that leaves the directory (`..`, an absolute
+  4 MiB, are served; anything else is `404`. So the `.d.ts` files of `ui/gen/` (`client.d.ts`, the TypeScript
+  declarations of the generated client `ui/gen/client.js`, and one file per proto package it
+  imports types from) are in the image but not served: the app does not load them. A path that leaves the directory (`..`, an absolute
   path, their percent-encoded or backslash forms, or a symbolic link to a file outside) is `404`,
   and the file outside is never opened. Hidden files (a name starting with `.`) are `404`.
 - Each file is read from disk on each request; nothing is cached in memory.
 - Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer` and
-  `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. No answer of the
-  coordinator carries an `Access-Control-*` header.
+  `Content-Security-Policy: default-src 'self'; connect-src 'self'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:`.
+  Script comes only from the app's own origin: no inline script and no `eval`. `connect-src 'self'` lets the page reach its own
+  origin, a `wss:` socket to its own host and port included. Inline style and `data:` images are for the console's vendored
+  libraries (the Console page's terminal, xterm.js, draws its cells with inline style, the remote desktop its cursor and JPEG rectangles as `data:`
+  images; [console design](design/console-broker.md), section 8.2); the app's own files still use neither inline style nor
+  inline script. No answer of the coordinator carries an `Access-Control-*` header.
+- The one socket: the app opens one kind of WebSocket, to its own origin, in exactly one place, `ui/main.js`, which builds
+  `ctx.openSocket(path, handlers, protocols)` and hands it to the pages as it hands them `fetch`; `ctx.openTerminal(element,
+  opened)` (`ui/terminal_port.js`, handed over there too) hands the opened socket to the vendored terminal's attach addon, so no
+  library is given an address. Its address comes from
+  `socketAddress` (`ui/socket_address.js`): the page's own host, over TLS when the page is, and a path of one of two fixed shapes, the
+  Remote SSH terminal's (`/v1/ssh/terminal?host=<host id>`) and a console session's stream
+  (`/console/v1/stream/<session id of 64 lower-case hex digits>`); any other path is refused before a socket is made. The scan of the
+  sources (`crates/hostkeeper-ui-tests/src/scan.rs`) refuses `WebSocket` in every other file of the app and a `ws://` or `wss://`
+  address in every file, and holds `main.js` to one `WebSocket(` call, whose arguments are `socketAddress(window.location, path)`, alone or followed by
+  `protocols` (the subprotocols the page offers).
+- Vendored libraries: third-party code lives under `ui/vendor/`, each file pinned by its SHA-256 in
+  `crates/hostkeeper-ui-tests/vendor.sha256` (`sha256sum` lines, run in `ui/`), so a change to a vendored library is a change to
+  that file; the scan fails for a vendored file with no pin or another digest, and for a pin with no file. It holds xterm.js 5.5.0
+  and its attach addon 0.11.0 (both MIT, unchanged from their npm packages, each with its licence file), and noVNC 1.7.0
+  (`ui/vendor/novnc/`, MPL-2.0, with its bundled pako, MIT): `core/rfb.js` and the modules it imports, unchanged but for
+  `core/websock.js`, whose `open` (the library's one `new WebSocket(`) throws instead, marked in the file as changed; its
+  `LICENSE.txt`, `AUTHORS` and licence texts are the package's own. The app's 1000-line limit is for its own files. The directory is exempt
+  from the scan's needles (minified code names licence URLs and `console.`), and is still refused, by the scan, inline script and
+  handlers made from text, and any `WebSocket(` call: the libraries are handed the app's one socket, already open.
 - The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
   header) or an operator token on every call.
 

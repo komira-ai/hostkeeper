@@ -6,6 +6,7 @@ mod support_apt;
 mod support_host;
 
 use std::fs;
+use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -16,10 +17,15 @@ use hostkeeper_daemon::testing::{AdditiveFault, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::testing::{Event, FakeUnitControl, FsWrite, UnitCall};
-use hostkeeper_steps::ToolCall;
+use hostkeeper_steps::{Bound, ToolCall};
 use support::{Rig, d, name, snapshot, uninstall, update};
 use support_apt::bridge;
 use support_host::NativeHost;
+
+/// A bound of `n` seconds.
+fn secs(n: u64) -> Bound {
+    Bound::Secs(NonZeroU64::new(n).expect("a nonzero bound"))
+}
 
 fn finished(verdict: Verdict, reason: Option<&str>) -> Reply {
     Reply::Finished {
@@ -169,12 +175,8 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
     let ran = rig.launcher.additive_runs();
     assert_eq!(ran.len(), 1);
     assert_eq!(
-        (
-            ran[0].step.as_str(),
-            ran[0].unit.as_str(),
-            ran[0].timeout_secs
-        ),
-        ("uninstall", "updater-web-uninstall-1", 300)
+        (ran[0].step.as_str(), ran[0].unit.as_str(), ran[0].bound),
+        ("uninstall", "updater-web-uninstall-1", secs(300))
     );
     // The package's hook is the program at its fixed path, run with no argument of its own.
     assert!(ran[0].hook_args.is_empty());
@@ -258,7 +260,10 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
     let clock = rig.clock.clone();
     rig.launcher.during_additive(move |call| {
         if call.service == "killed" {
-            clock.advance(call.timeout_secs + 1);
+            let Bound::Secs(limit) = call.bound else {
+                panic!("an uninstall is bounded, got {:?}", call.bound);
+            };
+            clock.advance(limit.get() + 1);
         }
     });
 
@@ -315,13 +320,13 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
         assert!(farm.apt.host.installed(service).is_some(), "{service}");
         assert!(rig.there(wants_link(service)), "{service}");
     }
-    let bounds: Vec<u64> = rig
+    let bounds: Vec<Bound> = rig
         .launcher
         .additive_runs()
         .iter()
-        .map(|ran| ran.timeout_secs)
+        .map(|ran| ran.bound)
         .collect();
-    assert_eq!(bounds, [300; 5]);
+    assert_eq!(bounds, [secs(300); 5]);
 
     let held = daemon.order(&uninstall("halts", 2));
     assert_eq!(held.refusal(), Some(Refusal::Halted), "{held:?}");
@@ -453,8 +458,8 @@ fn uninstall_never_touches_the_services_data_directory() {
 
 /// Catches an uninstall that removes what is another service's: `api` and `web` both installed,
 /// `web` uninstalled; the entry of `api` in `placed.json`, its package, its enablement link, its
-/// version directory, its seal, its `current` and its step record are as they were. The held halt generation of
-/// `web` stays (it is never lowered), and with it `web`'s state directory.
+/// version directory, its seal, its `current` and its step record are as they were. A held-halt
+/// file `web` was left with, holding no halt, goes with the rest of `web`'s state directory.
 #[test]
 fn uninstall_leaves_other_services_package_and_versions_alone() {
     let farm = NativeHost::new("uninstall-other");
@@ -465,7 +470,7 @@ fn uninstall_leaves_other_services_package_and_versions_alone() {
     HaltStore::new(&rig.state)
         .raise(&name("web"), 4)
         .expect("a held halt");
-    // What else a crash may leave in the state directory goes; the held halt stays.
+    // What else a crash may leave in the state directory goes, a held halt of no halt too.
     fs::write(rig.state.join("web/params.toml.tmp"), "x").expect("a stray file");
     let api_entry = rig.placed_record().installed.get("api").cloned();
     assert!(api_entry.is_some(), "api is recorded as installed");
@@ -487,11 +492,7 @@ fn uninstall_leaves_other_services_package_and_versions_alone() {
         record_before
     );
     assert!(gone(&farm, "web"));
-    assert_eq!(
-        fs::read_to_string(rig.state.join("web/held-halt")).expect("the held halt"),
-        "4\n"
-    );
-    assert!(!rig.state.join("web/params.toml.tmp").exists());
+    assert!(!rig.state.join("web").exists());
 }
 
 /// Catches a tombstone that waits for an order to be finished, or that the start resumes from

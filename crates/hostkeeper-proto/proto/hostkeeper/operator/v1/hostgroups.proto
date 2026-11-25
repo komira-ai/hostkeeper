@@ -79,8 +79,9 @@ enum HostGroupsRefusal {
   // INVALID_ARGUMENT: `Put` of a group whose list names a package that is no service name, or
   // names one package twice.
   HOST_GROUPS_REFUSAL_INVALID_PACKAGE = 8;
-  // INVALID_ARGUMENT: `Put` of a policy with a key out of its range; the audit and the log name
-  // the key.
+  // INVALID_ARGUMENT: `Put` of a policy with a key out of its range, a key of its `maintenance`
+  // included (among them an `xcode_default` that is neither `latest` nor a version, or is a
+  // version while `xcode_keep` is 0); the audit and the log name the key.
   HOST_GROUPS_REFUSAL_INVALID_POLICY = 9;
   // FAILED_PRECONDITION: `Put` of a group whose list does not include `hostkeeper` (an empty
   // list included): every group lists it, so that no host loses its agent.
@@ -102,6 +103,9 @@ enum HostGroupsRefusal {
   // FAILED_PRECONDITION: retired. No call answers it, since there is no built-in group; the number
   // is kept so that it is never given another meaning.
   HOST_GROUPS_REFUSAL_RESERVED_HOST_GROUP = 16;
+  // FAILED_PRECONDITION: `Move` of a host in its turn of a maintenance run: from the order that
+  // starts it (staging) until it is done or deferred, halted and not back included.
+  HOST_GROUPS_REFUSAL_HOST_IN_MAINTENANCE = 17;
 }
 
 // A group's body, as `Put` takes it and the answers carry it.
@@ -142,6 +146,52 @@ message RolloutPolicy {
   // How many of the group's packages may have a live rollout at once, 1 to 16; absent: the
   // coordinator's `--live-rollouts`.
   optional uint32 live_rollouts = 9;
+  // What a maintenance run of the group's hosts may do and how many hosts it takes at once
+  // (docs/operations/hostgroups.md, Maintenance); absent: every key at its default. Answers
+  // name it with every key, absent or not. A maintenance run reads `batch` and `min_serving` to
+  // start its hosts' turns, and `linux_scope`, `drain_deadline_secs` and `return_secs` for the
+  // `maintain` it sends.
+  MaintenancePolicy maintenance = 10;
+  // What a host that failed the desired version does to the rest of its stage: UNSPECIFIED is
+  // CONTINUE. Under either, a failure among the canary hosts stops the roll, and under CONTINUE
+  // `rollback_after_failed` is a ceiling: once as many of the plan's hosts have failed, the plan
+  // stops as under STOP.
+  FailedHosts failed_hosts = 11;
+}
+
+// The maintenance settings of a group's hosts. A key left out takes its default.
+message MaintenancePolicy {
+  // How many of the newest Xcode releases the group's Macs keep, 0 to 4; 0 (the default) leaves
+  // Xcode alone.
+  uint32 xcode_keep = 1;
+  // The Xcode `xcode-select` points at: `latest`, or a version of 1 to 3 numbers of 1 to 4 digits
+  // joined by `.` (`26.1.1`), which needs an `xcode_keep` of at least 1; absent: `latest`.
+  optional string xcode_default = 2;
+  // Whether a new major macOS counts as due; false (the default): only updates within the major.
+  bool macos_major = 3;
+  // Which Linux updates count as due: UNSPECIFIED is SECURITY.
+  LinuxScope linux_scope = 4;
+  // How many hosts of the group are in maintenance at once, unless a run says otherwise, 1 to
+  // 10000; absent: 1.
+  optional uint32 batch = 5;
+  // How many hosts of the group must stay serving, 0 to 10000; absent: 1.
+  optional uint32 min_serving = 6;
+  // How long a host's drain may wait, in seconds, before the host is put back as it was and the
+  // run moves on; 0 (the default): no deadline. Any number of seconds is taken.
+  uint64 drain_deadline_secs = 7;
+  // How long a rebooting host may be silent, in seconds, before it is reported not back: 60 to
+  // 86400; 0 (the default): 1200 for a Linux host, 3600 for a Mac.
+  uint64 return_secs = 8;
+}
+
+// Which Linux updates a group's maintenance counts as due.
+enum LinuxScope {
+  // SECURITY, the default.
+  LINUX_SCOPE_UNSPECIFIED = 0;
+  // Security updates and the kernel.
+  LINUX_SCOPE_SECURITY = 1;
+  // Every update the package manager offers.
+  LINUX_SCOPE_ALL = 2;
 }
 
 // One stage of a group's update plan.
@@ -166,6 +216,18 @@ enum RollbackMode {
   ROLLBACK_MODE_MANUAL = 1;
   // The coordinator sets the group's last good version when a release fails on enough hosts.
   ROLLBACK_MODE_AUTOMATIC = 2;
+}
+
+// What a host that failed the desired version does to the rest of its stage.
+enum FailedHosts {
+  // CONTINUE, the default.
+  FAILED_HOSTS_UNSPECIFIED = 0;
+  // The failed host holds its stage: the next stage starts only once an operator resolves the
+  // host (holds, excludes or retries it, clears its halt, or sets another version).
+  FAILED_HOSTS_STOP = 1;
+  // The failed host stays at the version it runs and is an alert; its stage counts it as done,
+  // failed, and the plan goes on ordering the other hosts, `max_updating` at a time.
+  FAILED_HOSTS_CONTINUE = 2;
 }
 
 // How many hosts must fail a release before an automatic rollback: the larger of `min_hosts` and

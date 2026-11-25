@@ -172,13 +172,13 @@ hold:
 A self-update never changes the plist (hostkeeper's own package has no unit on a Mac), so a Mac
 installed from an earlier pkg keeps that plist until the pkg is installed again by hand. Do it
 once on each such Mac, with a pkg whose plist starts `/usr/local/bin/hostkeeper daemon`; keep the Mac excluded from
-hostkeeper until it is done. Run the `hkctl` lines on a workstation with an operator token for the
+hostkeeper until it is done. Run the `hk` lines on a workstation with an operator token for the
 coordinator, the others on the Mac as root.
 
 1. Take the Mac out of hostkeeper, if it is not out already:
 
    ```
-   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
        hosts exclude --service hostkeeper --node-id <node-id> \
        --reason "macOS: pkg installed by hand"
    ```
@@ -201,7 +201,7 @@ coordinator, the others on the Mac as root.
    sudo rm -f /var/lib/updater/state/hostkeeper/bin/current
    ```
 
-5. Install the pkg. The installer runs the `postinstall`, which loads the job (step 3 left it not
+5. Install the pkg. The installer runs the `postinstall`, which enables and loads the job (step 3 left it not
    loaded; the script never boots out a job that is loaded). The job's first start seeds `current` and keeps the
    `/etc/hostkeeper/hostkeeper.toml` the Mac has (the pkg never replaces it). If the Mac has
    neither that file nor a managed config, the install succeeds and the daemon refuses each
@@ -216,12 +216,12 @@ coordinator, the others on the Mac as root.
    `/usr/local/bin/hostkeeper`, `readlink` of
    `/var/lib/updater/state/hostkeeper/bin/current` names
    `versions/<version>`, and, after a heartbeat period,
-   `hkctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
+   `hk hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
    version.
 
 7. Put the Mac back into hostkeeper; its next self-update starts the new binary:
 
    ```
-   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
        hosts include --service hostkeeper --node-id <node-id>
    ```

@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::names::Platform;
 use crate::version::Version;
 pub use crate::wire_report::{
-    Answer, Class, CommitState, DeferredReport, MAX_ACKS, MAX_FEATURES, MAX_ORDER_ID,
-    MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, ORDER_FEATURE, OrderId, PackageDigest, Phase,
-    StepName, StepRun, Token, VERDICT_ACKS_FEATURE, VerdictAck,
+    Answer, Class, CommitState, DeferredReport, LocalHalt, MAX_ACKS, MAX_FEATURES,
+    MAX_FEATURES_BEFORE_SSH, MAX_ORDER_ID, MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, ORDER_FEATURE,
+    OrderId, PackageDigest, Phase, StepName, StepRun, Token, VERDICT_ACKS_FEATURE, VerdictAck,
 };
 use crate::wire_report::{features_text, is_false, lenient, or_default, step_secs_text};
 
@@ -59,7 +59,12 @@ pub enum Outcome {
 }
 
 /// The last update the host ran.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Two results are equal when every field but [`UpdateResult::detail`] is: the detail is prose
+/// for people, and the halts, acknowledgements and set-aside reports that compare results keep
+/// their identity whether or not the copy they hold has it (one stored before the field
+/// existed has none).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateResult {
     /// The version it was told to run.
     pub target: Version,
@@ -103,11 +108,76 @@ pub struct UpdateResult {
         deserialize_with = "lenient"
     )]
     pub order_try: Option<u64>,
+    /// What the hook or the updater said of the outcome, in prose (the hook's `detail`), cut to
+    /// [`MAX_DETAIL_BYTES`] at a character boundary when it is read. Absent from an updater that
+    /// predates it, on the frozen JSON route (whose agents send none) and when nothing was said;
+    /// a value that is not a string reads as `None`. The coordinator fills it from the gRPC
+    /// heartbeat's `UpdateResult.detail`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "detail_text"
+    )]
+    pub detail: Option<String>,
 }
+
+/// The most bytes of an [`UpdateResult::detail`] a reader keeps.
+pub const MAX_DETAIL_BYTES: usize = 256;
+
+/// `text` cut to at most `max` bytes, at a character boundary.
+pub(crate) fn cut_text(text: &str, max: usize) -> &str {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// A detail as [`UpdateResult::detail`] reads it: a string cut to [`MAX_DETAIL_BYTES`], and
+/// `None` for anything else.
+fn detail_text<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let text: Option<String> = lenient(d)?;
+    Ok(text.map(|text| cut_text(&text, MAX_DETAIL_BYTES).to_owned()))
+}
+
+impl PartialEq for UpdateResult {
+    fn eq(&self, other: &Self) -> bool {
+        // Every field but `detail` (see the type's doc).
+        let Self {
+            target,
+            outcome,
+            phase,
+            class,
+            reason,
+            order_id,
+            order_try,
+            detail: _,
+        } = self;
+        (target, outcome, phase, class, reason, order_id, order_try)
+            == (
+                &other.target,
+                &other.outcome,
+                &other.phase,
+                &other.class,
+                &other.reason,
+                &other.order_id,
+                &other.order_try,
+            )
+    }
+}
+
+impl Eq for UpdateResult {}
 
 /// The reasons of the refusals a daemon gives an order for its try alone (design 8.3): the same
 /// try as its step record's for another package (`try_conflict`), or a lower one (`stale_try`).
 pub const TRY_REFUSALS: [&str; 2] = ["try_conflict", "stale_try"];
+
+/// The reason of the refusal a daemon gives every order of a service it holds a halt of
+/// ([`ServiceBeat::local_halt`]) until a greater halt generation lifts it.
+pub const HALTED_REFUSAL: &str = "halted";
 
 impl UpdateResult {
     /// Whether this is a refusal of [`TRY_REFUSALS`]: failed, with no phase and no class, for
@@ -125,6 +195,20 @@ impl UpdateResult {
                 .is_some_and(|reason| TRY_REFUSALS.contains(&reason.as_str()))
     }
 
+    /// Whether this is the refusal a daemon gives every order of a service it holds a halt of
+    /// ([`HALTED_REFUSAL`]): failed, with no phase and no class. The host ran nothing; the halt
+    /// it holds, not the version, refused it.
+    #[must_use]
+    pub fn is_halted_refusal(&self) -> bool {
+        self.outcome == Outcome::Failed
+            && self.phase.is_none()
+            && self.class.is_none()
+            && self
+                .reason
+                .as_ref()
+                .is_some_and(|reason| reason.as_str() == HALTED_REFUSAL)
+    }
+
     /// A result with no phase, class, reason or order: what an updater without them reports.
     #[must_use]
     pub fn new(target: Version, outcome: Outcome) -> Self {
@@ -136,6 +220,7 @@ impl UpdateResult {
             reason: None,
             order_id: None,
             order_try: None,
+            detail: None,
         }
     }
 }
@@ -248,6 +333,24 @@ pub struct Heartbeat {
         deserialize_with = "lenient"
     )]
     pub record_try: Option<u64>,
+    /// A halt the host holds of the service of its own ([`LocalHalt`]); absent while it holds
+    /// none, and from an agent that predates it. A value that is no [`LocalHalt`] reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub local_halt: Option<LocalHalt>,
+    /// The host's maintenance report: the protobuf encoding of `hostkeeper.agent.v1.MaintenanceReport`
+    /// as standard padded base64. This crate keeps the text and does not decode it; the
+    /// coordinator does. Absent from an agent that predates it; a value that is no text reads
+    /// as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub maintenance: Option<String>,
 }
 
 /// The most bytes of a heartbeat's `last_renew_error` that are sent and read.
@@ -390,6 +493,14 @@ pub struct ServiceBeat {
         deserialize_with = "lenient"
     )]
     pub record_try: Option<u64>,
+    /// A halt the host holds of the service of its own ([`LocalHalt`]); absent while it holds
+    /// none, and from an agent that predates it. A value that is no [`LocalHalt`] reads as `None`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub local_halt: Option<LocalHalt>,
 }
 
 impl ServiceBeat {
@@ -414,6 +525,8 @@ impl ServiceBeat {
             cert_not_after_unix: None,
             last_renew_error: None,
             record_try: self.record_try,
+            local_halt: self.local_halt.clone(),
+            maintenance: None,
         }
     }
 }
@@ -588,6 +701,10 @@ struct HeartbeatLoose {
     last_renew_error: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     record_try: Option<u64>,
+    #[serde(default, deserialize_with = "lenient")]
+    local_halt: Option<LocalHalt>,
+    #[serde(default, deserialize_with = "lenient")]
+    maintenance: Option<String>,
 }
 
 /// One droppable value read as `T`: its default, and the reason, when it is bad.
@@ -682,6 +799,8 @@ fn without_droppable(bytes: &[u8]) -> Option<HeartbeatRead> {
         cert_not_after_unix: rest.cert_not_after_unix,
         last_renew_error: rest.last_renew_error,
         record_try: rest.record_try,
+        local_halt: rest.local_halt,
+        maintenance: rest.maintenance,
     };
     let mut facts: Vec<&'static str> = extras.iter().map(|(fact, _)| *fact).collect();
     facts.sort_unstable();

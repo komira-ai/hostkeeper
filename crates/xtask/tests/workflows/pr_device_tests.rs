@@ -8,9 +8,8 @@
 use super::lint::{
     PRIVILEGED_WORKFLOW, entries, entry, lint, runs_on_pull_requests, scalars, triggers,
 };
-use super::pr_device::{
-    CONCURRENCY_PROBLEM, FILE, GROUP, JOBS, ON_PROBLEM, REQUIRED, TOP_LEVEL, mirror_problems, same,
-};
+use super::merge_queue::{CANCEL, concurrency_problem, group, on_problem};
+use super::pr_device::{FILE, JOBS, REQUIRED, TOP_LEVEL, mirror_problems, same};
 use super::yaml::{self, Node};
 use super::{CLEAN, with, with_in, workflows};
 
@@ -91,7 +90,10 @@ fn no_workflow_that_runs_for_a_pull_request_runs_a_macos_job() {
             .map(str::to_owned);
         assert_eq!(mac, None, "{file} runs for a pull request and names macOS");
     }
-    assert_eq!(pull_request_workflows, ["ci.yml", "pr-device.yml"]);
+    assert_eq!(
+        pull_request_workflows,
+        ["ci.yml", "farm.yml", "pr-device.yml"]
+    );
 }
 
 #[test]
@@ -340,17 +342,21 @@ fn each_job_of_pr_device_yml_runs_on_every_pull_request_on_its_runner() {
         (
             PRIVILEGED,
             "  privileged:\n    if: ${{ github.event.pull_request.draft == false }}\n    runs-on: ubuntu-24.04\n".to_owned(),
-            vec!["job privileged: has `if`, and must run and report on every pull request".to_owned()],
+            vec![
+                "pr-device.yml: job privileged has an if: other than ${{ always() }}, and could be skipped for a merge group, which counts as passed".to_owned(),
+                "pr-device.yml: `${{ github.event.pull_request.draft == false }}` reads the event; only an if: that starts `github.event_name == 'push' &&` may, so a merge group runs what a pull request runs".to_owned(),
+                "job privileged: has `if`, and must run and report on every pull request and merge group".to_owned(),
+            ],
         ),
         (
             PRIVILEGED,
             "  privileged:\n    needs: openrc-device\n    runs-on: ubuntu-24.04\n".to_owned(),
-            vec!["job privileged: has `needs`, and must run and report on every pull request".to_owned()],
+            vec!["job privileged: has `needs`, and must run and report on every pull request and merge group".to_owned()],
         ),
         (
             PRIVILEGED,
             "  privileged:\n    name: privileged on linux\n    runs-on: ubuntu-24.04\n".to_owned(),
-            vec!["job privileged: has `name`, and must run and report on every pull request".to_owned()],
+            vec!["job privileged: has `name`, and must run and report on every pull request and merge group".to_owned()],
         ),
         (
             PRIVILEGED,
@@ -469,44 +475,57 @@ fn the_secret_rule_holds_in_every_pull_request_workflow_and_reads_only_expressio
     );
 }
 
+/// The committed `on` of pr-device.yml, up to the key after it.
+const ON: &str = "on:\n  pull_request:\n  merge_group:\n    types: [checks_requested]\n    branches: [main]\n\npermissions";
+
 #[test]
-fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
-    // Catches: a paths or branches filter on `on`, which leaves the required checks unreported on
-    // a pull request it filters out (a check that never starts), a push trigger that would run the copies again after the merge,
-    // and a `types` list that skips the pushes to an open pull request.
-    let on = "on:\n  pull_request:\n\npermissions";
+fn the_trigger_of_pr_device_yml_is_every_pull_request_and_every_merge_group_of_main() {
+    // Catches: a paths or branches filter on the pull request, which leaves the required checks
+    // unreported on a pull request it filters out (a check that never starts), a push trigger
+    // that would run the copies again after the merge, a `types` list that skips the pushes to an
+    // open pull request; and a merge group the workflow does not start for (no merge_group, a type
+    // other than checks_requested, another branch, a paths filter), where the queue waits for
+    // checks that never come.
+    assert!(device().contains(ON));
+    let mg = "  merge_group:\n    types: [checks_requested]\n    branches: [main]\n";
     for changed in [
-        "on:\n  pull_request:\n    paths: ['crates/hostkeeper-launchd/**']\n\npermissions",
-        "on:\n  pull_request:\n    branches: [main]\n\npermissions",
-        "on:\n  pull_request:\n    types: [opened]\n\npermissions",
-        "on:\n  pull_request:\n  push:\n    branches: [main]\n\npermissions",
-        "on:\n  workflow_dispatch:\n\npermissions",
-        "on:\n  pull_request: x\n\npermissions",
-        "on:\n  pull_request: [x]\n\npermissions",
-        "on: [pull_request, push]\n\npermissions",
+        format!("on:\n  pull_request:\n    paths: ['crates/hostkeeper-launchd/**']\n{mg}\npermissions"),
+        format!("on:\n  pull_request:\n    branches: [main]\n{mg}\npermissions"),
+        format!("on:\n  pull_request:\n    types: [opened]\n{mg}\npermissions"),
+        format!("on:\n  pull_request:\n{mg}  push:\n    branches: [main]\n\npermissions"),
+        format!("on:\n  workflow_dispatch:\n{mg}\npermissions"),
+        format!("on:\n  pull_request: x\n{mg}\npermissions"),
+        format!("on:\n  pull_request: [x]\n{mg}\npermissions"),
+        "on: [pull_request, push]\n\npermissions".to_owned(),
+        "on: [pull_request, merge_group]\n\npermissions".to_owned(),
+        "on: pull_request\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: [checks_requested]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    branches: [main]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: [destroyed]\n    branches: [main]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: [checks_requested, destroyed]\n    branches: [main]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: [checks_requested]\n    branches: [release]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: [checks_requested]\n    branches: [main, release]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: [checks_requested]\n    branches: [main]\n    paths: [crates/**]\n\npermissions".to_owned(),
+        "on:\n  pull_request:\n  merge_group:\n    types: {checks_requested: x}\n    branches: [main]\n\npermissions".to_owned(),
     ] {
-        let found = problems(&device_with(on, changed));
-        assert!(
-            found.contains(&ON_PROBLEM.to_owned()),
-            "{changed}: {found:?}"
-        );
+        let found = problems(&device_with(ON, &changed));
+        assert!(found.contains(&on_problem(FILE)), "{changed}: {found:?}");
     }
     for same in [
-        "on: pull_request\n\npermissions",
-        "on: [pull_request]\n\npermissions",
-        "on:\n  pull_request: {}\n\npermissions",
+        "on:\n  pull_request: {}\n  merge_group:\n    types: [checks_requested]\n    branches: [main]\n\npermissions",
+        "on:\n  merge_group:\n    branches: main\n    types: checks_requested\n  pull_request:\n\npermissions",
     ] {
         assert_eq!(
-            problems(&device_with(on, same)),
+            problems(&device_with(ON, same)),
             Vec::<String>::new(),
             "{same}"
         );
     }
-    let doc = yaml::load(&device()).expect("parses");
-    assert!(entry(&doc, "on").is_some());
     // With no `on` it runs for no pull request, and its copies' root is refused as outside
     // privileged.yml.
-    let none = problems(&device_with("on:\n  pull_request:\n\n", ""));
+    let none = problems(&device_with(ON, "permissions"));
     assert_eq!(none.len(), 3, "{none:?}");
     assert!(
         none[0]
@@ -517,27 +536,49 @@ fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
             "job openrc-device: privileged outside privileged.yml and net-install.yml"
         )
     );
-    assert_eq!(none[2], ON_PROBLEM);
+    assert_eq!(none[2], on_problem(FILE));
 }
 
 #[test]
-fn the_concurrency_of_pr_device_yml_is_one_group_per_pull_request_that_cancels() {
-    // Catches: superseded runs left running (and holding runners) after a newer push, a
-    // group shared by every pull request (which cancels another pull request's run), and a
-    // workflow with no concurrency at all.
-    let block = format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n");
+fn the_concurrency_of_pr_device_yml_cancels_a_pull_requests_older_run_and_no_merge_group() {
+    // Catches: superseded runs left running (and holding runners) after a newer push, a group
+    // shared by every pull request (which cancels another pull request's run), the pull request's
+    // number as the key (empty for every merge group, so each group would cancel the one before),
+    // a merge group's run cancelled at all, and a workflow with no concurrency.
+    let block = format!(
+        "concurrency:\n  group: {}\n  cancel-in-progress: {CANCEL}\n",
+        group(FILE)
+    );
     assert!(device().contains(&block));
     for changed in [
-        format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: false\n"),
-        "concurrency:\n  group: pr-device\n  cancel-in-progress: true\n".to_owned(),
-        format!("concurrency:\n  group: {GROUP}\n"),
-        format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n  x: y\n"),
+        format!(
+            "concurrency:\n  group: {}\n  cancel-in-progress: true\n",
+            group(FILE)
+        ),
+        format!(
+            "concurrency:\n  group: {}\n  cancel-in-progress: false\n",
+            group(FILE)
+        ),
+        format!(
+            "concurrency:\n  group: pr-device-${{{{ github.event.pull_request.number }}}}\n  cancel-in-progress: {CANCEL}\n"
+        ),
+        "concurrency:\n  group: pr-device-${{ github.event.pull_request.number }}\n  cancel-in-progress: true\n"
+            .to_owned(),
+        format!("concurrency:\n  group: pr-device\n  cancel-in-progress: {CANCEL}\n"),
+        format!(
+            "concurrency:\n  group: ci-${{{{ github.event_name == 'pull_request' && github.ref || github.run_id }}}}\n  cancel-in-progress: {CANCEL}\n"
+        ),
+        format!("concurrency:\n  group: {}\n", group(FILE)),
+        format!(
+            "concurrency:\n  group: {}\n  cancel-in-progress: {CANCEL}\n  x: y\n",
+            group(FILE)
+        ),
         "concurrency: pr-device\n".to_owned(),
         String::new(),
     ] {
         assert_eq!(
             problems(&device_with(&block, &changed)),
-            [CONCURRENCY_PROBLEM],
+            [concurrency_problem(FILE)],
             "{changed}"
         );
     }

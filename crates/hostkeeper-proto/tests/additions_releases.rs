@@ -187,9 +187,11 @@ fn get_release_is_the_last_method_of_releases() {
     assert!(!method.is_client_streaming() && !method.is_server_streaming());
 }
 
-/// Proves: the refusals of targets are `ReleasesRefusal` 25, 26 and 27 with their names and are
-/// the last values; a reader of the release before knows none of the three numbers (it reads them
-/// as unknown values) and keeps every value it has under its name and number.
+/// Proves: the refusals of targets are `ReleasesRefusal` 25, 26 and 27 with their names, the
+/// registry's `repository_unknown` is 28, and `state_changed` (a set in host groups that found the
+/// desired state changed in the store each time it was made) is 32, the last value; a reader of
+/// the release before knows none of these numbers (it reads them as unknown values) and keeps
+/// every value it has under its name and number.
 /// Catches: a number the release before already gave a meaning, or a renumbered shipped value.
 #[test]
 fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
@@ -218,6 +220,11 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
             28,
             "RELEASES_REFUSAL_REPOSITORY_UNKNOWN",
         ),
+        (
+            op::ReleasesRefusal::StateChanged,
+            32,
+            "RELEASES_REFUSAL_STATE_CHANGED",
+        ),
     ] {
         assert_eq!(added as i32, number, "{added:?}");
         assert_eq!(added.as_str_name(), token);
@@ -235,16 +242,15 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
     let now = current_pool()
         .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
         .expect("enum");
-    // Values 25..=27 are the ones above; 28 is `repository_unknown` (the registry of package
-    // repositories) and 29..=31 are the host-group refusals, proven against the baseline in
-    // additions_host_groups.rs. Nothing else was added after 27.
+    // Values 25..=28 and 32 are the ones above; 29..=31 are the host-group refusals, proven
+    // against the baseline in additions_host_groups.rs. Nothing else was added after 27.
     let numbers: Vec<i32> = now
         .values()
         .map(|v| v.number())
         .filter(|n| *n > 27)
         .collect();
-    assert_eq!(numbers, vec![28, 29, 30, 31]);
-    assert_eq!(now.values().map(|v| v.number()).max(), Some(31));
+    assert_eq!(numbers, vec![28, 29, 30, 31, 32]);
+    assert_eq!(now.values().map(|v| v.number()).max(), Some(32));
 }
 
 /// Proves: a set with targets reads back as written with the generated types, and a

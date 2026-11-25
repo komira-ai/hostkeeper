@@ -45,6 +45,7 @@ fn api_token() -> op::ApiTokenInfo {
         source: op::ApiTokenSource::Store.into(),
         created_by: "alice".to_owned(),
         created_unix: 1_000,
+        owner: "alice".to_owned(),
     }
 }
 

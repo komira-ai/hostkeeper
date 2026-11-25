@@ -101,4 +101,14 @@ impl FakeService for ExampleFake {
             .map(str::to_owned)
             .collect())
     }
+
+    /// One lease in `work/`, which only a test removes: work that does not end by itself.
+    fn start_work(&mut self, sandbox: &Sandbox) -> io::Result<bool> {
+        fs::create_dir_all(sandbox.world().join("work"))?;
+        fs::write(sandbox.world().join("work").join(LEASE), "job 1")?;
+        Ok(true)
+    }
 }
+
+/// The name of the lease of [`ExampleFake::start_work`] in `work/`.
+pub const LEASE: &str = "lease-1";

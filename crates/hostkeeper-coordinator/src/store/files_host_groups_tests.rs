@@ -13,7 +13,8 @@ use super::{Backend, BackendError, Commit, Files};
 use crate::audit_file::{self, AuditLine, DEFAULT_ROTATION};
 use crate::desired::{self, StoreError};
 use crate::host_groups::tests::{every_mark, web};
-use crate::host_groups::{GroupMarks, HostGroups};
+use crate::host_groups::{GroupMarks, GroupName, HostGroups};
+use crate::maintenance_policy::Maintenance;
 use crate::ops::{AuditEntry, OpsError, OpsState};
 use crate::testutil::{LEGACY, scratch};
 
@@ -226,10 +227,76 @@ fn a_state_file_with_a_bad_group_is_refused_naming_the_file_and_the_group() {
     );
 }
 
+/// Proves: a state file holding a group with a maintenance table is written with the table under
+/// the group's policy and read back equal through the Files store; a state file written by the
+/// release before, whose group has no `maintenance` key, loads with the default table, and a
+/// group of defaults is written without the key.
+///
+/// Catches: a table the file drops, a default table written into every group's file, or a group
+/// of the release before refused or loaded with another table.
+#[test]
+fn a_maintenance_table_is_written_in_the_state_file_and_read_back() {
+    let dir = scratch("files-host-groups-maintenance");
+    let files = files_over(dir.path());
+    let web_name: GroupName = "web".parse().expect("a name");
+    let mut after = with_groups();
+    let table = Maintenance {
+        xcode_keep: 1,
+        macos_major: true,
+        batch: 2,
+        return_secs: 600,
+        ..Maintenance::default()
+    };
+    if let Some(web) = after.host_groups.0.get_mut(&web_name) {
+        web.policy.maintenance = table.clone();
+    }
+    commit(
+        &files,
+        &Commit {
+            desired: Some((&desired::Held::default(), &after)),
+            ..Commit::default()
+        },
+    )
+    .expect("committed");
+    let text = fs::read(state_path(dir.path())).expect("the state file");
+    let value: serde_json::Value = serde_json::from_slice(&text).expect("JSON");
+    assert_eq!(
+        value["host_groups"]["web"]["policy"],
+        serde_json::json!({
+            "maintenance": {
+                "xcode_keep": 1,
+                "macos_major": true,
+                "batch": 2,
+                "return_secs": 600
+            }
+        })
+    );
+    let held = files_over(dir.path()).load_desired().expect("loads");
+    assert_eq!(held.host_groups, after.host_groups);
+    assert_eq!(held.host_groups.0[&web_name].policy.maintenance, table);
+
+    let plain = with_groups();
+    let bytes = desired::encode(&plain, Some(LEGACY)).expect("encodes");
+    let plain_value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
+    assert!(plain_value["host_groups"]["web"].get("policy").is_none());
+    assert!(!String::from_utf8_lossy(&bytes).contains("maintenance"));
+
+    let mut before = value;
+    if let Some(policy) = before["host_groups"]["web"].as_object_mut() {
+        policy.insert("policy".to_owned(), serde_json::json!({"bake_beats": 2}));
+    }
+    fs::write(state_path(dir.path()), before.to_string()).expect("written");
+    let held = files_over(dir.path()).load_desired().expect("loads");
+    let web = &held.host_groups.0[&web_name];
+    assert_eq!(web.policy.bake_beats, 2);
+    assert_eq!(web.policy.maintenance, Maintenance::default());
+}
+
 /// An operations state as `rich_ops` makes it, with the marks of `tierstore` in `web` and of a
 /// pair at its default.
 fn ops_with_marks() -> OpsState {
     let mut state = rich_ops();
+    state.maintenance_runs.clear();
     state.host_groups.0.insert(
         "web".parse().expect("a name"),
         BTreeMap::from([
@@ -299,6 +366,7 @@ fn an_ops_file_with_group_marks_is_refused_by_the_release_before_and_read_back()
 
     let calm = scratch("files-host-groups-ops-calm");
     let mut defaults = rich_ops();
+    defaults.maintenance_runs.clear();
     defaults.host_groups.0.insert(
         "web".parse().expect("a name"),
         BTreeMap::from([("hostkeeper".to_owned(), GroupMarks::default())]),
@@ -352,6 +420,7 @@ fn a_record_and_an_audit_entry_of_a_group_are_written_with_it_and_read_back() {
     entry.reason = Some("from db".to_owned());
     let line = AuditLine::of(&entry, 1_800_000_000);
     let mut after = rich_ops();
+    after.maintenance_runs.clear();
     after.inventory[1].host_group = "web".to_owned();
     after.audit = vec![entry.clone()];
     commit_ops(&files, &after, std::slice::from_ref(&line));
@@ -380,6 +449,7 @@ fn a_record_and_an_audit_entry_of_a_group_are_written_with_it_and_read_back() {
 
     let plain = scratch("files-host-groups-record-plain");
     let mut none = rich_ops();
+    none.maintenance_runs.clear();
     none.audit = vec![AuditEntry {
         host_group: None,
         ..entry

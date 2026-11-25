@@ -5,7 +5,7 @@
 //! {"schema":1,"tree_digest":"<64 hex>","package_digest":"<64 hex>"}
 //! ```
 //!
-//! Root-owned, mode 0444, at `packages/<service>/<version>.seal`, written as
+//! Root-owned, mode 0400, at `packages/<service>/<version>.seal`, written as
 //! `.<version>.seal.tmp` and renamed into place before the version directory is.
 
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ pub(crate) fn placed(service: &Path, version: &str) -> PathBuf {
     service.join(format!("{version}.seal"))
 }
 
-/// Writes `seal` as the temporary seal of `version`, mode 0444, durably.
+/// Writes `seal` as the temporary seal of `version`, mode 0400, durably.
 pub(crate) fn write(
     fs: &dyn PackageFs,
     service: &Path,
@@ -35,6 +35,6 @@ pub(crate) fn write(
     let io = |e| UnpackError::of_io("cannot write the seal", e);
     let mut file = fs.create_file(&temporary(service, version)).map_err(io)?;
     file.write(seal.to_json().as_bytes()).map_err(io)?;
-    file.set_mode(0o444).map_err(io)?;
+    file.set_mode(0o400).map_err(io)?;
     file.sync().map_err(io)
 }

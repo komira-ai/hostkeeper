@@ -24,6 +24,9 @@ testing = ["hostkeeper-link/testing"]
 
 [dependencies]
 clap.workspace = true
+# The bootstrap's settings (`Sources::load`), whose administrator gives the update account its
+# Secure Token at a Mac's start (`update_account_make`, docs/design/mac-bootstrap.md, section 4).
+hostkeeper-bootstrap = { path = "../hostkeeper-bootstrap" }
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The enrollment loop, over gRPC with TLS to the coordinator, the pki directory and the host's
 # claims.
@@ -59,6 +62,9 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The receipt check of an order's entry and the grammars of its locations (packages.md section 4.4).
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
+# The rules of the operator keys the coordinator sends: a public key line, a set, its digest
+# (`authorized_keys`, `operator_keys`).
+hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The SHA-256 digests as hex (`mirror`); the tests' fixture digests too.
 hex.workspace = true
 # `O_NOFOLLOW` for the lock file.
@@ -96,7 +102,6 @@ base64.workspace = true
 bytes.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
-hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The public key of the enrollment request's CSR, whose SHA-256 is the request id the fake
 # coordinator of tests/bmc_claim.rs answers with.
 x509-cert.workspace = true
@@ -118,3 +123,7 @@ rustls.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.buildrules]
+# The Buck2 build's policy for this package (docs/farm.md): none of its own; it takes
+# [workspace.metadata.buildrules] of the root Cargo.toml.

@@ -122,6 +122,14 @@ fn links(
         renewal: hostkeeper_enroll::RenewalState::default(),
         watchdog,
         console: None,
+        identity: None,
+        remote_login_probe: None,
+        full_disk_access: None,
+        operator_keys: None,
+        prerequisites: None,
+        maintenance: None,
+        bmc: None,
+        serial_console: None,
     };
     (links, jobs)
 }
@@ -354,7 +362,9 @@ fn without_watchdog_usec_the_systemd_watchdog_sends_nothing() {
 
 fn daemon_flags(args: &[&str]) -> hostkeeper_daemon::cli::DaemonFlags {
     let all = ["hostkeeper", "daemon"].iter().chain(args);
-    let Command::Daemon(flags) = Cli::parse_from(all).command;
+    let Command::Daemon(flags) = Cli::parse_from(all).command else {
+        panic!("`hostkeeper daemon` is the daemon verb");
+    };
     flags
 }
 
