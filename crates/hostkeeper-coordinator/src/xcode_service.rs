@@ -26,7 +26,7 @@ use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::Write;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
-use crate::xcode_feed::XcodeId;
+use crate::xcode_feed::{XcodeId, XcodeVersion};
 use crate::xcode_store::{Archive, Taken, kept};
 
 /// `archive` as the audit says it concerned: `Xcode 27.2 (27B52) <sha256>`.
@@ -182,10 +182,21 @@ impl Coordinator {
             .map_or(0, |group| group.policy.maintenance.xcode_keep)
     }
 
-    /// The Xcode releases the Macs report installed, which the store keeps whatever its groups
-    /// keep. No host reports them yet (the maintenance report is a separate change), so none.
+    /// The Xcode releases the hosts report installed (`MaintenanceReport.xcodes` of each kept
+    /// report), which the store keeps whatever its groups keep: each by its version and build,
+    /// in its own directory or not; one whose version is not a version number names no release.
     pub(crate) fn xcodes_installed(&self) -> BTreeSet<XcodeId> {
-        BTreeSet::new()
+        self.lock_fleet()
+            .nodes()
+            .filter_map(|(_, node)| node.maintenance.as_ref())
+            .flat_map(|maintenance| maintenance.report().xcodes.iter())
+            .filter_map(|xcode| {
+                Some(XcodeId {
+                    version: XcodeVersion::parse(&xcode.version).ok()?,
+                    build: xcode.build.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Removes from the store the archives it no longer keeps ([`kept`]: the newest

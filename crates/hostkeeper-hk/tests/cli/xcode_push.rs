@@ -600,10 +600,11 @@ fn a_path_that_is_not_an_archive_uploads_nothing() {
 /// Proves: the store's refusals end the push with `refused: <code>` and the exit code of their
 /// status (3 for 401 and 403, 2 for another 4xx, 1 for a 5xx); a code that is not a reason token
 /// prints no `refused:` line; an answer that is not the store's JSON is exit 1 saying so; and no
-/// answer at all is exit 1 saying the coordinator keeps nothing of it.
+/// answer at all is exit 1 saying the coordinator keeps nothing of it. A second build of a version
+/// the store holds (409 `xcode_version_taken`) ends the push the same way, naming its code.
 #[test]
 fn the_stores_refusals_end_the_push_by_their_status() {
-    let cases: [(u16, &str, u8, &str); 6] = [
+    let cases: [(u16, &str, u8, &str); 7] = [
         (
             401,
             "{\"error\":\"unauthorized\"}",
@@ -616,6 +617,12 @@ fn the_stores_refusals_end_the_push_by_their_status() {
             "{\"error\":\"not_listed\"}\n",
             2,
             "refused: not_listed",
+        ),
+        (
+            409,
+            "{\"error\":\"xcode_version_taken\"}",
+            2,
+            "refused: xcode_version_taken",
         ),
         (
             500,

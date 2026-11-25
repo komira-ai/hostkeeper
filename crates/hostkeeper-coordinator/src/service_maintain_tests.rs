@@ -16,7 +16,7 @@ use crate::decide_maintenance::tests::{
     ORDER, RUN, at_step, beat, in_turn, maintain_id, scheduled, starts, steps, table, tell,
 };
 use crate::group_decision_support::{Farm, policy, stages};
-use crate::host_groups_support::{SELF, UNIX, coordinator_on};
+use crate::host_groups_support::{SELF, UNIX, World, coordinator_on};
 use crate::maintenance_calls_tests::{GROUP, LINUX, LINUX_REBOOT, edit_runs, host_at, run_of};
 use crate::maintenance_runs::Kind;
 use crate::marks_support::{ask_json, ask_typed, runs, update};
@@ -574,4 +574,341 @@ fn a_start_after_the_run_was_cancelled_stores_and_sends_nothing() {
     assert!(matches!(next, Next::Busy));
     assert_eq!(steps(&world), vec![("h1".to_owned(), Step::NotReached)]);
     assert!(maintenance_audit(&world).is_empty());
+}
+
+/// `beat` as a daemon that does not announce `maintenance-v1` says it: the same report, the
+/// feature left out of what it announces.
+fn without_the_feature(mut beat: Heartbeat) -> Heartbeat {
+    beat.agent_features.retain(|feature| feature != FEATURE);
+    beat
+}
+
+/// Proves: a host already in its turn (staging, its order sent) whose daemon does not announce
+/// `maintenance-v1` at a heartbeat, and has not reported the order, is sent no `maintain` and no
+/// package order either (`Next::Busy`: a host in its turn is given nothing, while a host of its
+/// group outside the run is ordered the update), and its turn is untouched; at its next heartbeat
+/// that announces the feature, the same order (same id, try 1) is offered again, as it was before.
+///
+/// Catches: a resend that ignores the feature gate, sending a `maintain` to a daemon that does not
+/// take one, and a host without the feature that falls out of its turn (`Next::Free`) and is
+/// ordered a package update in the middle of its drain.
+#[test]
+fn a_host_in_its_turn_whose_daemon_lacks_the_feature_is_sent_nothing_and_re_offered_later() {
+    let farm = farm("sm-feature-resend");
+    let world = &farm.world;
+    edit_runs(world, |held| {
+        held.push(run_of(
+            RUN,
+            vec![host_at("a1", GROUP, Step::Staging, UNIX, &[Kind::Linux])],
+        ));
+    });
+    let a1 = |said: Heartbeat| ask_typed(&world.rig, "a1", "storage", said);
+    let unreported = || farm_beat(runs("web", "1.0"), None);
+
+    let (reply, offered) = a1(unreported());
+    assert_eq!(reply, ServiceReply::Nothing);
+    let offered = offered.expect("the order is offered to a daemon that announces the feature");
+    assert_eq!(maintain_id(Some(&offered)), Some(ORDER));
+    let Order::Maintain { order_try, .. } = &offered else {
+        panic!("a maintain: {offered:?}");
+    };
+    assert_eq!(*order_try, 1);
+
+    assert_eq!(
+        a1(without_the_feature(unreported())),
+        (ServiceReply::Nothing, None),
+        "no maintain and no package order: the host is in its turn"
+    );
+    let (reply, _) = ask_typed(
+        &world.rig,
+        "a2",
+        "storage",
+        farm_beat(runs("web", "1.0"), None),
+    );
+    assert_eq!(reply, update("web", "2.0"), "a2 is in no turn");
+    assert_eq!(steps(world), vec![("a1".to_owned(), Step::Staging)]);
+    assert!(maintenance_audit(world).is_empty());
+
+    assert_eq!(a1(unreported()), (ServiceReply::Nothing, Some(offered)));
+}
+
+/// Proves: a host whose turn the run would start now, whose daemon does not announce
+/// `maintenance-v1`, is not started: no `maintain` is sent, its turn stays waiting, and no
+/// audit entry is written, however often it asks; at its first heartbeat that announces the
+/// feature, its turn starts with the order `maintain-<run id>` at try 1.
+///
+/// Catches: a start stored for a daemon that cannot take the order, which would leave the host in
+/// a turn nobody told it of and hold a place of the batch for ever.
+#[test]
+fn a_waiting_host_whose_daemon_lacks_the_feature_is_not_started() {
+    let world = scheduled("sm-feature-start", table(1, 0), &["h1", "h2"], |_| {});
+    for _ in 0..2 {
+        assert_eq!(
+            tell(&world, "h1", without_the_feature(beat(LINUX, None))),
+            None
+        );
+        assert_eq!(
+            steps(&world),
+            vec![
+                ("h1".to_owned(), Step::Waiting),
+                ("h2".to_owned(), Step::Waiting)
+            ]
+        );
+        assert!(maintenance_audit(&world).is_empty());
+    }
+
+    let order = tell(&world, "h1", beat(LINUX, None)).expect("an order");
+    let Order::Maintain {
+        order_id,
+        order_try,
+        ..
+    } = &order
+    else {
+        panic!("a maintain: {order:?}");
+    };
+    assert_eq!((order_id.as_str(), *order_try), (ORDER, 1));
+    assert_eq!(in_turn(&world), vec!["h1"]);
+}
+
+/// The Macs of the restart tests.
+const MACS: [&str; 2] = ["m1", "m2"];
+
+/// A heartbeat of a Mac whose daemon announces `maintenance-v1`, reports a macOS update due, the
+/// Mac facts `mac`, and, when given, the run record `(run, order, step)`.
+fn mac_report(
+    mac: agent::MacUpdateFacts,
+    record: Option<(&str, &str, MaintenanceStep)>,
+) -> Heartbeat {
+    let mut heartbeat = beat(&[], None);
+    heartbeat.platform = hostkeeper_wire::Platform::DarwinArm64;
+    let report = agent::MaintenanceReport {
+        due: vec![agent::DueItem {
+            kind: MaintenanceKind::Macos as i32,
+            from: "26.1".to_owned(),
+            to: "26.2".to_owned(),
+            label: "macOS Tahoe 26.2-25C56".to_owned(),
+            ..agent::DueItem::default()
+        }],
+        mac: Some(mac),
+        run: record.map(|(run, order, step)| agent::MaintenanceRunState {
+            run_id: run.to_owned(),
+            order_id: order.to_owned(),
+            step: step as i32,
+            applied: Vec::new(),
+            halted_reason: String::new(),
+        }),
+        ..agent::MaintenanceReport::default()
+    };
+    heartbeat.maintenance = Some(crate::maintenance::text_of(&report));
+    heartbeat
+}
+
+/// A world of the group [`GROUP`] (batch 1, keeping one Xcode) of the Macs [`MACS`], over a real
+/// Xcode store that holds 27.2 (27B52), each Mac heard once with a macOS update due and the Mac
+/// facts `mac`, and the run of `macos` and `xcode` scheduled for both.
+fn two_macs(
+    name: &str,
+    mac: agent::MacUpdateFacts,
+) -> (World, Arc<crate::xcode_store::XcodeStore>) {
+    let mut world = crate::host_groups_support::World::new(name);
+    let dir = world.rig.dir.path().join("xcode");
+    std::fs::create_dir(&dir).expect("the store's directory");
+    let store = Arc::new(
+        crate::xcode_store::XcodeStore::open(&dir, 1 << 20, std::time::UNIX_EPOCH)
+            .expect("a store"),
+    );
+    let spare = crate::testutil::scratch(&format!("{name}-spare"));
+    let placeholder = crate::marks_support::start(&spare, &world.rig.clock, "");
+    let built = std::mem::replace(&mut world.rig.coordinator, placeholder);
+    world.rig.coordinator = built.with_xcode_store(Arc::clone(&store));
+    let mut settings = table(1, 0);
+    settings.xcode_keep = 1;
+    crate::decide_maintenance::tests::group_with(&world, GROUP, settings, &MACS);
+    let bytes = b"xip of 27B52".to_vec();
+    let mut digest = crate::xcode_store::Digesting::default();
+    digest.feed(&bytes);
+    let sha256 = digest.finish();
+    let (path, mut file) = store.upload_file(&sha256).expect("an upload file");
+    std::io::Write::write_all(&mut file, &bytes).expect("written");
+    drop(file);
+    let archive = crate::xcode_store::Archive {
+        sha256,
+        id: crate::xcode_feed::XcodeId {
+            version: crate::xcode_feed::XcodeVersion::parse("27.2").expect("a version"),
+            build: "27B52".to_owned(),
+        },
+        size: u64::try_from(bytes.len()).expect("a size"),
+        by: "uploader".to_owned(),
+        at_unix: 1_800_000_000,
+    };
+    let _changing = store.changing();
+    store.commit(&path, &archive).expect("committed");
+    drop(_changing);
+    for host in MACS {
+        tell(&world, host, mac_report(mac.clone(), None));
+    }
+    let mut asked = crate::maintenance_calls_tests::hosts_request(&MACS);
+    asked.take_last_host = true;
+    crate::maintenance_calls_tests::schedule(&world, asked).expect("scheduled");
+    (world, store)
+}
+
+/// A coordinator started again over what `world` holds: its fake, its enrollment and its Xcode
+/// store, which has heard no host yet.
+fn restarted(world: &World, store: &Arc<crate::xcode_store::XcodeStore>, name: &str) -> Rig {
+    let mut rig = Rig::new(name);
+    rig.coordinator = coordinator_on(
+        &world.fake,
+        &rig.clock,
+        Some(Arc::clone(&world.enrollment.enrollment)),
+    )
+    .with_xcode_store(Arc::clone(store));
+    rig.at(2_000);
+    rig
+}
+
+/// Proves: a Mac whose turn started with the kinds `macos` and `xcode` is, after the coordinator
+/// starts again over the same store, sent no new order when its next report names the run's order
+/// (its turn stays staging, no other Mac is started and nothing more is audited), the other Mac
+/// is sent no order (batch 1), and a report that names no run is answered with exactly the order
+/// the Mac was sent before: the same id, the same try 1, the same kinds, `macos` then `xcode`,
+/// and the same Xcode entry.
+///
+/// Catches: a restarted coordinator that forgets which turns it started and orders a Mac a
+/// second time (a second install of the update), starts its group-mate beside it, or re-offers
+/// an order that differs from the one the daemon holds.
+#[test]
+fn a_restarted_coordinator_does_not_start_a_macs_order_twice() {
+    let (world, store) = two_macs("sm-restart-mac", clean_mac_facts());
+    let first = tell(&world, "m1", mac_report(clean_mac_facts(), None)).expect("an order");
+    let Order::Maintain {
+        order_id,
+        order_try,
+        maintain,
+        ..
+    } = &first
+    else {
+        panic!("a maintain: {first:?}");
+    };
+    assert_eq!((order_id.as_str(), *order_try), (ORDER, 1));
+    assert_eq!(
+        maintain.kinds,
+        vec![MaintenanceKind::Macos, MaintenanceKind::Xcode]
+    );
+    assert!(maintain.xcode.is_some());
+    assert_eq!(
+        tell(&world, "m2", mac_report(clean_mac_facts(), None)),
+        None
+    );
+    let audited = world.audit();
+
+    let rig = restarted(&world, &store, "sm-restart-mac-again");
+    let ask = |host: &str, said: Heartbeat| ask_typed(&rig, host, "storage", said).1;
+    let state = || {
+        rig.coordinator.ops().state().maintenance_runs[0]
+            .hosts
+            .iter()
+            .map(|host| (host.host_id.clone(), host.step, host.kinds.clone()))
+            .collect::<Vec<_>>()
+    };
+    let held = vec![
+        (
+            "m1".to_owned(),
+            Step::Staging,
+            vec![Kind::Macos, Kind::Xcode],
+        ),
+        (
+            "m2".to_owned(),
+            Step::Waiting,
+            vec![Kind::Macos, Kind::Xcode],
+        ),
+    ];
+    assert_eq!(state(), held);
+
+    let named = Some((RUN, ORDER, MaintenanceStep::Staging));
+    assert_eq!(ask("m1", mac_report(clean_mac_facts(), named)), None);
+    assert_eq!(ask("m2", mac_report(clean_mac_facts(), None)), None);
+    assert_eq!(state(), held);
+    assert_eq!(rig.coordinator.ops().state().maintenance_runs.len(), 1);
+    assert_eq!(rig.coordinator.ops().state().audit, audited);
+
+    assert_eq!(
+        ask("m1", mac_report(clean_mac_facts(), None)),
+        Some(first),
+        "a report that names no run is offered the same order again"
+    );
+    assert_eq!(state(), held);
+    assert_eq!(rig.coordinator.ops().state().audit, audited);
+}
+
+/// Proves: a Mac whose `macos` was left out when its turn started (its report named a
+/// device-management conflict, so the turn held `xcode` alone) is, after the coordinator starts
+/// again, sent no new order when its report names the run's order, its group-mate is sent none,
+/// and a report that names no run is answered with exactly the order it was sent before: the same
+/// id, try 1, the kinds `xcode` alone.
+///
+/// Catches: a restart that gives a Mac back the `macos` it was left out of, or orders its
+/// `xcode` a second time.
+#[test]
+fn a_restarted_coordinator_keeps_a_macs_skipped_macos_out_of_its_order() {
+    let mut conflict = clean_mac_facts();
+    conflict.mdm_conflicts = vec!["Deferrals".to_owned()];
+    let (world, store) = two_macs("sm-restart-skip", clean_mac_facts());
+    assert_eq!(tell(&world, "m1", mac_report(conflict.clone(), None)), None);
+    let held = vec![
+        ("m1".to_owned(), Step::Waiting, vec![Kind::Xcode]),
+        (
+            "m2".to_owned(),
+            Step::Waiting,
+            vec![Kind::Macos, Kind::Xcode],
+        ),
+    ];
+    let rows = |rig: &Rig| {
+        rig.coordinator.ops().state().maintenance_runs[0]
+            .hosts
+            .iter()
+            .map(|host| (host.host_id.clone(), host.step, host.kinds.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rows(&world.rig), held);
+    let first = tell(&world, "m1", mac_report(conflict.clone(), None)).expect("an order");
+    let Order::Maintain {
+        order_id,
+        order_try,
+        maintain,
+        ..
+    } = &first
+    else {
+        panic!("a maintain: {first:?}");
+    };
+    assert_eq!((order_id.as_str(), *order_try), (ORDER, 1));
+    assert_eq!(maintain.kinds, vec![MaintenanceKind::Xcode]);
+    let audited = world.audit();
+
+    let rig = restarted(&world, &store, "sm-restart-skip-again");
+    let ask = |host: &str, said: Heartbeat| ask_typed(&rig, host, "storage", said).1;
+    let in_turn = vec![
+        ("m1".to_owned(), Step::Staging, vec![Kind::Xcode]),
+        (
+            "m2".to_owned(),
+            Step::Waiting,
+            vec![Kind::Macos, Kind::Xcode],
+        ),
+    ];
+    assert_eq!(rows(&rig), in_turn);
+
+    let named = Some((RUN, ORDER, MaintenanceStep::Staging));
+    assert_eq!(ask("m1", mac_report(conflict.clone(), named)), None);
+    assert_eq!(ask("m2", mac_report(clean_mac_facts(), None)), None);
+    assert_eq!(rows(&rig), in_turn);
+    assert_eq!(rig.coordinator.ops().state().audit, audited);
+
+    assert_eq!(ask("m1", mac_report(conflict, None)), Some(first));
+    assert_eq!(rows(&rig), in_turn);
+    assert_eq!(rig.coordinator.ops().state().audit, audited);
+}
+
+/// [`crate::maintenance_calls_tests::clean_mac`].
+fn clean_mac_facts() -> agent::MacUpdateFacts {
+    crate::maintenance_calls_tests::clean_mac()
 }
