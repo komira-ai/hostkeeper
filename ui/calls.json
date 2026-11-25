@@ -43,7 +43,7 @@
     { "function": "layout.removeSled", "method": "hostkeeper.operator.v1.Layout/RemoveSled", "pages": ["home"] },
     { "function": "layout.unplace", "method": "hostkeeper.operator.v1.Layout/Unplace", "pages": ["home", "host", "inventory"] },
     { "function": "maintenance.cancel", "method": "hostkeeper.operator.v1.Maintenance/Cancel", "pages": ["maintenance"] },
-    { "function": "maintenance.get", "method": "hostkeeper.operator.v1.Maintenance/Get", "pages": ["maintenance"] },
+    { "function": "maintenance.get", "method": "hostkeeper.operator.v1.Maintenance/Get", "pages": ["maintenance", "xcode"] },
     { "function": "maintenance.list", "method": "hostkeeper.operator.v1.Maintenance/List", "pages": ["maintenance", "xcode"] },
     { "function": "maintenance.putBack", "method": "hostkeeper.operator.v1.Maintenance/PutBack", "pages": ["maintenance"] },
     { "function": "maintenance.retryHost", "method": "hostkeeper.operator.v1.Maintenance/RetryHost", "pages": ["maintenance"] },

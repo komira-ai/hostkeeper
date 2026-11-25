@@ -314,8 +314,10 @@ today's tests of the route stay as they are.
 ## 4. The console's Xcode page (New)
 
 `ui/pages/xcode.js`, in the Manage menu beside Maintenance. It calls `Xcode.List` and `Xcode.Remove` (Built and served
-to a signed-in session by the gateway, `docs/gateway.md`; not yet in `ui/calls.json`), `Hosts.List` (every page),
-`HostGroups.List` (each group's `xcode_keep` and `xcode_default`) and `Maintenance.List` (the link to a Mac's run). It reads them
+to a signed-in session by the gateway, `docs/gateway.md`), `Hosts.List` (every page),
+`HostGroups.List` (each group's `xcode_keep` and `xcode_default`), `Maintenance.List` (the link to a Mac's run) and `Maintenance.Get`
+of each run that still holds its hosts (the kinds of the Mac's turn in it, which say whether the run takes Xcode for that Mac:
+a Mac with no turn in the run, or a turn without `xcode`, is not given the release by it, whatever kinds the run names). It reads them
 when it opens and again every 60 seconds through `ctx.every`, like the Maintenance page.
 
 - **Waiting.** When `xcode_release_waiting` stands: "Xcode 27.3 (27C21) is out and not in the store; it needs macOS 27.1" and

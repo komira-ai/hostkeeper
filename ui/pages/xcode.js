@@ -21,10 +21,13 @@
 //   `xcode_default`, each Xcode installed (version, build, selected, foreign), what is due, its
 //   device-management state (`nothing that blocks updates`, or the keys its report lists as
 //   `mdmConflicts`), and the run of the Maintenance page that holds it, a link to that page.
-//   A run holds a Mac when it is scheduled, running or halted, and names the Mac or its group.
+//   A run holds a Mac when it is scheduled, running or halted, and names the Mac or its group. It
+//   takes Xcode for the Mac only when the Mac's turn in it (`Maintenance.Get`) has the xcode kind;
+//   else the row says "which does not take Xcode: schedule after it ends".
 //
 // Calls: Xcode.List, Hosts.List (every page) and HostGroups.List (every page) when opened and again
-// every REFRESH_SECONDS through `ctx.every`, and Maintenance.List (the last 10 runs) with them; while
+// every REFRESH_SECONDS through `ctx.every`, and Maintenance.List (the last 10 runs) and Maintenance.Get
+// of each of them that still holds its hosts (each host's kinds) with them; while
 // the panel is open, Xcode.List alone every PANEL_SECONDS. A read again that fails keeps the last
 // answer and says so; a run list that fails is said and the rest of the page stays. Xcode.Remove,
 // one call for each click.
@@ -86,11 +89,19 @@ async function readFleet(ctx) {
   return { xcode, hosts, groups };
 }
 
-// The runs: `{ runs, failure }`.
+// The runs: `{ runs, failure }`, each of `runs` `{ run, hosts }` with `hosts` the answer of
+// Maintenance.Get for a run that still holds its hosts (the hosts of the run and each one's kinds,
+// which the coordinator fixed when it scheduled the run), and none for any other. A call that fails
+// fails the read.
 async function readRuns(ctx) {
   try {
     const reply = await ctx.api.maintenance.list({ limit: RUNS_LIMIT });
-    return { runs: list(reply, "runs"), failure: null };
+    const runs = [];
+    for (const run of list(reply, "runs")) {
+      const hosts = OPEN.includes(run.state) ? list(await ctx.api.maintenance.get({ runId: run["id"] }), "hosts") : [];
+      runs.push({ run, hosts });
+    }
+    return { runs, failure: null };
   } catch (error) {
     return { runs: [], failure: error };
   }
@@ -130,7 +141,8 @@ export async function render(ctx) {
   const dueOn = (archive) => macs().filter(({ host, plan }) => host.maintenance !== undefined
     && plan.missing.some((missing) => missing.sha256 === archive.sha256));
 
-  const runOf = (host) => runs.runs.find((run) => OPEN.includes(run.state)
+  // The open run that holds `host`, as `{ run, hosts }`: it names the Mac or its group.
+  const runOf = (host) => runs.runs.find(({ run }) => OPEN.includes(run.state)
     && (list(run, "hostIds").includes(nameOf(host)) || (run.hostGroup === groupOf(host) && run.hostGroup !== "")));
 
   const repaint = () => ctx.show(page());
@@ -217,9 +229,13 @@ export async function render(ctx) {
 
   const macRow = ({ host, group, policy, plan }) => {
     const report = host.maintenance;
-    const run = runOf(host);
-    const takes = run !== undefined && (list(run, "kinds").length === 0
-      || list(run, "kinds").includes("MAINTENANCE_KIND_XCODE"));
+    const held = runOf(host);
+    const run = held === undefined ? undefined : held.run;
+    // The run's turn for this Mac, whose kinds the coordinator fixed when it scheduled the run: a Mac
+    // with no turn (nothing due of the run's kinds then) or a turn without Xcode is not given the
+    // release by the run.
+    const turn = held === undefined ? undefined : held.hosts.find((entry) => entry.hostId === nameOf(host));
+    const takes = turn !== undefined && list(turn, "kinds").includes("MAINTENANCE_KIND_XCODE");
     const conflicts = list((report || {}).mac, "mdmConflicts");
     return h("tr", { name: "mac" },
       h("td", {}, h("button", {

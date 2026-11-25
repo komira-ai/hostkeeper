@@ -6,7 +6,7 @@ mod support;
 
 use serde_json::{Value, json};
 use support::Ui;
-use support::pages::m;
+use support::pages::{bodies, m};
 use support::xcode::*;
 
 /// The Macs of the due-column test: one per case of the rule, in the groups `mac-build` (keep 2,
@@ -261,11 +261,11 @@ fn the_device_management_column_says_nothing_blocks_updates_or_names_the_keys() 
 #[test]
 fn a_mac_in_an_open_run_links_the_maintenance_page_and_says_when_the_run_does_not_take_xcode() {
     // Asserts: a Mac of the group of a running run, and a Mac the run names by id, link "run r-1"
-    // and "run r-2", which open the Maintenance page; a run that does not take Xcode (its kinds
-    // are not xcode) says "which does not take Xcode: schedule after it ends", one whose kinds
-    // hold xcode, or none, does not; a run that is done or cancelled links nothing; a Mac in
-    // no run has no link.
-    let mut ui = fleet(
+    // and "run r-2", which open the Maintenance page; a Mac whose turn in the run (Maintenance.Get)
+    // has the xcode kind does not get the note, one whose turn has other kinds does ("which does not
+    // take Xcode: schedule after it ends"), whatever kinds the run itself names; a run that is done
+    // or cancelled links nothing, and is not asked for its turns; a Mac in no run has no link.
+    let mut ui = fleet_with_turns(
         store(archives(false), None, vec![]),
         vec![
             mac("m-1", "mac-build", &[], &[]),
@@ -279,18 +279,27 @@ fn a_mac_in_an_open_run_links_the_maintenance_page_and_says_when_the_run_does_no
             group("mac-old", 2, None),
         ],
         vec![
-            run(
-                "r-1",
-                "RUNNING",
-                &json!({"hostGroup": "mac-build", "kinds": ["MAINTENANCE_KIND_XCODE"]}),
+            (
+                run(
+                    "r-1",
+                    "RUNNING",
+                    &json!({"hostGroup": "mac-build", "kinds": ["MAINTENANCE_KIND_XCODE"]}),
+                ),
+                vec![turn("m-1", &["XCODE"])],
             ),
-            run(
-                "r-2",
-                "SCHEDULED",
-                &json!({"hostIds": ["m-2"], "kinds": ["MAINTENANCE_KIND_MACOS"]}),
+            (
+                run(
+                    "r-2",
+                    "SCHEDULED",
+                    &json!({"hostIds": ["m-2"], "kinds": ["MAINTENANCE_KIND_MACOS"]}),
+                ),
+                vec![turn("m-2", &["MACOS"])],
             ),
-            run("r-3", "DONE", &json!({"hostGroup": "mac-old"})),
-            run("r-4", "CANCELLED", &json!({"hostGroup": "mac-old"})),
+            (run("r-3", "DONE", &json!({"hostGroup": "mac-old"})), vec![]),
+            (
+                run("r-4", "CANCELLED", &json!({"hostGroup": "mac-old"})),
+                vec![],
+            ),
         ],
     );
     let out = drive(
@@ -313,22 +322,79 @@ return { runs, navigations: seen.navigations };"#,
             "navigations": [{"name": "maintenance", "params": {}}],
         })
     );
+    let asked: Vec<Value> = bodies(&ui)
+        .into_iter()
+        .filter(|(method, _)| *method == m("Maintenance/Get"))
+        .map(|(_, body)| body)
+        .collect();
+    assert_eq!(asked, [json!({"runId": "r-1"}), json!({"runId": "r-2"})]);
 }
 
 #[test]
-fn a_run_of_no_kinds_takes_every_kind_and_a_failed_run_list_is_said() {
-    // Asserts: a run that names no kinds (every kind due) takes Xcode, so says nothing of not
-    // taking it; when Maintenance.List is refused the page says the runs could not be read, links
-    // no run, and still shows the Macs.
-    let mut ui = fleet(
+fn a_run_takes_xcode_for_a_mac_only_by_the_kinds_of_its_turn_and_a_failed_read_is_said() {
+    // Asserts: the run's own kinds decide nothing: a run that names no kinds does not take Xcode
+    // for a Mac that has no turn in it, or a turn with no kinds, and does for a Mac whose turn has
+    // xcode among other kinds (the coordinator fixes each host's kinds when it schedules the run);
+    // when Maintenance.List or Maintenance.Get is refused the page says the runs could not be read,
+    // links no run, and still shows the Macs.
+    let mut ui = fleet_with_turns(
         store(archives(false), None, vec![]),
-        vec![mac("m-1", "g", &[], &[])],
+        vec![
+            mac("m-1", "g", &[], &[]),
+            mac("m-2", "g", &[], &[]),
+            mac("m-3", "g", &[], &[]),
+        ],
         vec![group("g", 2, None)],
-        vec![run("r-1", "HALTED", &json!({"hostGroup": "g"}))],
+        vec![(
+            run("r-1", "HALTED", &json!({"hostGroup": "g"})),
+            vec![turn("m-1", &["XCODE", "MACOS"]), turn("m-2", &[])],
+        )],
     );
     let out = drive(&mut ui, "[]", "return macTable(tree).map((r) => r.run);");
-    assert_eq!(out["out"], json!(["run r-1"]));
+    assert_eq!(
+        out["out"],
+        json!([
+            "run r-1",
+            "run r-1 , which does not take Xcode: schedule after it ends",
+            "run r-1 , which does not take Xcode: schedule after it ends",
+        ])
+    );
 
+    let ui = Ui::start();
+    ui.reply(&m("Xcode/List"), store(archives(false), None, vec![]));
+    ui.reply(
+        &m("Hosts/List"),
+        json!({"hosts": [mac("m-1", "g", &[], &[])]}),
+    );
+    ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [group("g", 2, None)]}),
+    );
+    ui.reply(
+        &m("Maintenance/List"),
+        json!({"runs": [run("r-1", "HALTED", &json!({"hostGroup": "g"}))]}),
+    );
+    ui.refuse(&m("Maintenance/Get"), 503, "UNAVAILABLE", "down");
+    let mut ui = ui;
+    let out = drive(
+        &mut ui,
+        "[]",
+        "return macTable(tree).map((r) => [r.name, r.run]);",
+    );
+    assert_eq!(out["out"], json!([["m-1", ""]]));
+    assert!(
+        shown(&out).contains(
+            "The runs could not be read (UNAVAILABLE down): no Mac is linked to its run."
+        ),
+        "{}",
+        shown(&out)
+    );
+}
+
+#[test]
+fn a_refused_run_list_is_said_and_the_macs_stay() {
+    // Asserts: when Maintenance.List is refused the page says the runs could not be read, links no
+    // run, and still shows the Macs.
     let ui = Ui::start();
     ui.reply(&m("Xcode/List"), store(archives(false), None, vec![]));
     ui.reply(

@@ -483,7 +483,7 @@ fn the_hosts_and_the_groups_are_read_to_the_last_page() {
 #[test]
 fn the_calls_json_lists_the_pages_calls_for_the_page() {
     // Asserts: `ui/calls.json` lists the page "xcode" for xcode.list, xcode.remove, hosts.list,
-    // hostGroups.list and maintenance.list, and for no other call of the Xcode service.
+    // hostGroups.list, maintenance.list and maintenance.get, and for no other call.
     let file = UiFile::named("calls.json").expect("calls.json is held");
     let listed = listed_calls(file.text).expect("calls.json parses");
     let mut for_page: Vec<&str> = listed
@@ -497,6 +497,7 @@ fn the_calls_json_lists_the_pages_calls_for_the_page() {
         [
             "hostGroups.list",
             "hosts.list",
+            "maintenance.get",
             "maintenance.list",
             "xcode.list",
             "xcode.remove"

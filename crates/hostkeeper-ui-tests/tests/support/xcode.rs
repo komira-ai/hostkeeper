@@ -79,13 +79,51 @@ pub fn group(name: &str, keep: u32, xcode_default: Option<&str>) -> Value {
            "generation": "1", "hosts": 1})
 }
 
-/// A page over one read: `xcode` (an Xcode.List answer), `hosts`, `groups` and `runs`.
+/// The turn of the host `id` in a run, as `Maintenance.Get` answers it: waiting, with `kinds`
+/// (the names without `MAINTENANCE_KIND_`) due.
+pub fn turn(id: &str, kinds: &[&str]) -> Value {
+    let kinds: Vec<String> = kinds
+        .iter()
+        .map(|kind| format!("MAINTENANCE_KIND_{kind}"))
+        .collect();
+    json!({"hostId": id, "step": "MAINTENANCE_HOST_STEP_WAITING", "kinds": kinds})
+}
+
+/// A page over one read: `xcode` (an Xcode.List answer), `hosts`, `groups` and `runs`, each run
+/// that holds its hosts having no turns.
 pub fn fleet(xcode: Value, hosts: Vec<Value>, groups: Vec<Value>, runs: Vec<Value>) -> Ui {
+    fleet_with_turns(
+        xcode,
+        hosts,
+        groups,
+        runs.into_iter().map(|run| (run, vec![])).collect(),
+    )
+}
+
+/// [`fleet`] with the turns `Maintenance.Get` answers for each run: the page asks for each run that
+/// is scheduled, running or halted, in the order of the list.
+pub fn fleet_with_turns(
+    xcode: Value,
+    hosts: Vec<Value>,
+    groups: Vec<Value>,
+    runs: Vec<(Value, Vec<Value>)>,
+) -> Ui {
     let ui = Ui::start();
     ui.reply(&m("Xcode/List"), xcode);
     ui.reply(&m("Hosts/List"), json!({ "hosts": hosts }));
     ui.reply(&m("HostGroups/List"), json!({ "hostGroups": groups }));
-    ui.reply(&m("Maintenance/List"), json!({ "runs": runs }));
+    ui.reply(
+        &m("Maintenance/List"),
+        json!({ "runs": runs.iter().map(|(run, _)| run.clone()).collect::<Vec<_>>() }),
+    );
+    for (run, turns) in &runs {
+        let open = ["SCHEDULED", "RUNNING", "HALTED"]
+            .iter()
+            .any(|state| run["state"] == format!("MAINTENANCE_STATE_{state}"));
+        if open {
+            ui.reply(&m("Maintenance/Get"), json!({"run": run, "hosts": turns}));
+        }
+    }
     ui
 }
 
