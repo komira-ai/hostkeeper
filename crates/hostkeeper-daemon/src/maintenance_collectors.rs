@@ -5,15 +5,16 @@
 //! needs a reboot ([`RebootNeed`]) and the updates its package manager lists: `apt-get` when the
 //! host has it, else `dnf`, else `apk`; a host with none of the three has no package collector. A
 //! Mac reads what it runs and which macOS updates are due ([`Macos`], under the host's
-//! [`MacosMajor`]), what an update needs of it ([`MacReadiness`]), its Xcodes ([`Xcodes`]), its
-//! update account ([`UpdateAccountFacts`]) and the device-management settings that conflict with a
-//! run ([`MdmConflicts`]).
+//! [`MacosMajor`]), its boot id and boot time ([`MacBoot`]), what an update needs of it
+//! ([`MacReadiness`]), its Xcodes ([`Xcodes`]), its update account ([`UpdateAccountFacts`]) and the
+//! device-management settings that conflict with a run ([`MdmConflicts`]).
 
 use hostkeeper_launchd::PlatformKind;
 
 use crate::maintenance_account::UpdateAccountFacts;
 use crate::maintenance_apk::{self, Apk};
 use crate::maintenance_apt::{self, Apt};
+use crate::maintenance_boot::MacBoot;
 use crate::maintenance_collect::{Collector, HostRoot};
 use crate::maintenance_dnf::{self, Dnf};
 use crate::maintenance_host::HostFacts;
@@ -41,12 +42,13 @@ pub fn at_host(
     }
 }
 
-/// The collectors of a Mac, over its own programs and files: `macos` under `major`, `mac`, then
-/// its Xcodes, its update account and its device-management conflicts.
+/// The collectors of a Mac, over its own programs and files: `macos` under `major`, its boot facts,
+/// `mac`, then its Xcodes, its update account and its device-management conflicts.
 #[must_use]
 pub fn mac(major: MacosMajor) -> Vec<Box<dyn Collector>> {
     vec![
         Box::new(Macos::at_host(major)),
+        Box::new(MacBoot::at_host()),
         Box::new(MacReadiness::at_host()),
         Box::new(Xcodes::at_host()),
         Box::new(UpdateAccountFacts::at_host()),

@@ -489,7 +489,7 @@ look that failed: 5 minutes after it, doubled for each further failure in a row,
 hour), on a worker that
 never holds up a heartbeat, and reports what it found to a coordinator that advertises
 `maintenance-v1` ([design/maintenance-updates.md](design/maintenance-updates.md) sections 1 and
-4.1), as a Linux host does. Five collectors read it, in this order, each program as root with an
+4.1), as a Linux host does. Six collectors read it, in this order, each program as root with an
 empty environment, no standard input, a deadline and capped output:
 
 - `macos` (`crates/hostkeeper-daemon/src/maintenance_macos.rs`): `macOS`, its version and build
@@ -500,6 +500,12 @@ empty environment, no standard input, a deadline and capped output:
   it says `Action: restart`. A major upgrade is never due unless the daemon runs with
   `--maintenance-macos-major`; then `softwareupdate --list-full-installers` is listed too and the
   newest major upgrade of either listing is due.
+- `boot` (`maintenance_boot.rs`): the boot id, `kern.bootsessionuuid` as the step record reads it
+  (`hostkeeper_launchd::SysctlBootId`, below), and the boot time, the `sec` of
+  `sysctl -n kern.boottime`, so that a restart shows in the report as a new `boot_id` and
+  `boot_unix`. Neither fails the look: a boot id that cannot be read leaves `boot_id` empty, and a
+  `sysctl` that does not run, exits non-zero, does not end by its deadline (30 seconds) or prints
+  another shape leaves `boot_unix` 0.
 - `mac` (`maintenance_mac.rs`): FileVault's state (`fdesetup status`) and whether it can restart
   authenticated (`fdesetup supportsauthrestart`), the free bytes of `/System/Volumes/Data`
   (`statvfs`), and the Command Line Tools: their receipt and its version (`pkgutil --pkg-info`) and
@@ -515,7 +521,8 @@ empty environment, no standard input, a deadline and capped output:
   Xcode the App Store installed, each by name in `mdm_conflicts`.
 
 Nothing is installed or downloaded. A program that does not run, exits non-zero or does not end by
-its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look: the report keeps what the last look
+its deadline (15 minutes for `softwareupdate`), or a property list that cannot be read, fails the look
+(but `boot`'s, above): the report keeps what the last look
 that succeeded found and names the collector and the step in `look_failed`.
 
 The coordinator orders a Mac a `macos` update only while its last report allows it

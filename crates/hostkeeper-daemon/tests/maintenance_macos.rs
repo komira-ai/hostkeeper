@@ -330,6 +330,13 @@ fn a_failing_sysctl_leaves_the_boot_facts_empty_and_the_look_succeeds() {
             )),
         ),
     );
+    let boot_of = |report: &pb::MaintenanceReport| {
+        report
+            .host
+            .as_ref()
+            .map(|host| (host.boot_id.clone(), host.boot_unix))
+    };
+    assert_eq!(boot_of(&readable), Some((BOOT_ID.to_owned(), BOOT_UNIX)));
     assert_eq!(failing.look_failed, "");
     assert_eq!(failing, with_boot(&readable, "", 0));
 }

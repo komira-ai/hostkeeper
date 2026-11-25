@@ -100,7 +100,7 @@ jq '(.host // .) | {hostGroup, live, fullDiskAccess, features: .heartbeat.featur
 js --server https://<job-service> --token-file <js-operator-token> --json host list > $P/js-hosts.json
 js --server https://<job-service> --token-file <js-operator-token> --json usage --host-id <js-host-id> --from-ms <now less 7 days, in ms> --page-size 500 > $P/js-usage-<js-host-id>.json
 ```
-Record: node id, group, agent version and features, host.osVersion/osBuild, mac.filevault, authrestartSupported, dataFreeBytes, updateAccount, commandLineTools, mdmConflicts, xcodes, due, lookFailed, fullDiskAccess, operatorKeys, ssh.state; for each Mac, its jobs in the last 7 days (records of `js usage`, repeated with `--page-token` while `nextPageToken` is set) and their summed `runMs`, and its `booked` now. Keep `get-before.json`. A Mac's report has no `bootId`, `bootUnix` or `runningKernel` (design 10.1.1); record the boot from `sysctl kern.bootsessionuuid` in MP-E5 instead.
+Record: node id, group, agent version and features, host.osVersion/osBuild, mac.filevault, authrestartSupported, dataFreeBytes, updateAccount, commandLineTools, mdmConflicts, xcodes, due, lookFailed, fullDiskAccess, operatorKeys, ssh.state; for each Mac, its jobs in the last 7 days (records of `js usage`, repeated with `--page-token` while `nextPageToken` is set) and their summed `runMs`, and its `booked` now. Keep `get-before.json`. Record also host.bootId and host.bootUnix: a release with the collector `boot` (design 10.1.1) reports them, and MP-E5 holds them to `sysctl`; a Mac's report has no `runningKernel`, a Linux notion. On a release without that collector both are empty; record the boot from `sysctl kern.bootsessionuuid` in MP-E5 instead.
 Decides:
 - the proof Mac is the one with the fewest jobs in the 7 days (then the least summed `runMs`), not tainted and not cordoned by someone else; on a tie, the one with the most `dataFreeBytes` (the Xcode steps of section 3 need room).
 - if `maintenance` is absent -> the coordinator or the daemon predates the report (design 4.1); the proof's reads are then made only on the Mac (MP-E5), and the comparison waits for a release with `maintenance-v1`.
@@ -185,16 +185,16 @@ Decides:
 Settles: none; checks that the collectors read the Mac as it is (design 5.8). Runs: a root shell on the proof Mac. Needs: MP-E4. Read-only. The listing argvs are the daemon's: `maintenance_macos.rs:31,34` (`softwareupdate --list`, `--list-full-installers`), `maintenance_mac.rs:41,44` (`fdesetup status`, `supportsauthrestart`), `maintenance_account.rs` `secure_token` (`sysadminctl -secureTokenStatus <name>`), all in `crates/hostkeeper-daemon/src/`.
 ```sh
 cd /var/root/hk-proof
-{ date -u; sw_vers; /usr/sbin/sysctl -n hw.model kern.bootsessionuuid; /usr/bin/xcode-select -p; } > base-1.txt 2>&1
+{ date -u; sw_vers; /usr/sbin/sysctl -n hw.model kern.bootsessionuuid kern.boottime; /usr/bin/xcode-select -p; } > base-1.txt 2>&1
 { /usr/bin/fdesetup status; /usr/bin/fdesetup supportsauthrestart; /usr/bin/fdesetup list -extended; /usr/sbin/diskutil apfs listUsers /; } > base-2.txt 2>&1
 { /usr/bin/dscl . -read /Groups/admin GroupMembership; for u in $(/usr/bin/dscl . -list /Users UniqueID | awk '$2>=501{print $1}'); do echo "== $u"; /usr/bin/dscl . -read "$U/$u" RecordName IsHidden; /usr/sbin/sysadminctl -secureTokenStatus $u; done; } > base-3.txt 2>&1
 { /usr/sbin/softwareupdate --list; /usr/sbin/softwareupdate --list-full-installers; } > base-4.txt 2>&1
 { ls -la "/Library/Managed Preferences" /var/db/softwareupdate; /usr/bin/profiles status -type enrollment; /usr/bin/plutil -p /var/db/softwareupdate/SoftwareUpdateDDMStatePersistence.plist; } > base-5.txt 2>&1
 grep -il pass base-*.txt   # must print nothing
 ```
-Record: the five files, and a table of each against the coordinator's reading (`hk hosts get`, as in MP-E1): sw_vers vs osVersion; fdesetup vs filevault; Secure Token vs updateAccount; softwareupdate vs due; Managed Preferences and the DDM file vs mdmConflicts. Expected (Apple's documentation, https://support.apple.com/guide/deployment/dep24dbdcf9e/web): `fdesetup list -extended` and `diskutil apfs listUsers /` show the volume owners.
+Record: the five files, and a table of each against the coordinator's reading (`hk hosts get`, as in MP-E1): sw_vers vs osVersion; `kern.bootsessionuuid` vs bootId and the `sec` of `kern.boottime` vs bootUnix (when MP-E1 recorded them); fdesetup vs filevault; Secure Token vs updateAccount; softwareupdate vs due; Managed Preferences and the DDM file vs mdmConflicts. Expected (Apple's documentation, https://support.apple.com/guide/deployment/dep24dbdcf9e/web): `fdesetup list -extended` and `diskutil apfs listUsers /` show the volume owners.
 Decides:
-- if any pair differs -> fix the collector (`maintenance_mac.rs`, `maintenance_account.rs`, `maintenance_softwareupdate.rs`, `maintenance_mdm.rs`) before apply code uses that fact.
+- if any pair differs -> fix the collector (`maintenance_mac.rs`, `maintenance_boot.rs`, `maintenance_account.rs`, `maintenance_softwareupdate.rs`, `maintenance_mdm.rs`) before apply code uses that fact.
 - if `sysadminctl -secureTokenStatus` prints wording other than the `TOKEN_ENABLED`/`TOKEN_DISABLED` the daemon matches -> change those constants in `maintenance_account.rs`.
 - if FileVault is on -> the "FileVault on" runs need no change; if off, turning it on is the owner's (MP-E9); answers design question 4 with real state.
 

@@ -7,8 +7,6 @@ use std::collections::BTreeSet;
 use hostkeeper_launchd::{
     BOOT_SESSION_UUID, FakeLaunchctl, LaunchctlError, LaunchctlOutput, parse_boot_session_uuid,
 };
-use hostkeeper_proto::hostkeeper::agent::v1 as pb;
-use hostkeeper_proto::maintenance::MAX_KERNEL_TEXT;
 use hostkeeper_steps::{BootId, BootIdError};
 
 use super::*;

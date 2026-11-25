@@ -783,6 +783,11 @@ the ready state of `mac-proof.md` section 1 ("The ready state, in order"):
   `running_kernel` (`maintenance_host.rs`). The five Mac collectors fill none of them, though section 4.1 says the report carries them
   and names `SysctlBootId` for the Mac. A maintenance run is not affected: it reads the boot id from the system (`maintenance_run.rs`).
   An operator reading the report cannot see a Mac's restart in it. To be fixed in the daemon.
+  Built since: a sixth Mac collector, `boot` (`maintenance_boot.rs`), fills `boot_id` from `kern.bootsessionuuid` through
+  `SysctlBootId` and `boot_unix` from the `sec` of `sysctl -n kern.boottime`; a boot fact that cannot be read leaves its field
+  empty and does not fail the look. `running_kernel` stays empty on a Mac, a Linux notion. Shown by tests over a scripted `sysctl`
+  only; that a farm Mac reports both, and that they change across a restart, is still for the Mac proof (`mac-proof.md`, MP-E1 and
+  MP-E5).
 - **No Mac can be given a shell yet, for a reason 10.1 did not name.** The coordinator holds no SSH user CA. `Ssh.HostKeys` for a Mac
   answers `not_configured`, no host announces `ssh-v1`, and none has an `ssh` report. `hk ssh` needs that CA and the SSH operators file
   (MP-E2 (a) and (b)), not the operator-keys file. Every host of the fleet, Linux ones too, reports `operatorKeys` as `{}`: the

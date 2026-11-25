@@ -18,16 +18,21 @@
 use std::path::Path;
 
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
+use hostkeeper_proto::hostkeeper::agent::v1 as pb;
+use hostkeeper_proto::maintenance::MAX_KERNEL_TEXT;
 use hostkeeper_steps::BootIdSource;
 
 use crate::mac::TOOL_DEADLINE;
-use crate::maintenance_collect::{Collector, Look, Section};
+use crate::maintenance_collect::{Collector, Look, Section, clip, listing};
 
 /// The program that prints a sysctl's value.
 pub const SYSCTL: &str = "/usr/sbin/sysctl";
 
 /// The arguments that print the boot time.
 pub const BOOTTIME_ARGS: [&str; 2] = ["-n", "kern.boottime"];
+
+/// The step's name, as [`listing`] names it.
+const BOOTTIME_STEP: &str = "sysctl -n kern.boottime";
 
 /// The collector `boot`.
 pub struct MacBoot {
@@ -60,7 +65,21 @@ impl Collector for MacBoot {
     }
 
     fn collect(&self, _look: &Look<'_>) -> Result<Section, String> {
-        Ok(Section::default())
+        let boot_id = self
+            .boot_id
+            .read()
+            .map(|id| clip(id.as_str(), MAX_KERNEL_TEXT))
+            .unwrap_or_default();
+        let boot_unix = listing(&*self.sysctl, BOOTTIME_STEP, &BOOTTIME_ARGS, &[0])
+            .map_or(0, |(_, text)| parse_kern_boottime(&text));
+        Ok(Section {
+            host: pb::MaintenanceHost {
+                boot_id,
+                boot_unix,
+                ..pb::MaintenanceHost::default()
+            },
+            ..Section::default()
+        })
     }
 }
 
@@ -69,8 +88,17 @@ impl Collector for MacBoot {
 /// seconds; 0 when the text does not start with a brace, has no closing brace, no `sec` part, or
 /// a `sec` that is not a whole number of seconds.
 #[must_use]
-pub fn parse_kern_boottime(_text: &str) -> u64 {
-    0
+pub fn parse_kern_boottime(text: &str) -> u64 {
+    text.trim_start()
+        .strip_prefix('{')
+        .and_then(|rest| rest.split_once('}'))
+        .and_then(|(inner, _)| {
+            inner.split(',').find_map(|part| {
+                let (name, value) = part.split_once('=')?;
+                (name.trim() == "sec").then(|| value.trim().parse().ok())?
+            })
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
