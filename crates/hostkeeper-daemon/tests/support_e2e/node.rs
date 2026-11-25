@@ -4,46 +4,40 @@
 use super::*;
 
 /// The daemon's launcher on a fake host: the maintenance hook's steps (`prepare`, `cutover`,
-/// `verify`) run in process through the real hook over the host ([`Machine::kinds`]), each
+/// `verify`) run in process through the real hook over the host's kinds ([`Host::kinds`]), each
 /// service's `drain` and `resume` are the host's service; every other step goes to the rig's
 /// scripted launcher.
-struct HostLauncher {
-    machine: Arc<Machine>,
+struct HostLauncher<M: Host> {
+    machine: Arc<M>,
     inner: Arc<hostkeeper_daemon::testing::ScriptedLauncher>,
 }
 
-impl HostLauncher {
+impl<M: Host> HostLauncher<M> {
     /// The maintenance hook's `step` with the params file `params`, as its unit would run it:
-    /// its exit code and its report line. A `prepare` is logged `stage` before it runs.
+    /// its exit code and its report line. The host notes the step's start and its end.
     fn hook(&self, step: &str, params: &Path) -> StepExit {
         let step = match step {
-            "prepare" => {
-                self.machine.effect("stage".to_owned());
-                HookStep::Prepare
-            }
+            "prepare" => HookStep::Prepare,
             "cutover" => HookStep::Cutover,
             "verify" => HookStep::Verify,
             other => panic!("the maintenance hook has no step {other}"),
         };
+        self.machine.hook_started(step);
         let mut file = fs::File::open(params).expect("the hook's params");
         let read = MaintainParams::read(&mut file).expect("valid params");
         let record = StoreRecord::beside_params(params).expect("the run record beside the params");
-        let kinds = self.machine.kinds();
-        let rebooter = HostRebooter::systemd(self.machine.program("systemctl"));
+        let kinds = self
+            .machine
+            .kinds(params.parent().expect("the run's directory"));
+        let rebooter = self.machine.rebooter();
         let ports = HookPorts {
             kinds: &kinds,
             record: &record,
-            rebooter: &rebooter,
+            rebooter: &*rebooter,
             boot_id: &*self.machine,
         };
         let ending = run_step(step, &read, &ports);
-        if step == HookStep::Verify {
-            let line = match ending.reason {
-                None => "check".to_owned(),
-                Some(reason) => format!("check failed: {reason}"),
-            };
-            self.machine.effect(line);
-        }
+        self.machine.hook_ended(step, &ending);
         let code = match ending.outcome {
             Outcome::Success => 0,
             Outcome::Deferred => EXIT_DEFERRED,
@@ -56,7 +50,7 @@ impl HostLauncher {
     }
 }
 
-impl StepLauncher for HostLauncher {
+impl<M: Host> StepLauncher for HostLauncher<M> {
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
         self.inner.run(call)
     }
@@ -83,28 +77,38 @@ impl StepLauncher for HostLauncher {
     }
 }
 
-/// A `maintain` order as a host read it from an answer: its id, try, action and kinds.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A `maintain` order as a host read it from an answer: its id, try, action and kinds, and what it
+/// says of a Mac: whether a major upgrade is allowed, the Xcodes to install, the ones to remove
+/// and the default.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Ordered {
     pub id: String,
     pub order_try: u64,
     pub action: pb::MaintainAction,
     pub kinds: Vec<pb::MaintenanceKind>,
+    pub macos_major: bool,
+    pub xcodes: Vec<pb::XcodeEntry>,
+    pub xcode_remove: Vec<String>,
+    pub xcode_default: String,
 }
 
 /// The network transport of one host, in process: each heartbeat goes through the gRPC router
-/// of the coordinator running now, as the host; the request and the `maintain` order of each
-/// answer are kept, in order.
+/// of the coordinator running now, as the host, naming the host's platform; the request and the
+/// `maintain` order of each answer are kept, in order.
 struct HostLink {
     world: Arc<World>,
     peer: Peer,
+    platform: Option<pb::Platform>,
     sent: Mutex<Vec<pb::HeartbeatRequest>>,
     answered: Mutex<Vec<Option<Ordered>>>,
 }
 
 impl CoordinatorLink for HostLink {
     fn heartbeat(&self, _identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
-        let request = request_of(beat);
+        let mut request = request_of(beat);
+        if let Some(platform) = self.platform {
+            request.platform = platform.into();
+        }
         self.sent
             .lock()
             .expect("not poisoned")
@@ -144,6 +148,10 @@ impl CoordinatorLink for HostLink {
                 order_try: order.order_try,
                 action: order.maintain.action(),
                 kinds: order.maintain.kinds().collect(),
+                macos_major: order.maintain.macos_major,
+                xcodes: order.maintain.xcodes.clone(),
+                xcode_remove: order.maintain.xcode_remove.clone(),
+                xcode_default: order.maintain.xcode_default.clone(),
             }));
         Ok(Reply {
             features: response
@@ -166,18 +174,18 @@ struct Running {
 
 /// One host of a test: its daemon's directories, its fake host, its link to the coordinator,
 /// and its daemon while one runs.
-pub struct Node {
+pub struct Node<M: Host> {
     pub name: String,
     pub rig: Rig,
-    pub machine: Arc<Machine>,
+    pub machine: Arc<M>,
     link: Arc<HostLink>,
     running: Option<Running>,
 }
 
-impl Node {
-    /// The host `host` of the group `group` of the test `test`, running `alpha` 1.0.0 on a fake
-    /// host with `due` due; its daemon started.
-    pub fn new(world: &Arc<World>, test: &str, host: &str, group: &str, due: Due) -> Node {
+impl<M: Host> Node<M> {
+    /// The host `host` of the group `group` of the test `test`, running `alpha` 1.0.0 on the fake
+    /// host `machine`; its daemon started.
+    pub fn on(world: &Arc<World>, test: &str, host: &str, group: &str, machine: Arc<M>) -> Node<M> {
         let rig = Rig::new(&format!("{test}-{host}"));
         // Its release names `drain` and `resume`, and a health check the rig's fake client
         // answers healthy, so its heartbeat reports it healthy and the host counts as serving.
@@ -186,10 +194,10 @@ impl Node {
         rig.add_with(SERVICE, "1.0.0", &text);
         rig.store.link(SERVICE, "current", "1.0.0");
         rig.health.answer(HEALTH_URL, 200);
-        let machine = Machine::new(&format!("{test}-{host}"), due);
         let link = Arc::new(HostLink {
             world: Arc::clone(world),
             peer: peer(host, group),
+            platform: machine.platform(),
             sent: Mutex::new(Vec::new()),
             answered: Mutex::new(Vec::new()),
         });
@@ -246,6 +254,7 @@ impl Node {
         let dispatch = Arc::new(ManualDispatch::default());
         let log = Arc::new(RecordingLog::default());
         let clock = Arc::new(LinkClock::new(2_000_000_000, 7));
+        // The scope of a Linux look; a Mac's collectors do not read it.
         let maintenance = maintenance_source(
             &daemon,
             LinuxScope::Security,
@@ -318,9 +327,20 @@ impl Node {
     /// id, and a new daemon starts on the same directories: what its resume came to.
     pub fn reboot(&mut self) -> Option<Driven> {
         self.stop();
+        self.come_back()
+    }
+
+    /// A host whose daemon ended as its reboot began comes back: it boots into a new boot id and
+    /// a new daemon starts on the same directories: what its resume came to.
+    pub fn come_back(&mut self) -> Option<Driven> {
         let id = self.machine.boot();
         self.rig.clock.set_boot_id(&id);
         self.start()
+    }
+
+    /// Every heartbeat the host sent, in order.
+    pub fn sent(&self) -> Vec<pb::HeartbeatRequest> {
+        self.link.sent.lock().expect("not poisoned").clone()
     }
 
     /// The maintenance report of the last heartbeat.
@@ -366,7 +386,7 @@ impl Node {
 
 /// A crash of the run record's writer just after the write that records `service`'s drain
 /// ended: the record on disk then holds it drained, and nothing else launched.
-pub fn after_drained(node: &Node, service: &str) -> CrashGate {
+pub fn after_drained<M: Host>(node: &Node<M>, service: &str) -> CrashGate {
     let state = node.rig.state.clone();
     let service = service.to_owned();
     Arc::new(move |point: CrashPoint| {

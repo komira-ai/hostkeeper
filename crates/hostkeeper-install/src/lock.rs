@@ -19,6 +19,16 @@ pub struct Held {
     _file: File,
 }
 
+impl Drop for Held {
+    /// Unlocks the file before it is closed: a child process spawned while the lock was held
+    /// holds a copy of its descriptor until it execs, and that copy would keep the lock held after
+    /// this one is closed.
+    fn drop(&mut self) {
+        // Closing the file unlocks it too; there is nothing more to do when this fails.
+        let _ = self._file.unlock();
+    }
+}
+
 impl InstallerLock {
     /// The lock of the file at `path`.
     pub fn new(path: &Path) -> InstallerLock {

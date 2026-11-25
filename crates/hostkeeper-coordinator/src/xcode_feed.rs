@@ -14,11 +14,13 @@
 use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::fmt;
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::StartError;
 use crate::origin_https::OriginUrl;
 use crate::service::Coordinator;
 use crate::xcode_store::XcodeStore;
@@ -530,6 +532,21 @@ impl Coordinator {
         self.xcode.held = Arc::clone(&store) as Arc<dyn XcodeHeld>;
         self.xcode.store = Some(store);
         self
+    }
+
+    /// The same coordinator keeping Xcode archives in the directory `dir`, none larger than
+    /// `max_bytes` (`--xcode-dir`, `--xcode-max-bytes`), as its start keeps them: the store is
+    /// opened on the clock of the coordinator's ops store, so call it after
+    /// [`Coordinator::with_ops`].
+    ///
+    /// # Errors
+    /// [`StartError::XcodeDir`]: `dir` is not a directory that can be read, or an upload a stopped
+    /// coordinator left in it could not be removed.
+    pub fn with_xcode_dir(self, dir: &Path, max_bytes: u64) -> Result<Self, StartError> {
+        let now = std::time::UNIX_EPOCH + Duration::from_secs(self.ops.unix_now());
+        let store = XcodeStore::open(dir, max_bytes, now)
+            .map_err(|why| StartError::XcodeDir(why.to_string()))?;
+        Ok(self.with_xcode_store(Arc::new(store)))
     }
 
     /// Whether the job `xcode-feed` runs: `--xcode-feed-url` is not empty.

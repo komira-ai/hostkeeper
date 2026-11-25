@@ -158,10 +158,21 @@ impl Apply {
     /// The apply of this Mac: its own programs and files.
     #[must_use]
     pub fn at_host() -> Apply {
+        Apply::new(
+            Box::new(HostPrograms),
+            Box::new(HostPlists::at_host()),
+            HostRoot::host(),
+        )
+    }
+
+    /// The apply running the Mac's programs through `programs`, reading property lists through
+    /// `plists` and finding each Xcode under `root`.
+    #[must_use]
+    pub fn new(programs: Box<dyn Programs>, plists: Box<dyn Plists>, root: HostRoot) -> Apply {
         Apply {
-            programs: Box::new(HostPrograms),
-            plists: Box::new(HostPlists::at_host()),
-            root: HostRoot::host(),
+            programs,
+            plists,
+            root,
         }
     }
 

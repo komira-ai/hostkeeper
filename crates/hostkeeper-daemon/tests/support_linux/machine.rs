@@ -118,7 +118,7 @@ impl Machine {
         self.state.lock().expect("not poisoned")
     }
 
-    pub(super) fn effect(&self, line: String) {
+    fn effect(&self, line: String) {
         self.state().effects.push(line);
     }
 
@@ -159,7 +159,7 @@ impl Machine {
 
     /// The reboot the host asked for: the next boot, running the newest kernel installed, with
     /// no restart asked for any more. Returns the new boot's id.
-    pub(super) fn boot(&self) -> String {
+    fn next_boot(&self) -> String {
         let id = {
             let mut state = self.state();
             assert!(state.reboot_asked, "the host asked for no reboot");
@@ -176,7 +176,7 @@ impl Machine {
     }
 
     /// The program `name` of the host.
-    pub(super) fn program(self: &Arc<Self>, name: &'static str) -> Box<dyn Launchctl> {
+    fn program(self: &Arc<Self>, name: &'static str) -> Box<dyn Launchctl> {
         Box::new(Program {
             name,
             machine: Arc::clone(self),
@@ -200,7 +200,7 @@ impl Machine {
 
     /// What the daemon's report looks at: the host's kernels, the reboot it needs and the
     /// package manager's updates.
-    pub(super) fn collectors(self: &Arc<Self>) -> Vec<Box<dyn Collector>> {
+    fn linux_collectors(self: &Arc<Self>) -> Vec<Box<dyn Collector>> {
         vec![
             Box::new(HostFacts::new(self.program("uname"), self.root())),
             Box::new(RebootNeed::new(
@@ -219,7 +219,7 @@ impl Machine {
     /// The maintenance hook's kinds on this host: the real `linux` and `reboot`, checked by the
     /// real check of the Linux kinds, every program and file the host's; the `prepare` of `linux`
     /// is [`StageAnswered`]'s.
-    pub(super) fn kinds(self: &Arc<Self>) -> Registry {
+    fn linux_kinds(self: &Arc<Self>) -> Registry {
         let apt = AptUpgrade::new(
             self.program("apt-get"),
             self.program("apt-get"),
@@ -310,7 +310,7 @@ impl Machine {
     /// `alpha`'s `step` (`drain` or `resume`) with the params file `params`: a drain takes the
     /// service out of service and, with a deadline while work holds it, ends deferred (exit 75)
     /// as the hook contract says; a resume puts it back.
-    pub(super) fn service_step(&self, service: &str, step: &str, params: &Path) -> i32 {
+    fn alpha_step(&self, service: &str, step: &str, params: &Path) -> i32 {
         let text = fs::read_to_string(params).expect("the service's params");
         let mut state = self.state();
         state.effects.push(format!("{step} {service}"));
@@ -329,6 +329,51 @@ impl Machine {
             }
             other => panic!("{service} has no step {other}"),
         }
+    }
+}
+
+impl Host for Machine {
+    fn platform(&self) -> Option<pb::Platform> {
+        None
+    }
+
+    /// A `prepare` is logged `stage` before it runs.
+    fn hook_started(&self, step: HookStep) {
+        if step == HookStep::Prepare {
+            self.effect("stage".to_owned());
+        }
+    }
+
+    /// A `verify` is logged `check`, or `check failed: <reason>`, once it ended.
+    fn hook_ended(&self, step: HookStep, ending: &HookEnding) {
+        if step == HookStep::Verify {
+            let line = match ending.reason {
+                None => "check".to_owned(),
+                Some(reason) => format!("check failed: {reason}"),
+            };
+            self.effect(line);
+        }
+    }
+
+    fn kinds(self: &Arc<Self>, _run_dir: &Path) -> Registry {
+        self.linux_kinds()
+    }
+
+    /// `systemctl reboot`.
+    fn rebooter(self: &Arc<Self>) -> Box<dyn Rebooter> {
+        Box::new(HostRebooter::systemd(self.program("systemctl")))
+    }
+
+    fn collectors(self: &Arc<Self>) -> Vec<Box<dyn Collector>> {
+        self.linux_collectors()
+    }
+
+    fn service_step(&self, service: &str, step: &str, params: &Path) -> i32 {
+        self.alpha_step(service, step, params)
+    }
+
+    fn boot(&self) -> String {
+        self.next_boot()
     }
 }
 

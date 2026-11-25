@@ -1,4 +1,5 @@
-//! The coordinator of a test: its enrollment, its groups and the operator's calls.
+//! The coordinator of a test: its enrollment, its groups, its clock, its Xcode store and the
+//! operator's calls.
 
 use super::*;
 
@@ -74,7 +75,7 @@ fn enrollment_of(dir: &Path) -> Arc<Enrollment> {
 
 /// The certificate of the updater `host` of the role `role`, as the coordinator reads the peer
 /// of a heartbeat.
-pub(super) fn peer(host: &str, role: &str) -> Peer {
+pub fn peer(host: &str, role: &str) -> Peer {
     let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
     let uri = |text: String| SanType::URI(text.try_into().expect("a URI"));
     params.subject_alt_names = vec![
@@ -89,25 +90,52 @@ pub(super) fn peer(host: &str, role: &str) -> Peer {
 }
 
 /// The coordinator of a test, on the state files of a directory of its own, which a restart
-/// reads again.
+/// reads again, and on a clock the test moves.
 pub struct World {
     dir: Scratch,
+    /// The second the coordinator's clock reads; a restart keeps it.
+    now: Arc<AtomicU64>,
+    /// The directory of its Xcode store (`--xcode-dir`); none: it keeps no Xcode.
+    xcode: Option<PathBuf>,
     coordinator: Mutex<Option<Arc<Coordinator>>>,
 }
 
 impl World {
-    /// A coordinator on a new directory named `name`, holding no group and no host.
+    /// A coordinator on a new directory named `name`, holding no group and no host, and keeping
+    /// no Xcode.
     pub fn new(name: &str) -> Arc<World> {
+        Self::made(name, false)
+    }
+
+    /// [`World::new`], with an Xcode store, empty, in the directory `xcode` of its own.
+    pub fn with_xcode_store(name: &str) -> Arc<World> {
+        Self::made(name, true)
+    }
+
+    fn made(name: &str, xcode: bool) -> Arc<World> {
         let dir = Scratch::new(name);
-        let coordinator = Mutex::new(Some(Self::start(dir.path())));
-        Arc::new(World { dir, coordinator })
+        let now = Arc::new(AtomicU64::new(COORDINATOR_START_SECS));
+        let xcode = xcode.then(|| {
+            let store = dir.path().join("xcode");
+            fs::create_dir(&store).expect("the Xcode store's directory");
+            store
+        });
+        let coordinator = Mutex::new(Some(Self::start(dir.path(), &now, xcode.as_deref())));
+        Arc::new(World {
+            dir,
+            now,
+            xcode,
+            coordinator,
+        })
     }
 
     /// The real coordinator on the state files of `dir`, with its enrollment over the files of
-    /// `dir` and the operator's token [`OPERATOR`]: it orders from its start (no quiet period),
-    /// on a clock that stays at second 1000, so every host it heard stays live. The ops store's
-    /// clock, which a run's window and a deferral's backoff are read on, is the wall clock.
-    fn start(dir: &Path) -> Arc<Coordinator> {
+    /// `dir`, the operator's token [`OPERATOR`] and, with `xcode`, its Xcode store there: it
+    /// orders from its start (no quiet period), on the clock `now`, which moves only when the
+    /// test moves it ([`World::advance`]), so every host it heard stays live until then. The ops
+    /// store's clock, which a run's window and a deferral's backoff are read on, is the wall
+    /// clock.
+    fn start(dir: &Path, now: &Arc<AtomicU64>, xcode: Option<&Path>) -> Arc<Coordinator> {
         let state = dir.join("desired.json");
         let verdicts = VerdictFile::open(&verdicts_path(&state)).expect("the verdicts file");
         let desired = DesiredStore::open(&state, None).expect("the desired state");
@@ -125,14 +153,56 @@ impl World {
             spent(),
         );
         let enrollment = enrollment_of(dir);
-        let clock: Clock = Arc::new(|| Duration::from_secs(1_000));
-        Arc::new(
-            Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
-                .with_quiet(Duration::ZERO)
-                .with_ops(ops)
-                .with_verdicts(verdicts)
-                .with_enrollment(enrollment),
-        )
+        let read = Arc::clone(now);
+        let clock: Clock = Arc::new(move || Duration::from_secs(read.load(Ordering::SeqCst)));
+        let coordinator = Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
+            .with_quiet(Duration::ZERO)
+            .with_ops(ops)
+            .with_verdicts(verdicts)
+            .with_enrollment(enrollment);
+        let coordinator = match xcode {
+            Some(store) => coordinator
+                .with_xcode_dir(store, u64::MAX)
+                .expect("the Xcode store opens"),
+            None => coordinator,
+        };
+        Arc::new(coordinator)
+    }
+
+    /// The coordinator's clock moves `secs` seconds on.
+    pub fn advance(&self, secs: u64) {
+        self.now.fetch_add(secs, Ordering::SeqCst);
+    }
+
+    /// The Xcode store holds `bytes` as the archive of Xcode `version` (`build`), as an
+    /// operator's push leaves it: its record and its archive, each named by its SHA-256. Returns
+    /// the order's entry of it.
+    pub fn hold_xcode(&self, version: &str, build: &str, bytes: &[u8]) -> pb::XcodeEntry {
+        let store = self.xcode.as_ref().expect("the world keeps Xcode");
+        let sha256 = hex::encode(Sha256::digest(bytes));
+        let record = serde_json::json!({
+            "version": version,
+            "build": build,
+            "size": bytes.len(),
+            "by": "operator",
+            "at_unix": 1,
+        });
+        fs::write(store.join(format!("{sha256}.json")), record.to_string()).expect("the record");
+        fs::write(store.join(format!("{sha256}.xip")), bytes).expect("the archive");
+        pb::XcodeEntry {
+            version: version.to_owned(),
+            build: build.to_owned(),
+            size: bytes.len() as u64,
+            sha256,
+        }
+    }
+
+    /// The file of the archive `sha256` in the Xcode store: what `GET /v1/xcode/<sha256>` serves.
+    pub fn xcode_archive(&self, sha256: &str) -> PathBuf {
+        self.xcode
+            .as_ref()
+            .expect("the world keeps Xcode")
+            .join(format!("{sha256}.xip"))
     }
 
     /// The coordinator stops and a new one starts on the same files: what it stored is read
@@ -141,7 +211,11 @@ impl World {
         let mut held = self.coordinator.lock().expect("not poisoned");
         // The old coordinator ends, and its files are closed, before the new one opens them.
         *held = None;
-        *held = Some(Self::start(self.dir.path()));
+        *held = Some(Self::start(
+            self.dir.path(),
+            &self.now,
+            self.xcode.as_deref(),
+        ));
     }
 
     /// The coordinator running now.
@@ -321,6 +395,12 @@ impl World {
                 },
             )
             .expect("put back");
+    }
+
+    /// The coordinator's job `alerts` runs once, as it does on its schedule: it notes each host
+    /// in its restart for longer than its `return_secs` not back, and observes every alert.
+    pub fn run_alerts_job(&self) {
+        let _observed = self.coordinator().observe_alerts().expect("the alerts");
     }
 
     /// The maintenance alerts standing (`updates_due`, `maintenance_halted`,
