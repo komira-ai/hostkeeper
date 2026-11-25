@@ -16,6 +16,9 @@
 //! 4. the upload, unmodified and streamed, with the operator's token in the request's header
 //!    and nowhere else ([`upload`]).
 //!
+//! The programs it runs are the [`Mac`]'s, which also holds the ones `hk xcode verify`
+//! ([`crate::xcode_verify`]) runs.
+//!
 //! It takes `--endpoint`, `--ca-file`, `--token-file` and `--timeout-secs`. The token and the CA
 //! are read before the download, so that a mistake in either ends the push at once. The token is
 //! never an argument, an environment variable or an output line of a program it runs.
@@ -42,10 +45,11 @@ use crate::{Flow, PROGRAM, Stop, World};
 
 use archive::is_version;
 
-/// The system `hk xcode-push` runs on and the programs of the Mac it runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The system `hk xcode-push` and `hk xcode verify` run on, the programs of the Mac they run, and
+/// the two things `verify` reads from outside: Apple's root certificate and a clock.
+#[derive(Debug, Clone)]
 pub struct Mac {
-    /// The operating system, as `std::env::consts::OS` names it: the push runs only on `macos`.
+    /// The operating system, as `std::env::consts::OS` names it: both run only on `macos`.
     pub os: &'static str,
     /// `xcodes`, which downloads an Xcode in the operator's session.
     pub xcodes: PathBuf,
@@ -55,11 +59,53 @@ pub struct Mac {
     pub xip: PathBuf,
     /// `plutil`, which reads the version and the build of the expanded app.
     pub plutil: PathBuf,
+    /// `codesign`, which verifies the expanded app.
+    pub codesign: PathBuf,
+    /// `spctl`, which assesses the expanded app against Gatekeeper's policy.
+    pub spctl: PathBuf,
+    /// `xar`, which lists and extracts the members of an archive.
+    pub xar: PathBuf,
+    /// `sw_vers`, which names the macOS version.
+    pub sw_vers: PathBuf,
+    /// `uname`, which names the kernel and the machine.
+    pub uname: PathBuf,
+    /// `cp`, which makes the copy-on-write clone of an archive (`-c`).
+    pub cp: PathBuf,
+    /// `df`, which says how much space a volume has free.
+    pub df: PathBuf,
+    /// `archiveutil`, which Apple's other archive formats are handled with; it may be absent.
+    pub archiveutil: PathBuf,
+    /// `aa`, the Apple Archive tool; it may be absent.
+    pub aa: PathBuf,
+    /// `aea`, the Apple Encrypted Archive tool; it may be absent.
+    pub aea: PathBuf,
+    /// The directory of the Command Line Tools' packages, whose `.pkg` is a package Apple did not
+    /// sign as Apple Software.
+    pub command_line_tools: PathBuf,
+    /// Where Apple's root certificate is fetched from, by HTTPS.
+    pub apple_root_url: String,
+    /// The SHA-256 fingerprint (upper-case hex) that certificate must have: Apple's own, as
+    /// `signature::APPLE_ROOT_CA_SHA256` holds it. A field so that a test can serve a root of its
+    /// own making.
+    pub apple_root_sha256: String,
+    /// The time since an origin that does not change in the run: the seconds `xip --expand` took
+    /// are the difference of two readings.
+    pub clock: fn() -> Duration,
+}
+
+/// The reading of the system's monotonic clock.
+fn monotonic() -> Duration {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    Duration::new(
+        u64::try_from(now.tv_sec).unwrap_or_default(),
+        u32::try_from(now.tv_nsec).unwrap_or_default(),
+    )
 }
 
 impl Mac {
-    /// The system this program runs on, `xcodes` from the `PATH` (it is not Apple's), and Apple's
-    /// programs by their paths.
+    /// The system this program runs on, `xcodes` from the `PATH` (it is not Apple's), Apple's
+    /// programs by their paths, Apple's root certificate from Apple's certificate authority page,
+    /// and the system's monotonic clock.
     pub fn system() -> Mac {
         Mac {
             os: std::env::consts::OS,
@@ -67,6 +113,20 @@ impl Mac {
             pkgutil: PathBuf::from("/usr/sbin/pkgutil"),
             xip: PathBuf::from("/usr/bin/xip"),
             plutil: PathBuf::from("/usr/bin/plutil"),
+            codesign: PathBuf::from("/usr/bin/codesign"),
+            spctl: PathBuf::from("/usr/sbin/spctl"),
+            xar: PathBuf::from("/usr/bin/xar"),
+            sw_vers: PathBuf::from("/usr/bin/sw_vers"),
+            uname: PathBuf::from("/usr/bin/uname"),
+            cp: PathBuf::from("/bin/cp"),
+            df: PathBuf::from("/bin/df"),
+            archiveutil: PathBuf::from("/usr/bin/archiveutil"),
+            aa: PathBuf::from("/usr/bin/aa"),
+            aea: PathBuf::from("/usr/bin/aea"),
+            command_line_tools: PathBuf::from("/Library/Developer/CommandLineTools/Packages"),
+            apple_root_url: "https://www.apple.com/appleca/AppleIncRootCertificate.cer".to_owned(),
+            apple_root_sha256: signature::APPLE_ROOT_CA_SHA256.to_owned(),
+            clock: monotonic,
         }
     }
 }

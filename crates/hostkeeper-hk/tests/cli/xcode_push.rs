@@ -95,6 +95,7 @@ impl Push {
             pkgutil: bin.join("pkgutil"),
             xip: bin.join("xip"),
             plutil: bin.join("plutil"),
+            ..Mac::system()
         };
         let push = Push { rig, mac };
         push.tool("pkgutil.out", SIGNED_BY_APPLE.as_bytes());

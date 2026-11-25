@@ -5,7 +5,9 @@
 //! POST of the request the flags make, with the exit code of the gateway's answer. The SSH tunnel
 //! is built in: [`ssh`] is `hk ssh`, `hk ssh-proxy`, `hk ssh-revoke`, `hk ssh-status` and the
 //! `hk ssh-known-host` that ssh runs. [`xcode_push`] is `hk xcode-push`, which brings an Xcode
-//! release into the coordinator's Xcode store from the operator's own Mac. [`tailnet_wait`] is
+//! release into the coordinator's Xcode store from the operator's own Mac, and [`xcode_verify`] is
+//! `hk xcode verify`, a hand-written method of the generated service `xcode` ([`hand`]) that
+//! checks an archive there and keeps the record of what it found ([`xcode_record`]). [`tailnet_wait`] is
 //! `hk tailnet-wait`, which waits for the coordinator after a CI runner joined the tailnet and
 //! rejoins it once when the coordinator does not answer. [`settings`] is the file
 //! `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their
@@ -13,7 +15,7 @@
 //!
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
 //!   command table, the streams, the home directory and the user's id, the runner's token request, the program
-//!   that runs the ssh verbs, the programs of the Mac that `hk xcode-push` runs and the
+//!   that runs the ssh verbs, the programs of the Mac that `hk xcode-push` and `hk xcode verify` run and the
 //!   `tailscale` and the clock of `hk tailnet-wait`. The tests of this crate run it with fakes for
 //!   all of them.
 //! - [`main`]: the program's `main`, which builds the real [`World`] from the process.
@@ -32,6 +34,7 @@ mod call;
 mod dispatch;
 mod doc;
 mod encode;
+mod hand;
 mod help;
 mod home;
 mod send;
@@ -43,6 +46,8 @@ pub mod tailnet_wait;
 #[cfg(test)]
 mod tests;
 pub mod xcode_push;
+mod xcode_record;
+mod xcode_verify;
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -84,7 +89,7 @@ pub struct World<'a> {
     pub web_roots: &'a dyn Fn() -> Vec<Vec<u8>>,
     /// What runs the ssh commands.
     pub ssh: &'a dyn ssh::Launch,
-    /// The system and the programs `hk xcode-push` runs.
+    /// The system and the programs `hk xcode-push` and `hk xcode verify` run.
     pub mac: &'a xcode_push::Mac,
     /// The `tailscale` program and the wait of `hk tailnet-wait`.
     pub tailnet: &'a tailnet_wait::Tailnet<'a>,

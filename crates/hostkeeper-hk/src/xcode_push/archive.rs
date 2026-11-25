@@ -85,15 +85,20 @@ pub(crate) fn download(w: &mut World<'_>, mac: &Mac, version: &str) -> Flow<Path
     }
 }
 
-/// The archive at `path`, open for reading: it must be a file.
-pub(crate) fn open(path: &Path) -> Flow<File> {
-    let file = File::open(path)
-        .map_err(|error| failed(&format!("cannot read {} ({error})", path.display())))?;
+/// The archive at `path`, open for reading: it must be a file. The error says why it is not.
+pub(crate) fn open_file(path: &Path) -> Result<File, String> {
+    let file =
+        File::open(path).map_err(|error| format!("cannot read {} ({error})", path.display()))?;
     if file.metadata().is_ok_and(|meta| meta.is_file()) {
         Ok(file)
     } else {
-        Err(failed(&format!("{} is not a file", path.display())))
+        Err(format!("{} is not a file", path.display()))
     }
+}
+
+/// The archive at `path`, open for reading: it must be a file.
+pub(crate) fn open(path: &Path) -> Flow<File> {
+    open_file(path).map_err(|why| failed(&why))
 }
 
 /// The lower-case hex of `bytes`.
@@ -102,15 +107,15 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The SHA-256 of the archive `file`, in lower-case hex, and its size in bytes: read from its
-/// start to its end once, in pieces, never whole.
-pub(crate) fn digest(file: &mut File) -> Flow<(String, u64)> {
+/// start to its end once, in pieces, never whole. The error says why it could not be read.
+pub(crate) fn digest_of(file: &mut File) -> Result<(String, u64), String> {
     let mut sha = Sha256::new();
     let mut size: u64 = 0;
     let mut piece = vec![0_u8; 1 << 20];
     loop {
         let n = file
             .read(&mut piece)
-            .map_err(|error| failed(&format!("cannot read the archive ({error})")))?;
+            .map_err(|error| format!("cannot read the archive ({error})"))?;
         if n == 0 {
             break;
         }
@@ -120,8 +125,13 @@ pub(crate) fn digest(file: &mut File) -> Flow<(String, u64)> {
     Ok((hex(&sha.finalize()), size))
 }
 
+/// [`digest_of`] as the failure that ends a push.
+pub(crate) fn digest(file: &mut File) -> Flow<(String, u64)> {
+    digest_of(file).map_err(|why| failed(&why))
+}
+
 /// The directory an archive is expanded into: removed, with all it holds, when it is dropped.
-struct Expansion(PathBuf);
+pub(crate) struct Expansion(pub(crate) PathBuf);
 
 impl Drop for Expansion {
     fn drop(&mut self) {

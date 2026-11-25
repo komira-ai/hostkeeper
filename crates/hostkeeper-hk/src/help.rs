@@ -1,12 +1,12 @@
-//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `settings`, of `xcode-push` and of `tailnet-wait`. All of it is
+//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `settings`, of `xcode-push`, of `xcode verify` and of `tailnet-wait`. All of it is
 //! written from the command table and says `hk`, whatever name the program is called by.
 
 use std::fmt::Write as _;
 
 use hostkeeper_proto::ctl::{Command, Input};
 
-use crate::PROGRAM;
 use crate::table::{GLOBALS, MEANINGS, field_flags, line, shape};
+use crate::{PROGRAM, hand};
 
 /// How `hk` turns a request field into input, said once in `--help` and `docs/cli.md`.
 pub(crate) const RULES: &str = "\
@@ -59,6 +59,14 @@ its version and build are read from the app `xip --expand` makes, and it is uplo
 and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails \
 uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other \
 credential; `hk xcode-push --help` says each step.
+
+`hk xcode verify [--apple-root FILE] <archive.xip>` is a method of the service `xcode` that is \
+not a gateway call: on macOS only, it runs every check of the Mac proof's operator steps on an \
+Xcode archive (the programs, the archive's kind, Apple's signature and published root, a damaged \
+copy and a file that is no archive, the table of contents, and the expansion with its version \
+and build), writes the record of what it found to `$HOME/.hostkeeper/xcode/<sha256>.json` and \
+to stdout, and exits 0 when its verdict is pass and 1 otherwise. It asks no coordinator; \
+`hk xcode verify --help` says each check.
 
 `hk settings init --endpoint URL --ca-file PATH --token-file PATH` writes the settings file \
 `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their \
@@ -116,6 +124,7 @@ pub(crate) fn top_help(commands: &[&Command], stamp: &str) -> String {
 
 /// The help of the service of `first`, whose methods are `methods` (`first` is the first).
 pub(crate) fn service_help(first: &Command, methods: &[&Command]) -> String {
+    let service = first.service_command;
     let mut text = format!(
         "{PROGRAM} {}: the service `{}` of the package `{}`. {}\n\n\
          Usage: {PROGRAM} [global flags] {} <method> [flags]\n\nMethods:\n",
@@ -127,6 +136,9 @@ pub(crate) fn service_help(first: &Command, methods: &[&Command]) -> String {
     );
     for m in methods {
         let _ = writeln!(text, "  {}\n      {}", m.method_command, line(m.doc));
+    }
+    for m in hand::of(service) {
+        let _ = writeln!(text, "  {}\n      {}", m.method, line(m.doc));
     }
     text.pop();
     text
@@ -250,3 +262,42 @@ It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs
 last required (or given by the settings file). The token is read from its file into memory and sent only as the request's
 bearer: never in an argument, the environment of a program it runs, or an output line.
 --token-stdin, --github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk xcode verify`.
+pub(crate) const XCODE_VERIFY_HELP: &str = "\
+hk xcode verify [--apple-root FILE] <archive.xip>
+    Checks an Xcode archive on the operator's own Mac, as the operator's user; macOS only. It
+    reads the archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside
+    it (removed afterwards) and its record; it asks no coordinator. In order, ending at the first
+    check that fails (the parts after it are null in the record):
+    1. The programs: sw_vers and uname -sm; each program's path must be a file (pkgutil, xip,
+       plutil, codesign, spctl, xar, sw_vers, uname, cp, df); xcodes version; the first lines
+       of xip --help; which of archiveutil, aa and aea exist.
+    2. The archive's kind, from its first four bytes: xar! (a .xip) goes on; AA01 (Apple
+       Archive) and AEA1 (Apple Encrypted Archive) fail.
+    3. pkgutil --check-signature must exit 0, say signed Apple Software and name a chain ending
+       at Apple Root CA by its SHA-256 fingerprint. Apple's published root certificate, from
+       --apple-root or fetched over HTTPS from https://www.apple.com/appleca/ and trusted by the
+       system's roots, must have the SHA-256 fingerprint the program holds; its fingerprint and
+       subject are recorded.
+    4. A copy-on-write clone of the archive (cp -c) with the byte at its middle changed, and a
+       16-byte file that is no archive: pkgutil --check-signature and xip --expand are run on
+       each and recorded; xip --expand must exit non-zero on both (pkgutil's answer is only
+       recorded). A volume that cannot clone records `not run, the volume cannot clone` for the
+       clone and does not fail. A package of the Command Line Tools is checked by pkgutil too,
+       when there is one, for the record.
+    5. For the record only: xip --list, xar -tf, xar --dump-toc and the Metadata member.
+    6. The expansion: xip --expand in the scratch directory, with the seconds it took (recorded,
+       never judged); exactly one .app; its version (CFBundleShortVersionString) and build
+       (ProductBuildVersion) read with plutil; codesign --verify --deep --strict must exit 0;
+       spctl --assess is recorded.
+    Before each expansion the volume of the archive must have three times the archive's size
+    free (df -Pk), else the check fails with free_space_short.
+
+The verdict is pass, or fail: <the first check that failed>. The record, JSON with the key
+\"record\": \"hk-xcode-verify-v1\", is written to $HOME/.hostkeeper/xcode/<sha256>.json (mode 0600)
+whatever the verdict, replacing the file that is there, and printed on stdout. The exit is 0 on
+pass and 1 otherwise.
+
+--apple-root FILE is Apple's root certificate (DER or PEM). The global flag --timeout-secs limits
+the fetch of that certificate; the other global flags are not used.";

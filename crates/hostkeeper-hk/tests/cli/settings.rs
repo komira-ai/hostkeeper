@@ -243,6 +243,7 @@ fn xcode_push_takes_the_file() {
         pkgutil: tool("pkgutil"),
         xip: tool("xip"),
         plutil: tool("plutil"),
+        ..Mac::system()
     };
     let push = || {
         rig.run(

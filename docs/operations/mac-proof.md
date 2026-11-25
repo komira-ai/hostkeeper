@@ -15,7 +15,7 @@ Mac that takes builds.
 | Order | Steps | Where | Who |
 |---|---|---|---|
 | 1 | MP-E1 to MP-E8 in the order of section 1's "The ready state, in order", MP-E10; MP-E9 says what only the owner can do (there is no MP-E11: putting the Mac back is section 7) | the coordinator side and the job service, then the proof Mac | an operator with `hk` and `js`, and the coordinator's deploy owner; then a root shell on the Mac |
-| 2 | MP-X1 to MP-X6 (any time, independent) | the operator's own Mac, signed in to the developer account | the operator |
+| 2 | MP-X1 to MP-X6, all by `hk xcode verify` on the newest archive and on one older release (section 2; any time, independent) | the operator's own Mac, signed in to the developer account | the operator |
 | 3 | MP-M1 (baseline), MP-A1, MP-A6 | the proof Mac | root shell |
 | 4 | MP-I1 to MP-I5 | the proof Mac | root shell; needs the archive of step 2 |
 | 5 | MP-A2 to MP-A5, with MP-E12's check right after MP-A2 | the proof Mac | root shell; the administrator's password from the owner |
@@ -286,169 +286,66 @@ Decides:
 - if `ssh.state` becomes `no_login_user` and the session drops -> real lockout risk; run the proof only with the owner at the Mac (MP-E9).
 
 
-## 2. xcode-push on the operator's Mac (section 2.0)
+## 2. The archive checks on the operator's Mac (section 2.0): `hk xcode verify`
 
-Every step here runs as the operator's normal user in Terminal on the operator's own Mac, not on a proof Mac. Set
-`P=<the proof's scratch directory>` first (see "Where the files go"). All steps
-are read-only on the archive; they only make files under `$P`. Put the newest Xcode `.xip` (and one older release
-if available) at `$P/Xcode_NEW.xip`, in an otherwise empty directory. Use `<node-id>` style placeholders for
-anything host-specific; nothing here needs a farm host. No step runs as root, so no launchd harness is used here (the harness
-of MP-E8 is for the farm-side lane; see the pointer at the end).
-
-Built code is cited as file:line in `crates/hostkeeper-hk/src/xcode_push/`. Design text is `docs/design/maintenance-updates.md`.
-
-### MP-X1. The tools and the macOS-only refusal
-
-- Settles: [V] section 2.0 (`xcode-push` calls Apple tools on macOS only). Run by: the operator, at their Mac.
-- Precondition: none beyond Terminal. `xcodes` is optional (only the version form needs it).
-- Built: `mod.rs:66-69` (`xcodes` from PATH at `:66`; `/usr/sbin/pkgutil`, `/usr/bin/xip`, `/usr/bin/plutil` at `:67-69`); `mod.rs:199` refuses unless the OS is macOS.
-  The built code runs no `shasum` or `curl` (it hashes in Rust and uploads with `ureq`), so the design's "shasum and curl" is stale (P10).
+This section is one command, run as the operator's normal user in Terminal on the operator's own Mac (not a proof Mac, nothing here
+runs as root, and nothing needs a farm host), on the newest Xcode `.xip` and on one older release if one is to hand, one archive per
+run. Both records are attached to the pull request that records the proof results.
 
 ```sh
-mkdir -p $P
-sw_vers; uname -sm
-ls -l /usr/sbin/pkgutil /usr/bin/xip /usr/bin/plutil /usr/bin/xar
-command -v xcodes && xcodes version
-/usr/bin/xip --help 2>&1 | head -20
-man xip | col -b | sed -n 1,60p
+hk xcode verify ~/Downloads/Xcode_NEW.xip
+hk xcode verify ~/Downloads/Xcode_OLDER.xip
 ```
 
-- Record: full `sw_vers`; `uname -sm`; the `ls` lines; the `xcodes` version; the `xip --help` and `man xip` text verbatim.
-- Decides:
-  - if all three absolute paths exist -> correct the design text to name pkgutil, xip and plutil (not shasum or curl).
-  - if `xip` or `pkgutil` is absent or elsewhere on this macOS -> change the paths in `Mac::system` (`mod.rs:67-69`), `tests/golden/xcode_push.txt` and `docs/operations/xcode-releases.md`.
-  - if only `xcodes` is missing -> no change; it is an operator prerequisite (`docs/operations/xcode-releases.md`), and the file form needs no `xcodes`.
-- Expected (a copy of `man xip` from an older macOS, read on the web, not checked on macOS 26): `xip --expand` is documented; no `--list` is documented there.
+It reads the archive and makes nothing but a scratch directory beside it (removed afterwards) and its record,
+`~/.hostkeeper/xcode/<sha256>.json` (mode 0600), which it also prints on stdout, whatever the verdict. It calls no coordinator, takes
+the flag `--apple-root <file.cer>` (Apple's root certificate; without it, `hk` fetches it over HTTPS from
+`https://www.apple.com/appleca/AppleIncRootCertificate.cer`, and `--timeout-secs` bounds that fetch), needs about three times the archive's size free on the archive's
+volume, and takes as long as the expansion does. The exit is 0 on the verdict `pass` and 1 on `fail: <the first check that failed>`;
+a failure still leaves the whole record. `hk xcode verify --help` says each check
+(`docs/design/xcode-one-action.md` section 5.1 is the design; the code is `crates/hostkeeper-hk/src/xcode_verify/`).
 
-### MP-X2. Apple's signature, the positive case
+Each step that earlier versions of this runbook listed is one part of the record. The step names stay, because the results table
+of the design (`docs/design/maintenance-updates.md` section 10) cites them:
 
-- Settles: [V] section 2.0 step 2 (and 2.4 "check Apple's signature").
-- Run by: the operator, at their Mac. Precondition: a genuine Apple `.xip` at `$P/Xcode_NEW.xip`.
-- Built: argv `/usr/sbin/pkgutil --check-signature <path>`, stdin null (`signature.rs:116-127`). The verdict wants the line `Status: signed Apple Software`
-  exactly (`signature.rs:27`), a last chain entry named `Apple Root CA` (`signature.rs:30`) and its SHA-256 fingerprint (`signature.rs:34`).
+| Step | What it settles | Where the record has it |
+|---|---|---|
+| MP-X1 | [V] section 2.0: Apple's programs are where `Mac::system` says, `xcodes` is optional, the push refuses off macOS | `macos` (`sw_vers`, `uname -sm`), `programs` (every program's path and whether it is a file, `xcodes version`, the first lines of `xip --help`) |
+| MP-X2 | [V] section 2.0 step 2 and 2.4: `pkgutil --check-signature` on a real archive | `signature`: exit, stdout, stderr, status, every chain entry in order, and `apple_root` (Apple's published root: its SHA-256 fingerprint, its subject, the constant beside it, whether they are equal) |
+| MP-X3 | [V] section 2.0 step 2: a damaged archive fails | `tamper`: a copy-on-write clone with the byte at its middle changed, a 16-byte file that is no archive, and a package of the Command Line Tools: what `pkgutil` and `xip --expand` said of each |
+| MP-X4 | [V] section 2.0 step 3 and 2.2: whether the version can be read without expanding | `toc`: `xip --list`, `xar -tf`, `xar --dump-toc`, the `Metadata` member, and whether a name or the text names a version or build. For the record only: the expanded app stays the authority |
+| MP-X5 | [V] section 2.0 step 3: the expansion and the version read | `expansion`: free space before and after, `xip --expand`'s exit and output, the seconds it took (recorded, never judged), the apps, `Contents/`, `version.plist`, both `plutil` runs, `codesign --verify --deep --strict` and `spctl --assess` |
+| MP-X6 | [V] section 2.0 / 2.3: an encrypted or Apple Archive form of Xcode | `archive.kind` (the first four bytes: `xar!`, `AA01`, `AEA1`) and which of `archiveutil`, `aa` and `aea` exist (`programs.optional`) |
 
-```sh
-cd $P && sw_vers > x2.txt
-/usr/sbin/pkgutil --check-signature Xcode_NEW.xip > x2-sig.txt 2> x2-sig.err; echo "exit=$?" >> x2.txt
-cat x2.txt x2-sig.txt x2-sig.err
-grep -n -E '^ *Status:' x2-sig.txt
-grep -n -E '^ *[0-9]+\. ' x2-sig.txt
-grep -n -A3 'SHA256 Fingerprint' x2-sig.txt | tail -6
-curl -fsSL -o AppleIncRootCertificate.cer https://www.apple.com/appleca/AppleIncRootCertificate.cer
-openssl x509 -inform der -in AppleIncRootCertificate.cer -noout -fingerprint -sha256 -subject
-```
+Record, for each run: the whole JSON, with the archive's name and never the archive (the record's `macos` and `hk` say where and with
+what it ran), and the exact command. A run that could not be made is `cannot be shown, because <reason>`.
 
-- Record: exit code; whole stdout and stderr; the Status line; every chain name in order; the last entry's fingerprint; the fingerprint of Apple's published root; archive name and macOS version for each archive tried.
-- Decides:
-  - if exit 0, the status is `signed Apple Software` and the last entry is `Apple Root CA` with the constant's fingerprint -> claim proven; `signature.rs` unchanged.
-  - if exit 0 but the status wording differs -> change `SIGNED_BY_APPLE` (`signature.rs:27`) and the design wording; do not widen to developer-signed statuses; update `xcode_push/tests.rs` and the golden.
-  - if the last entry's name or fingerprint differs -> change `APPLE_ROOT_CA` / `APPLE_ROOT_CA_SHA256` (`signature.rs:30,34`) to what the openssl cross-check shows; if releases end at several roots, accept an exact list of fingerprints, not a name prefix.
-  - if the fingerprint rows are laid out differently -> fix `parse()` (`signature.rs:65-91`) and add the real output as a fixture (it fails closed meanwhile).
-  - if exit non-zero or "no signature" for a genuine archive -> redesign section 2.0 step 2 and 2.4 for that archive kind; use MP-X5 and MP-X6 results.
-- Expected (recalled, not checked): chain Software Signing -> Apple Code Signing Certification Authority -> Apple Root CA, and the status text above. The certificate list the code cites is https://www.apple.com/certificateauthority/.
+What the old "Decides" lines became. Each is the behaviour of `hk xcode verify` and a test of it in
+`crates/hostkeeper-hk/tests/cli/xcode_verify.rs` and `xcode_verify_checks.rs`, run on fake programs on Linux in every pull request;
+what no test can do is run Apple's programs on a real archive (`AGENTS.md` B9), which is this run:
 
-### MP-X3. Negative cases for the signature check
-
-- Settles: [V] section 2.0 step 2 ("anything else stops the push and uploads nothing"). Run by: the operator, at their Mac.
-- Precondition: MP-X2 done; free space of at least the archive's size in `$P`.
-- Built: `signature.rs:verdict`; a non-zero exit becomes a stop through `finish()` (`mod.rs:98`).
-
-```sh
-cd $P
-printf 'not an archive\n' > fake.xip
-/usr/sbin/pkgutil --check-signature fake.xip; echo "exit=$?"
-cp Xcode_NEW.xip corrupt.xip
-printf 'X' | dd of=corrupt.xip bs=1 seek=100000000 conv=notrunc 2>/dev/null
-/usr/sbin/pkgutil --check-signature corrupt.xip; echo "exit=$?"
-ls /Library/Developer/CommandLineTools/Packages/*.pkg 2>/dev/null && /usr/sbin/pkgutil --check-signature /Library/Developer/CommandLineTools/Packages/*.pkg 2>&1 | head -20   # only if present
-```
-
-- Record: exit code and full output of each case. If a developer-signed `.pkg` (any third-party installer) is at hand, add its output.
-- Decides:
-  - if `fake.xip` and `corrupt.xip` exit non-zero or show another status -> claim holds; keep as is.
-  - if `corrupt.xip` exits 0 with `signed Apple Software` -> the signature does not cover the bytes; say so in section 2.0, and make the expansion (MP-X5) and the SHA-256 the coordinator recomputes the integrity check; the daemon's 2.4 check must rely on `xip --expand` exit 0, not on pkgutil alone.
-  - if a developer-signed package ends at Apple Root CA but has another status -> confirms `verdict()` needs both status and chain; cite it in the design.
-- Expected (recalled, not checked): a damaged archive reports a checksum that did not verify (forum thread https://developer.apple.com/forums/thread/667468).
-- Cleanup by hand afterwards: `rm $P/fake.xip $P/corrupt.xip`.
-
-### MP-X4. Can the version and build be read without expanding?
-
-- Settles: [V] section 2.0 step 3 and 2.2 ("xip lists it before it expands"). Run by: the operator, at their Mac.
-- Built: none. `archive.rs:155` (`release`) expands first, then reads the plists (MP-X5). The design's "xip lists it" has no built counterpart.
-
-```sh
-cd $P
-/usr/bin/xip --list Xcode_NEW.xip > x4-list.txt 2>&1; echo "exit=$?"; head -5 x4-list.txt
-/usr/bin/xar -tf Xcode_NEW.xip 2>&1 | head -20
-/usr/bin/xar --dump-toc=toc.xml -f Xcode_NEW.xip; head -c 3000 toc.xml
-mkdir -p meta && cd meta && /usr/bin/xar -xf ../Xcode_NEW.xip Metadata; file Metadata; (plutil -p Metadata || head -c 2000 Metadata)
-/usr/bin/xar -tf ../Xcode_NEW.xip | grep -i -E 'Info.plist|version.plist'; echo "grep-exit=$?"
-```
-
-- Record: each command's exit and output; keep every `<name>`, `<size>`, `<checksum>` and signature element of `toc.xml`; the whole `Metadata` text; whether any member name holds a version or build.
-- Decides:
-  - if there is no `--list`, no `Info.plist` member and `Metadata` has no version -> rewrite 2.2's "xip lists it" to say the fetcher expands first; keep `archive.rs:release`; the daemon's stage free-space check must include the expansion size.
-  - if `Metadata` or the TOC carries the version -> use it only as a cheap advisory unless MP-X3 showed it is inside the signed region; `ProductBuildVersion` after expansion stays the authority; keep the order (signature first).
-  - if only the file name carries it -> never trust it; say so in section 2.0 step 3.
-- Expected (a copy of `man xip` from an older macOS, not checked on macOS 26): only `--expand`. Expected (recalled, not checked): a `.xip` is a xar (https://developer.apple.com/forums/thread/133985) with `Metadata` and `Content` members.
-- Cleanup by hand: `rm -r $P/meta`.
-
-### MP-X5. The built expansion and version read, exactly
-
-- Settles: [V] section 2.0 step 3 (and the same expansion in 2.4, daemon, as root). Run by: the operator, at their Mac.
-- Precondition: free space of 12-20 GB beyond the archive (check with `df -h`); MP-X2 passed.
-- Built: `archive.rs:173-181`: `/usr/bin/xip --expand <absolute archive>`, current directory `<archive dir>/.hk-xcode-push-expansion` (`EXPANSION`, `archive.rs:148`), stdin null; exactly one `*.app`
-  (`archive.rs:183-195`); then `/usr/bin/plutil -extract <key> raw -o - <file>` (`archive.rs:134-140`) for `CFBundleShortVersionString` in `Contents/Info.plist` (digits and dots only) and `ProductBuildVersion` in `Contents/version.plist`.
-
-```sh
-cd $P && df -h . > x5.txt; ls -l Xcode_NEW.xip >> x5.txt; cat x5.txt
-mkdir .hk-xcode-push-expansion && cd .hk-xcode-push-expansion
-time /usr/bin/xip --expand "$HOME/hk-proof/Xcode_NEW.xip"; echo "exit=$?"
-ls -d *.app | wc -l
-/usr/bin/plutil -extract CFBundleShortVersionString raw -o - *.app/Contents/Info.plist; echo "exit=$?"
-/usr/bin/plutil -extract ProductBuildVersion raw -o - *.app/Contents/version.plist; echo "exit=$?"
-ls *.app/Contents/ | head -20
-codesign --verify --deep --strict *.app; echo "codesign-exit=$?"
-spctl --assess --type execute -vv *.app 2>&1 | head -5
-cd .. && rm -r .hk-xcode-push-expansion
-```
-
-- Record: `sw_vers`; free space; archive size; the xip exit and any `signature` or `checksum` text it prints; time; the number of `.app` entries and the app name; both plutil outputs and exits; whether `version.plist` exists; codesign and spctl results (extra evidence, not built in hk).
-- Decides:
-  - if one app, `27.2`-style version and a build string -> claim proven; `archive.rs:release` stays.
-  - if the version is not digits-and-dots, or the key lives in another file -> change `release` and `is_version` (`archive.rs`) and the design and `docs/operations/xcode-releases.md`.
-  - if `ProductBuildVersion` is absent from `version.plist` -> change the build key or file in `release`; check `crates/hostkeeper-daemon/src/maintenance_xcode.rs` reads the same key.
-  - if xip itself fails on trust or signature -> record the message; 2.4's expansion must run the way that works, and the design must say who runs it (see MP-X7).
-  - if none or several apps -> hk stops with `holds N apps, not one Xcode`; change the design only if Apple's layout really has two.
-  - if it runs out of disk or takes impractically long -> add a `df` check before the expansion in `archive.rs:release` and document the space in `docs/operations/xcode-releases.md`.
-- Expected (a copy of `man xip` from an older macOS, not checked on macOS 26): `xip --expand` verifies the signature as it expands. Expected (recalled, not checked): `plutil -extract <keypath> raw -o - <file>` prints one raw value (`man plutil`).
-
-### MP-X6. An encrypted or Apple Archive form of Xcode
-
-- Settles: [V] section 2.0 / 2.3 ("newer releases, Apple's encrypted archive format"). Run by: the operator, at their Mac, signed in to the Apple developer account; a two-factor prompt is answered at the keyboard.
-- Built: `archive.rs:56-60` (`xcodes download <version> --directory <dir>`); the filter at `archive.rs:71` keeps only `.xip`. Anything else stops with "left no .xip". The `aea`/`archiveutil` argv below are **design argv, not built**.
-
-```sh
-cd $P && mkdir -p dl
-xcodes list 2>&1 | head -15
-xcodes download NEW --directory $P/dl; echo "exit=$?"
-ls -l dl
-cd dl && for f in *; do echo "== $f"; file "$f"; head -c 16 "$f" | xxd; /usr/sbin/pkgutil --check-signature "$f" 2>&1 | head -8; done
-ls /usr/bin/archiveutil /usr/bin/aa /usr/bin/aea 2>&1
-for f in *.aea; do [ -e "$f" ] && /usr/bin/aea id -i "$f"; done
-```
-
-- Record: the exact file name and extension; magic bytes (`xar!` for xar, `AA01` for Apple Archive, `AEA1` for Apple Encrypted Archive); which of `archiveutil`, `aa`, `aea` exist (test `archiveutil` first, as the other design sections do); for any non-`.xip`, what the download page calls it and whether it needs a key fetched from a URL.
-- Decides:
-  - if Apple ships the release only as `.xip` (magic `xar!`) -> delete or soften "newer releases ... encrypted archive format" in the design (section 2.1, and 2.4 step 1); `archive.rs` unchanged.
-  - if a `.aar` or `.aea` exists -> sections 2.0 steps 2-3 and 2.4 need that variant: new code in `archive.rs` (the download filter, the expansion command, a different signature check, the store's `<sha256>.xip` name in `docs/operations/xcode-releases.md`); copy the commands from this output, do not invent them.
-  - if `xcodes` calls a helper tool for such archives -> name that dependency in `docs/operations/xcode-releases.md`.
-- Expected (recalled, not checked): only `.xip` for Xcode; `man aa` and `man aea` exist on macOS 12 and later (https://developer.apple.com/documentation/applearchive).
-- Cleanup by hand: `rm -r $P/dl`, then `rm` the remaining files of `$P`.
+- The verdict is `pass` only when the kind is `xar!`; `pkgutil` exits 0 with the status `signed Apple Software` and a chain ending at
+  `Apple Root CA` by its fingerprint; Apple's published root has the fingerprint the code holds; `xip --expand` refuses the damaged
+  clone and the non-archive; and the expansion is one app with a version and a build that `codesign` passes. A different status
+  wording, root name or fingerprint layout in `pkgutil`'s output fails the signature (`signature.rs` fails closed), and a published
+  root unlike the constant fails it too.
+- `pkgutil` accepting the damaged clone does not fail the verdict, since the check is left to `xip --expand`; it is recorded, and it is
+  what to read for whether the signature covers the bytes. `xip --expand` accepting it fails the verdict.
+- A volume that cannot clone says `not run, the volume cannot clone` in `tamper.damaged_clone` and still passes, never a silent skip.
+- `toc`, `spctl` and the seconds are recorded and never fail the verdict.
+- If the real output of a program differs from what the code's fixtures hold (a new layout of `pkgutil`'s report, a version in
+  another property list, a new status), the record's text becomes the new fixture in the same pull request as the code that reads it.
+  Change the paths in `Mac::system` (`xcode_push/mod.rs`), `tests/golden/xcode_push.txt` and `docs/operations/xcode-releases.md` when a
+  program is elsewhere on this macOS.
+- If `programs.xcodes` shows no `xcodes`, nothing changes: it is an operator prerequisite of `hk xcode-push <version>`
+  (`docs/operations/xcode-releases.md`), and the file form needs none.
+- If `archive.kind` is `AA01` or `AEA1` (or the download page offers a `.aar` or `.aea`), the run fails at the kind and the design's
+  sections 2.0 and 2.4 need that variant: new code, with the commands copied from the record of `programs.optional` and `archiveutil`,
+  never invented.
 
 ### MP-X7. Pointer: the same read as root with nobody logged in
 
-Not a step here. Whether `pkgutil --check-signature` and `xip --expand` work as root under launchd with no login session is settled on a proof Mac in section 3, with the harness of MP-E8, using the outputs of MP-X2 and MP-X5 as the baseline. Nothing in the daemon runs `xip` yet.
+Not a step here. Whether `pkgutil --check-signature` and `xip --expand` work as root under launchd with no login session is settled on a proof Mac in section 3, with the harness of MP-E8, using the `signature` and `expansion` of the records of section 2 as the baseline. Nothing in the daemon runs `xip` yet.
 
 ## 3. The Xcode install, swap and removal on the proof Mac (section 2.4)
 

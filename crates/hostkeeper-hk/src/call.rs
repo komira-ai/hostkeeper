@@ -99,7 +99,7 @@ pub(crate) fn is_reason(reason: &[u8]) -> bool {
 }
 
 /// The trust anchors of the certificates in `der`.
-fn from_der(der: &[Vec<u8>]) -> Vec<Certificate<'static>> {
+pub(crate) fn from_der(der: &[Vec<u8>]) -> Vec<Certificate<'static>> {
     der.iter()
         .map(|der| Certificate::from_der(der).to_owned())
         .collect()

@@ -1,0 +1,36 @@
+hk xcode verify [--apple-root FILE] <archive.xip>
+    Checks an Xcode archive on the operator's own Mac, as the operator's user; macOS only. It
+    reads the archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside
+    it (removed afterwards) and its record; it asks no coordinator. In order, ending at the first
+    check that fails (the parts after it are null in the record):
+    1. The programs: sw_vers and uname -sm; each program's path must be a file (pkgutil, xip,
+       plutil, codesign, spctl, xar, sw_vers, uname, cp, df); xcodes version; the first lines
+       of xip --help; which of archiveutil, aa and aea exist.
+    2. The archive's kind, from its first four bytes: xar! (a .xip) goes on; AA01 (Apple
+       Archive) and AEA1 (Apple Encrypted Archive) fail.
+    3. pkgutil --check-signature must exit 0, say signed Apple Software and name a chain ending
+       at Apple Root CA by its SHA-256 fingerprint. Apple's published root certificate, from
+       --apple-root or fetched over HTTPS from https://www.apple.com/appleca/ and trusted by the
+       system's roots, must have the SHA-256 fingerprint the program holds; its fingerprint and
+       subject are recorded.
+    4. A copy-on-write clone of the archive (cp -c) with the byte at its middle changed, and a
+       16-byte file that is no archive: pkgutil --check-signature and xip --expand are run on
+       each and recorded; xip --expand must exit non-zero on both (pkgutil's answer is only
+       recorded). A volume that cannot clone records `not run, the volume cannot clone` for the
+       clone and does not fail. A package of the Command Line Tools is checked by pkgutil too,
+       when there is one, for the record.
+    5. For the record only: xip --list, xar -tf, xar --dump-toc and the Metadata member.
+    6. The expansion: xip --expand in the scratch directory, with the seconds it took (recorded,
+       never judged); exactly one .app; its version (CFBundleShortVersionString) and build
+       (ProductBuildVersion) read with plutil; codesign --verify --deep --strict must exit 0;
+       spctl --assess is recorded.
+    Before each expansion the volume of the archive must have three times the archive's size
+    free (df -Pk), else the check fails with free_space_short.
+
+The verdict is pass, or fail: <the first check that failed>. The record, JSON with the key
+"record": "hk-xcode-verify-v1", is written to $HOME/.hostkeeper/xcode/<sha256>.json (mode 0600)
+whatever the verdict, replacing the file that is there, and printed on stdout. The exit is 0 on
+pass and 1 otherwise.
+
+--apple-root FILE is Apple's root certificate (DER or PEM). The global flag --timeout-secs limits
+the fetch of that certificate; the other global flags are not used.

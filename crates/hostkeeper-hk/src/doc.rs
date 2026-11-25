@@ -5,11 +5,11 @@ use std::fmt::Write as _;
 
 use hostkeeper_proto::ctl::{Command, Input};
 
-use crate::PROGRAM;
 use crate::help::RULES;
 use crate::table::{
     DEFAULT_TIMEOUT_SECS, EXIT_CODES, GLOBALS, MEANINGS, field_flags, is_served, shape,
 };
+use crate::{PROGRAM, hand};
 
 /// A text as one cell of a Markdown table: one line, `|` escaped.
 fn cell(text: &str) -> String {
@@ -19,8 +19,30 @@ fn cell(text: &str) -> String {
         .replace('|', "\\|")
 }
 
+/// The hand-written methods of `service` ([`hand`]), after its generated ones: each with its doc
+/// and its own flags, and no gateway path, since none is called.
+fn hand_methods(out: &mut String, service: &str) {
+    for method in hand::of(service) {
+        let _ = write!(
+            out,
+            "\n#### `{PROGRAM} {} {}`\n\n{}\n",
+            method.service, method.method, method.doc
+        );
+        out.push_str("\n| flag | value | meaning |\n|---|---|---|\n");
+        for flag in method.flags {
+            let _ = writeln!(
+                out,
+                "| `{}` | {} | {} |",
+                flag.name,
+                cell(flag.value),
+                cell(flag.help)
+            );
+        }
+    }
+}
+
 /// `docs/cli.md` for `commands`: the rules, the global flags, the exit codes and every command
-/// [`is_served`] keeps, with its flags.
+/// [`is_served`] keeps, with its flags, and after the methods of a service its hand-written ones.
 pub fn markdown(commands: &[Command]) -> String {
     let mut out = String::from(
         "# hk\n\n\
@@ -69,6 +91,7 @@ pub fn markdown(commands: &[Command]) -> String {
     let mut service = "";
     for command in commands.iter().filter(|c| is_served(c)) {
         if command.service_command != service {
+            hand_methods(&mut out, service);
             service = command.service_command;
             let _ = write!(
                 out,
@@ -107,6 +130,7 @@ pub fn markdown(commands: &[Command]) -> String {
             let _ = writeln!(out, "\nThrough `--request` only: {}.", file_only.join(", "));
         }
     }
+    hand_methods(&mut out, service);
     // No line ends in a space, which an editor would strip.
     out.lines().map(|l| format!("{}\n", l.trim_end())).collect()
 }

@@ -274,3 +274,55 @@ fn the_doc_check_reads_settings_init() {
         ["docs/x.md: `hk settings init --force`: settings has no flag --force"]
     );
 }
+
+/// Catches the doc check refusing `hk xcode verify` as hk takes it (in a fenced line, with no
+/// endpoint, or in a span, `--help` and a global flag too), and passing it with no archive, two,
+/// `--apple-root` twice or without a value, a flag it has not, or in a span with a flag it has
+/// not; and catches it passing another method of `xcode` that is not in the table.
+#[test]
+fn the_doc_check_reads_xcode_verify() {
+    let good = fenced("hk xcode verify ~/Downloads/Xcode_27.2.xip")
+        + &fenced("hk xcode verify --apple-root root.cer ~/Downloads/Xcode_27.2.xip")
+        + &fenced("hk --timeout-secs 30 xcode verify --apple-root=root.cer a.xip")
+        + &fenced("hk xcode verify --help")
+        + "`hk xcode verify <archive.xip>`, `hk xcode verify --apple-root FILE`, \
+           `hk xcode verify --timeout-secs 5 --help` and `hk xcode verify`.\n";
+    assert_eq!(doc_problems("docs/x.md", &good), Vec::<String>::new());
+    assert_eq!(
+        command_of("hk xcode verify a.xip"),
+        Ok(Some("xcode verify".to_owned()))
+    );
+    let one = "hk xcode verify takes the path of one archive (~/Downloads/Xcode_27.2.xip)";
+    let cases = [
+        ("hk xcode verify", one),
+        ("hk xcode verify a.xip b.xip", one),
+        ("hk xcode verify --apple-root r.cer", one),
+        (
+            "hk xcode verify --apple-root r.cer --apple-root r.cer a.xip",
+            "--apple-root is given twice",
+        ),
+        (
+            "hk xcode verify a.xip --apple-root",
+            "--apple-root needs a value",
+        ),
+        (
+            "hk xcode verify --force a.xip",
+            "hk xcode verify has no flag --force",
+        ),
+        (
+            "hk xcode add a.xip",
+            "the service xcode has no method add; 'hk xcode --help' lists them",
+        ),
+    ];
+    for (line, problem) in cases {
+        let error = command_of(line).expect_err(line);
+        assert_eq!(error, format!("{line}\n{problem}"));
+    }
+    assert_eq!(
+        doc_problems("docs/x.md", "`hk xcode verify --force` and `hk xcode add`"),
+        [
+            "docs/x.md: `hk xcode verify --force`: xcode verify has no flag --force",
+            "docs/x.md: `hk xcode add`: the service xcode has no method add"
+        ]
+    );
+}

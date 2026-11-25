@@ -11,6 +11,9 @@
 //!   each that exists; a directory that exists keeps the mode it has.
 //! - [`Home::create_file`] makes a new file with mode 0600, whatever the umask, and refuses to
 //!   replace one.
+//! - [`Home::replace_file`] makes the file the same way and puts it in the place of one that is
+//!   there (a record that is kept up to date), through a new file renamed over the old, so a
+//!   reader never sees half of one.
 //!
 //! Any verb that writes under `~/.hostkeeper` goes through `ensure` first. This is the one place
 //! that makes these directories and files; it is not used by `hk ssh`, whose state is in
@@ -173,5 +176,22 @@ impl Home {
             return Err(Stop::fail(format!("cannot write {shown}: {error}")));
         }
         Ok(())
+    }
+
+    /// Makes the file `path` with mode 0600 holding `bytes`, in the place of what is there: the
+    /// bytes are written to a new file beside it, which is renamed over `path`. A leftover of an
+    /// earlier try is removed first, and nothing is left behind when the rename fails.
+    pub(crate) fn replace_file(&self, path: &Path, bytes: &[u8]) -> Flow<()> {
+        let mut name = path.as_os_str().to_owned();
+        name.push(".new");
+        let new = PathBuf::from(name);
+        // A leftover that is not there is not a failure; one that cannot be removed is said by
+        // the creation below.
+        let _ = std::fs::remove_file(&new);
+        self.create_file(&new, bytes)?;
+        std::fs::rename(&new, path).map_err(|error| {
+            let _ = std::fs::remove_file(&new);
+            Stop::fail(format!("cannot replace {}: {error}", path.display()))
+        })
     }
 }

@@ -488,6 +488,15 @@ fn span_problems(span: &str, globals: &[Global]) -> Vec<String> {
         .iter()
         .find(|c| c.service_command == service && c.method_command == method)
     else {
+        if let Some(own) = hk::hand_method(service, method) {
+            // A hand method of the service: its flags are its own and hk's.
+            return words
+                .filter(|w| w.starts_with("--") && *w != "--help")
+                .map(|w| w.split('=').next().unwrap_or(w))
+                .filter(|f| !own.contains(f) && !is_global(f))
+                .map(|f| format!("`{span}`: {service} {method} has no flag {f}"))
+                .collect();
+        }
         return vec![format!(
             "`{span}`: the service {service} has no method {method}"
         )];

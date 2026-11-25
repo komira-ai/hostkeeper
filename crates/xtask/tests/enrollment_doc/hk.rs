@@ -389,6 +389,18 @@ pub(crate) const HAND_VERBS: &[&str] = &[
     "settings",
 ];
 
+/// The methods of a generated service that hk has by hand (`hostkeeper_hk`'s `hand.rs`): the
+/// service, the method and the flags of its own.
+pub(crate) const HAND_METHODS: &[(&str, &str, &[&str])] = &[("xcode", "verify", &["--apple-root"])];
+
+/// The flags of its own of the hand method `method` of `service`, when it is one.
+pub(crate) fn hand_method(service: &str, method: &str) -> Option<&'static [&'static str]> {
+    HAND_METHODS
+        .iter()
+        .find(|(s, m, _)| *s == service && *m == method)
+        .map(|(.., flags)| *flags)
+}
+
 /// What `hk xcode-push` says when it is not given exactly one version or archive.
 const XCODE_PUSH_ONE: &str = "hk xcode-push takes one Xcode version (27.2) or the path of an \
                               archive (~/Downloads/Xcode_27.2.xip)";
@@ -543,6 +555,41 @@ fn settings(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
     Ok(Parsed::Call("settings".to_owned()))
 }
 
+/// What `words` (the words after `xcode verify`) ask for: one archive, `--apple-root` once with
+/// a value, and the global flags, none of which it needs; in hk's words.
+fn xcode_verify(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut paths = 0;
+    let mut root = false;
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if flag == "--apple-root" {
+            let (_, took) = arg(flag, &words[at..])?;
+            if std::mem::replace(&mut root, true) {
+                return Err("--apple-root is given twice".to_owned());
+            }
+            at += took;
+        } else if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk xcode verify has no flag {flag}")),
+            }
+        } else {
+            paths += 1;
+            at += 1;
+        }
+    }
+    if paths != 1 {
+        return Err(
+            "hk xcode verify takes the path of one archive (~/Downloads/Xcode_27.2.xip)".to_owned(),
+        );
+    }
+    Ok(Parsed::Call("xcode verify".to_owned()))
+}
+
 /// What `words` (the words after `tailnet-wait`) ask for: `--attempts` and `--interval-secs`,
 /// each once with a whole number in its range, no argument, no credential and no
 /// `--response-file`, and the endpoint and the CA file; in hk's words.
@@ -663,6 +710,9 @@ pub(crate) fn parse(
         if service == "ssh" {
             // Not a method of the service `ssh`: a host id.
             return hand(&mut line, service, &words[at..]);
+        }
+        if hand_method(service, method).is_some() {
+            return xcode_verify(&mut line, &words[at + 1..]);
         }
         return Err(format!(
             "the service {service} has no method {method}; 'hk {service} --help' lists them"

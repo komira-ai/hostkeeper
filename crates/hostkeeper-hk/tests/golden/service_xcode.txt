@@ -1,0 +1,11 @@
+hk xcode: the service `Xcode` of the package `hostkeeper.operator.v1`. The Xcode store. `Remove` is audited as `xcode_remove` under the caller's name, with the caller's reason, and the archive's version, build and SHA-256 as its subject; `List` changes nothing and writes no audit entry.
+
+Usage: hk [global flags] xcode <method> [flags]
+
+Methods:
+  list
+      The archives the store holds, newest release first, the release of the daily list of Xcode releases that the store does not hold yet (the one the alert `xcode_release_waiting` names), how many releases the store keeps and the most bytes one upload may be. Changes nothing and is not audited. A coordinator started without `--xcode-dir` answers `configured` false.
+  remove
+      Removes one archive from the store, by its SHA-256, and writes the audit entry `xcode_remove` first: when the entry cannot be written nothing is removed. The version the archive held is free for an upload of another build afterwards.
+  verify
+      Checks an Xcode archive on the operator's own Mac, macOS only, and writes the record of what it found to ~/.hostkeeper/xcode/<sha256>.json, mode 0600, and to stdout: the programs, the archive's kind, Apple's signature and published root, a damaged copy and a file that is no archive, the archive's table of contents, and the expansion with the version and build read from the app. Not a gateway call: no coordinator is asked. Exits 0 when the verdict is pass and 1 otherwise; `hk xcode verify --help` says each check.

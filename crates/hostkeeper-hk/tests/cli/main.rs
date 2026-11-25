@@ -21,6 +21,10 @@
 //!   answer of every one through the real gateway of an empty coordinator;
 //! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
 //! - `xcode_push`: `hk xcode-push`, on stand-ins for the Mac's programs and a fake Xcode store;
+//! - `verify_rig`: what the next two share, the stand-ins of the Mac's programs for `hk xcode verify`, a
+//!   clock of the tests' own and a root certificate of their own making;
+//! - `xcode_verify`: `hk xcode verify`'s record, arguments, refusals and help;
+//! - `xcode_verify_checks`: its verdict, check by check;
 //! - `tailnet_wait`: `hk tailnet-wait`, its probe of a loopback server, its recorded waits and its
 //!   rejoin through a stand-in `tailscale`.
 
@@ -40,5 +44,8 @@ mod ssh;
 mod surface;
 mod tailnet_wait;
 mod transport;
+mod verify_rig;
 mod xcode;
 mod xcode_push;
+mod xcode_verify;
+mod xcode_verify_checks;

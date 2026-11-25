@@ -1,6 +1,7 @@
 # Adding an Xcode in one action
 
-Status: design. Nothing here is built. It changes how an operator brings a new Xcode into the store of
+Status: design. Built so far: `hk xcode verify` and its record (section 5, X2), as a hand-written method of the generated
+service `xcode` (section 2.7 last paragraph). Nothing else here is built. It changes how an operator brings a new Xcode into the store of
 [maintenance-updates.md](maintenance-updates.md) section 2.0 (Built: `hk xcode-push`, `crates/hostkeeper-hk/src/xcode_push/`;
 the store and its route, `crates/hostkeeper-coordinator/src/xcode_put.rs` and `xcode_store.rs`), and how the Mac proof's
 operator-side steps are run ([mac-proof.md](../operations/mac-proof.md) MP-X1 to MP-X6). Facts about this repository were read on

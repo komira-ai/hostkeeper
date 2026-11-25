@@ -3,7 +3,8 @@
 //! table; `--help` at each level prints that level's help; and the commands that are not
 //! gateway calls (`ssh`, `ssh-proxy`, `ssh-revoke`, `ssh-status`, `ssh-known-host`) are handed
 //! to the ssh module after the checks of their global flags, and `xcode-push`, `settings` and
-//! `tailnet-wait` to their modules. The verbs that use `--endpoint`, `--ca-file` and `--token-file`
+//! `tailnet-wait` to their modules. A method of a generated service that is written by hand
+//! (`xcode verify`, [`crate::hand`]) is run by its own function. The verbs that use `--endpoint`, `--ca-file` and `--token-file`
 //! take what they lack from the settings file first ([`crate::settings::fill`]).
 
 use std::ffi::OsString;
@@ -111,6 +112,9 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
         .iter()
         .find(|c| c.method_command.as_bytes() == method.as_slice());
     let Some(command) = found else {
+        if let Some(hand) = crate::hand::find(service, method) {
+            return (hand.run)(w, globals, after);
+        }
         if service == b"ssh" {
             // Not a method of the service `ssh`: a host id.
             return ssh_main(w, globals, service, tail.get(at..).unwrap_or_default());
