@@ -49,6 +49,7 @@ fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<RecordingLog>) {
         prerequisites: None,
         maintenance: None,
         bmc: None,
+        serial_console: None,
     };
     (links.heartbeater(&daemon), link, log)
 }

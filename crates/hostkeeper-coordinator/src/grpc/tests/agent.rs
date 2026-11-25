@@ -69,6 +69,7 @@ pub(super) fn request(
         operator_keys: None,
         prerequisites: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     }
 }

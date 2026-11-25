@@ -55,6 +55,7 @@ ui_files![
     "lab.js",
     "health.js",
     "fulldisk.js",
+    "serialbaseline.js",
     "sleds.js",
     "sledpanels.js",
     "rackforms.js",

@@ -42,6 +42,7 @@ import {
   scopeLabel, select, table, trimmed,
 } from "../view.js";
 import { accessRows, accessWarning } from "../fulldisk.js";
+import { baselineNotice, baselineRows } from "../serialbaseline.js";
 import { isDegraded, reasonsOf } from "../health.js";
 import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 import { loadSsh, sshPanel } from "../sshpanel.js";
@@ -759,8 +760,10 @@ export async function render(ctx) {
         ["Excluded from", (host.exclusions || []).map((x) => `${x.service} (${x.reason || "-"})`).join(", ") || "-"],
         ...inventoryFacts(ctx, host),
         ...accessRows(host),
+        ...baselineRows(host),
       ], "cols card"),
       accessWarning(host),
+      baselineNotice(host),
       assignedSection(listing, nodeId, ends),
     ],
     services: services.length === 0

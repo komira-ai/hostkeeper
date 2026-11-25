@@ -15,6 +15,11 @@ ca_sha256       = "@@CA_SHA256@@ (64 hex digits)"
 # Where packages are fetched from: an https:// URL.
 release_channel = "@@RELEASE_CHANNEL@@ (an https URL)"
 
+# A Linux server's serial console port (ttyS<n> or ttyAMA<n>; ttyS1 on a farm server, whose
+# BMC carries it): the daemon keeps the serial console baseline on it and reports it
+# (docs/operations/console.md). Leave it out on a host with no serial console.
+# serial_console = "ttyS1"
+
 # Whose attestation every package must carry: one entry for the organisation, none per service.
 [trusted_signers]
 # The GitHub organisation of the repositories whose releases this host installs.

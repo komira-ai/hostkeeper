@@ -184,6 +184,7 @@ fn first_beat() -> Heartbeat {
         prerequisites: None,
         maintenance: None,
         bmc: None,
+        serial_console: None,
     }
 }
 
@@ -220,6 +221,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             maintenance: None,
             maintain: None,
             bmc: None,
+            serial_console: None,
         },
     )
 }
@@ -247,6 +249,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         prerequisites: None,
         maintenance: None,
         bmc: None,
+        serial_console: None,
     }
 }
 

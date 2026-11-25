@@ -276,6 +276,7 @@ impl Node {
             prerequisites: None,
             maintenance,
             bmc: None,
+            serial_console: None,
         };
         self.running = Some(Running {
             heartbeater: links.heartbeater(&daemon),

@@ -17,7 +17,7 @@ The parts, and where each is set up:
 | Who may use the console, the one BMC credential, an address that overrides | [The three files](#the-three-files) |
 | The coordinator can run `ipmitool` | [`ipmitool` beside the coordinator](#ipmitool-beside-the-coordinator) |
 | The BMC carries the serial port at 115.2 kbit/s, and the firmware's screens reach it | [The BMC and the BIOS](#the-bmc-and-the-bios) |
-| The installed system's console, GRUB and login prompt are on `ttyS1` at 115200 baud | [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline) |
+| The installed system's console, GRUB and login prompt are on `ttyS1` at 115200 baud, kept by the host's daemon | [The daemon keeps the serial baseline](#the-daemon-keeps-the-serial-baseline), and by hand [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline) |
 
 The commands of `hk` below reach the coordinator's private listener, as in
 [enrollment.md](enrollment.md): `https://<private-listener>` is its address, `<ca.pem>` the CA
@@ -276,18 +276,70 @@ and, on a Supermicro X10 board, under Advanced, Serial Port Console Redirection,
 port's console redirection with those settings (the menu as Supermicro's manual for the X10 names
 it; not yet read on the farm's boards).
 
+## The daemon keeps the serial baseline
+
+The hostkeeper daemon of a Linux server keeps the baseline (the design, section 5.2) on the port its
+daemon config names, so that a server reinstalled by hand (after a new root disk, say) gets it back
+from its daemon, with no step of its own. Name the port in the config every Linux server gets:
+
+```toml
+serial_console = "ttyS1"
+```
+
+`/etc/hostkeeper/hostkeeper.toml` is the host's own file ([enrollment.md](enrollment.md#bootstrap-a-linux-node));
+the network install writes the same config into every seed ([network-install.md](network-install.md),
+step 3), so put the key in that file too, beside `serve`'s `serial-console = "ttyS1"`. The daemon
+reads the config at its start: restart it (`sudo systemctl restart hostkeeper`) after adding the key.
+A daemon of a release before the key refuses a config that holds it, and does not start, so add the
+key only on a host that runs a release that reads it. Without the key the daemon writes nothing of
+the baseline and reports none.
+
+At its first heartbeat, and every ten minutes after, the daemon looks at the baseline and puts right
+what is not in place, writing only what differs:
+
+- the two files of step 3 below, byte for byte the seed's, `/etc/default/grub.d/99_hostkeeper.cfg`
+  and the getty's drop-in, each written only when it is not already the daemon's user's (root's),
+  mode 0644, holding the baseline's bytes;
+- `update-grub`, when the GRUB file was written or the generated menu (`/boot/grub/grub.cfg`)
+  does not hold `console=ttyS1,115200n8`;
+- `systemctl daemon-reload` when the drop-in was written or systemd has not read it
+  (`NeedDaemonReload`); `serial-getty@ttyS1.service` enabled when it is not, started when it is
+  stopped, and restarted when it runs and its drop-in was written or read since it started (a
+  login on the port at that moment is ended).
+
+On a server whose baseline is in place a look writes nothing and changes nothing. The daemon never
+reboots the server, and never edits another file: settings of other files that win over the
+baseline's (step 2 below) stay until an operator takes them out.
+
+Every heartbeat reports where the baseline stands, as `heartbeat.serialConsole` of the host in `hk
+hosts get` (`port`, `state`, `detail`) and as the **Serial console** row of the host page's
+Overview:
+
+| `state` | What it says, and what to do |
+|---|---|
+| `applied` | The files are in place, the getty runs, and the running kernel's command line holds `console=ttyS1,115200n8`. Nothing to do. |
+| `reboot_pending` | The files are in place and the getty runs: the login prompt is on the Console now, and the kernel's lines from the next boot, as the kernel argument takes effect only at boot. The host page says so. Reboot the server when its work allows, as in steps 1 and 5 to 7 below. |
+| `failed` | A step failed, named by `detail`: `grub_file` or `getty_drop_in` (the file could not be written: a daemon that is not root, or a directory in its place), `update_grub` (it failed, or ran over 40 seconds), `grub_cfg` (the menu `update-grub` made does not hold the argument: a setting of another file overrides it, step 2), `daemon_reload`, `getty`, `getty_enable` or `getty_start` (`systemctl`), `cmdline` (`/proc/cmdline` could not be read). The daemon's log has the line `error: serial_console ttyS1: failed (<detail>)`, written when the state or the detail changes, not at every look. The next look, ten minutes on, tries again. |
+| `unsupported` | The host cannot take the baseline, and nothing was written: `update_grub` (no `/usr/sbin/update-grub`: a distribution whose GRUB reads no `/etc/default/grub.d/`) or `service_manager` (not systemd: an OpenRC host or a Mac). |
+
+The coordinator keeps the last report in memory: after its restart a host shows none until its next
+heartbeat.
+
 ## Moving a server to the serial baseline
 
 A server installed from the network with `serial-console = "ttyS1"`
 ([network-install.md](network-install.md)) has the baseline already: the seed writes the two files
-below and runs the three commands of step 3 (the design, section 5.3). A server installed any other
-way moves to it by hand, with this procedure, after every such install: the baseline lives in files
-on the root disk, so a server reinstalled by hand (after a new root disk, say) comes back without
-it, and its Console stays blank: no kernel console and no login prompt on `ttyS1`. The procedure is
-the same for every Ubuntu server; run it on **one server at a time**. On a fresh install step 2 can
-find nothing to take out (and `/etc/default/grub.d/` may hold no `.cfg` file at all, so `grep` says
-so); the login prompt is on the Console as soon as step 3 has restarted the getty, and the kernel's
-lines from the reboot of step 5 on.
+below and runs the three commands of step 3 (the design, section 5.3). A server whose daemon config
+names the port gets the files and the getty from its daemon
+([The daemon keeps the serial baseline](#the-daemon-keeps-the-serial-baseline)), and needs steps 1,
+2 and 4 to 7 only: the check for settings that win over the baseline's, and the reboot. A server
+whose daemon cannot keep it moves to it by hand, with this procedure, after every install that is
+not the network's: the baseline lives in files on the root disk, so a server reinstalled by hand
+comes back without it, and its Console stays blank: no kernel console and no login prompt on
+`ttyS1`. The procedure is the same for every Ubuntu server; run it on **one server at a time**. On
+a fresh install step 2 can find nothing to take out (and `/etc/default/grub.d/` may hold no `.cfg`
+file at all, so `grep` says so); the login prompt is on the Console as soon as step 3 has restarted
+the getty, and the kernel's lines from the reboot of step 5 on.
 
 1. **Take the server out of placement first.** A reboot (step 5) stops every service on it, so
    stop what places work on it and let its jobs drain, and announce the reboot to the people who
@@ -444,7 +496,7 @@ of the firmware.
 
 | What you see | Why, and the fix |
 |---|---|
-| A blank terminal, and after `console-quiet-s` "No output yet: the host's serial port must be ttyS1." | The installed system's console or login prompt is not on `ttyS1`. [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline). [`hk console probe`](#probing-a-console) says `SILENT`; probed across a reboot, a host with the baseline shows `KERNEL_OUTPUT` and `LOGIN_PROMPT`. |
+| A blank terminal, and after `console-quiet-s` "No output yet: the host's serial port must be ttyS1." | The installed system's console or login prompt is not on `ttyS1`. The host page's **Serial console** row says where the daemon's baseline stands ([The daemon keeps the serial baseline](#the-daemon-keeps-the-serial-baseline)): none without `serial_console` in its config, `reboot_pending` until its next boot. [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline). [`hk console probe`](#probing-a-console) says `SILENT`; probed across a reboot, a host with the baseline shows `KERNEL_OUTPUT` and `LOGIN_PROMPT`. |
 | A prompt at the first Enter, then nothing or NUL bytes | The stock getty moved the port to 9600. The getty's drop-in, step 3. A probe that reads the NUL bytes says `OTHER_OUTPUT` with no evidence. |
 | The kernel and the login, but nothing of the firmware | BIOS console redirection to COM2 is off. [The BMC and the BIOS](#the-bmc-and-the-bios). [`hk console probe`](#probing-a-console) across a reboot: `fromBoot` true and no `FIRMWARE_OUTPUT`. |
 | `device_unreachable` (4001) on every BMC | The coordinator's host is off the lab LAN, or the route of the alternative is down. [The network path](#the-network-path). |

@@ -213,6 +213,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         ssh: None,
         prerequisites: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     };
     let mut expected = serde_json::json!({

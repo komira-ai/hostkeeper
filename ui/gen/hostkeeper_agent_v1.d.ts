@@ -35,6 +35,7 @@ export namespace hostkeeper_agent_v1 {
     bmc?: hostkeeper_agent_v1.BmcReport;
     maintenance?: hostkeeper_agent_v1.MaintenanceReport;
     fullDiskAccess?: hostkeeper_agent_v1.FullDiskAccess;
+    serialConsole?: hostkeeper_agent_v1.SerialConsoleReport;
   }
   export interface InstalledXcode { version?: string; build?: string; path?: string; selected?: boolean; foreign?: boolean; }
   export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }
@@ -92,6 +93,7 @@ export namespace hostkeeper_agent_v1 {
   export interface RemoteLoginProbe { startedUnix?: string; steps?: hostkeeper_agent_v1.ProbeStep[]; }
   export interface RepositoriesReport { generation?: string; digest?: string; refused?: hostkeeper_agent_v1.RepositoryRefusal; }
   export interface RepositoryRefusal { generation?: string; digest?: string; reason?: string; }
+  export interface SerialConsoleReport { port?: string; state?: string; detail?: string; }
   export interface ServiceBeat {
     name?: string;
     version?: string;

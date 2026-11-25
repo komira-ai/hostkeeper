@@ -347,6 +347,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         ssh: None,
         prerequisites: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     };
     assert_eq!(

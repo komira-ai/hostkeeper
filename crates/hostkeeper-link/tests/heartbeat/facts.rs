@@ -98,6 +98,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         ssh: None,
         prerequisites: None,
         bmc: None,
+        serial_console: None,
         maintenance: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);

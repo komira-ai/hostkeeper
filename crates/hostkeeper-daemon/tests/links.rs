@@ -103,6 +103,7 @@ fn links_with(
         prerequisites: None,
         maintenance: None,
         bmc: None,
+        serial_console: None,
     }
 }
 

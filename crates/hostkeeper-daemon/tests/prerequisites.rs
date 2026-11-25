@@ -115,6 +115,7 @@ fn host(
         prerequisites,
         maintenance: None,
         bmc: None,
+        serial_console: None,
     };
     (links.heartbeater(&daemon), link)
 }
