@@ -3,6 +3,12 @@
 //! ([`hostkeeper_steps::maintenance`]), in the wire's words (docs/design/maintenance-updates.md,
 //! sections 4.1 and 5.7).
 //!
+//! Beside the run state, the report carries the host's last probe, the probe file the `probe`
+//! kind keeps beside the run record ([`crate::maintenance_hook::probe`]), when it reads and keeps
+//! the report's bounds, and the kinds the daemon runs only when an operator names them (`probe`
+//! on a Mac, [`on_demand_of`]), so that the coordinator orders a probe only to a daemon that has
+//! one.
+//!
 //! The step is the one the record's next action stands at, so a record read after a crash reads
 //! as the step it resumes: `waiting` before the stage is launched, `rebooting` while a kind's
 //! reboot is under way, `deferred` and `halted` with the record's reason. The kinds applied are
@@ -12,15 +18,38 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
+use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::MaintenanceSource;
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
-use hostkeeper_proto::maintenance::MAX_HALTED_REASON;
+use hostkeeper_proto::maintenance::{MAX_HALTED_REASON, check_report};
 use hostkeeper_steps::maintenance::{
     Action, Ending, Kind, Launch, MaintenanceLoaded, MaintenanceRecord, MaintenanceStore,
     next_action,
 };
 
 use crate::maintenance_facts::MaintenanceFacts;
+use crate::maintenance_hook::probe::{PROBE_FILE, read_probe};
+
+/// The kinds a daemon on `platform` runs only when an operator names them: `probe` on a Mac,
+/// none on Linux.
+pub fn on_demand_of(platform: PlatformKind) -> Vec<wire::MaintenanceKind> {
+    match platform {
+        PlatformKind::Macos => vec![wire::MaintenanceKind::Probe],
+        PlatformKind::Linux | PlatformKind::Openrc => Vec::new(),
+    }
+}
+
+/// The probe the probe file in `dir` holds, when it reads and keeps the report's bounds; none
+/// otherwise, so that a damaged file never has the whole report refused.
+pub fn last_probe(dir: &Path) -> Option<wire::MaintenanceProbe> {
+    let probe = read_probe(&dir.join(PROBE_FILE)).ok()?;
+    let alone = wire::MaintenanceReport {
+        probe: Some(probe),
+        ..wire::MaintenanceReport::default()
+    };
+    check_report(&alone).ok()?;
+    alone.probe
+}
 
 /// The report's run state of `record`.
 pub fn run_state(record: &MaintenanceRecord) -> wire::MaintenanceRunState {
@@ -59,6 +88,7 @@ pub fn wire_kind(kind: Kind) -> wire::MaintenanceKind {
         Kind::Xcode => wire::MaintenanceKind::Xcode,
         Kind::Linux => wire::MaintenanceKind::Linux,
         Kind::Reboot => wire::MaintenanceKind::Reboot,
+        Kind::Probe => wire::MaintenanceKind::Probe,
     }
 }
 
@@ -84,6 +114,8 @@ fn bounded(mut text: String) -> String {
 pub struct RunReported<F> {
     facts: F,
     state_dir: PathBuf,
+    /// The kinds this daemon runs only when an operator names them ([`on_demand_of`]).
+    on_demand: Vec<wire::MaintenanceKind>,
     /// The order id and step of the last ended turn the facts were asked to look again for.
     seen: Mutex<Option<(String, i32)>>,
 }
@@ -100,11 +132,17 @@ impl LookAgain for MaintenanceFacts {
 }
 
 impl<F> RunReported<F> {
-    /// `facts`' report with the run state of the record beside `state_dir`.
-    pub fn new(facts: F, state_dir: &Path) -> RunReported<F> {
+    /// `facts`' report with the run state of the record beside `state_dir`, the last probe kept
+    /// beside it, and `on_demand` as the kinds run only when named.
+    pub fn new(
+        facts: F,
+        state_dir: &Path,
+        on_demand: Vec<wire::MaintenanceKind>,
+    ) -> RunReported<F> {
         RunReported {
             facts,
             state_dir: state_dir.to_path_buf(),
+            on_demand,
             seen: Mutex::new(None),
         }
     }
@@ -112,7 +150,8 @@ impl<F> RunReported<F> {
 
 impl<F: MaintenanceSource + LookAgain> MaintenanceSource for RunReported<F> {
     fn report(&self) -> wire::MaintenanceReport {
-        let run = match MaintenanceStore::beside(&self.state_dir).load() {
+        let store = MaintenanceStore::beside(&self.state_dir);
+        let run = match store.load() {
             Ok(MaintenanceLoaded::Current(record)) => Some(run_state(&record)),
             _ => None,
         };
@@ -131,6 +170,8 @@ impl<F: MaintenanceSource + LookAgain> MaintenanceSource for RunReported<F> {
         }
         wire::MaintenanceReport {
             run,
+            probe: last_probe(store.dir()),
+            on_demand: self.on_demand.iter().copied().map(i32::from).collect(),
             ..self.facts.report()
         }
     }

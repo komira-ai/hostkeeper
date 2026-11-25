@@ -64,8 +64,10 @@ fn the_parameters_give_the_kinds_in_the_order_of_a_cutover() {
     ))
     .expect("valid");
     assert_eq!(params.run_id(), "run-1");
-    assert_eq!(params.kinds().collect::<Vec<_>>(), Kind::ALL);
+    assert_eq!(params.kinds().collect::<Vec<_>>(), Kind::ALL[..4]);
     assert_eq!(params.maintain().kinds, [4, 3, 2, 1]);
+    let probe = read(&json("run-1", &["MAINTENANCE_KIND_PROBE"])).expect("valid");
+    assert_eq!(probe.kinds().collect::<Vec<_>>(), [Kind::Probe]);
 }
 
 /// Proves: each refusal of the parameters, at each bound, word for word: a run id of 0 or 65
@@ -166,19 +168,20 @@ fn a_field_this_release_does_not_know_is_passed_over() {
     assert_eq!(params.maintain().linux_scope, 2);
 }
 
-/// Proves: each kind's word, its wire value both ways, and that `UNSPECIFIED` and a value this
-/// release does not know are no kind.
+/// Proves: each kind's word, its wire value both ways (`probe` is 5), and that `UNSPECIFIED` and
+/// a value this release does not know are no kind.
 ///
 /// Catches: a kind read as another, which would apply an update the order did not name.
 #[test]
 fn each_kind_maps_to_its_wire_value_and_word() {
     let words = Kind::ALL.map(|kind| kind.to_string());
-    assert_eq!(words, ["macos", "xcode", "linux", "reboot"]);
+    assert_eq!(words, ["macos", "xcode", "linux", "reboot", "probe"]);
     let wire = [
         WireKind::Macos,
         WireKind::Xcode,
         WireKind::Linux,
         WireKind::Reboot,
+        WireKind::Probe,
     ];
     for (kind, value) in Kind::ALL.into_iter().zip(wire) {
         assert_eq!(kind.wire(), value);
@@ -186,12 +189,12 @@ fn each_kind_maps_to_its_wire_value_and_word() {
         assert_eq!(kind.name(), kind.to_string());
     }
     assert_eq!(Kind::from_wire(0), None);
-    assert_eq!(Kind::from_wire(5), None);
+    assert_eq!(Kind::from_wire(6), None);
 }
 
-/// Proves: a Mac holds `macos`, `xcode` and `reboot`, a Linux host (systemd or OpenRC) `linux`
-/// and `reboot`, each a stub whose four steps fail `unsupported_kind` naming the kind; a kind
-/// the platform does not hold fails the same way.
+/// Proves: a Mac holds `macos`, `xcode`, `reboot` and `probe`, a Linux host (systemd or OpenRC)
+/// `linux` and `reboot`, each a stub whose four steps fail `unsupported_kind` naming the kind; a
+/// kind the platform does not hold fails the same way.
 ///
 /// Catches: a platform offered a kind it can never apply, or a stub that answers done.
 #[test]
@@ -199,7 +202,7 @@ fn each_platform_holds_its_kinds_as_stubs_until_their_work_is_written() {
     let platforms = [
         (
             PlatformKind::Macos,
-            vec![Kind::Macos, Kind::Xcode, Kind::Reboot],
+            vec![Kind::Macos, Kind::Xcode, Kind::Reboot, Kind::Probe],
         ),
         (PlatformKind::Linux, vec![Kind::Linux, Kind::Reboot]),
         (PlatformKind::Openrc, vec![Kind::Linux, Kind::Reboot]),
@@ -525,7 +528,8 @@ fn a_cutover_is_refused_while_the_host_keeps_no_run_record() {
 /// fakes: a host's reads the host); a Mac's `xcode` stages, applies and checks (an order with no
 /// Xcode, no removal and no default stages, applies and checks nothing and succeeds; its own
 /// tests run it over a fake Mac), and its `after_reboot`, which Xcode never asks for, answers
-/// `unsupported_kind`.
+/// `unsupported_kind`; a Mac's `probe` stages nothing, and its `cutover` with no run directory
+/// (parameters on standard input) fails `probe_unwritten` before it runs any program.
 ///
 /// Catches: a platform's kinds put in the wrong platform's registry, a host that cannot be checked
 /// made to look checked, or a Linux `reboot` whose stage answers `unsupported_kind` and so defers
@@ -577,7 +581,17 @@ fn the_registry_of_a_platform_holds_its_kinds() {
     let mac = kinds(&Platform::macos());
     assert_eq!(
         mac.kinds().collect::<Vec<_>>(),
-        [Kind::Macos, Kind::Xcode, Kind::Reboot]
+        [Kind::Macos, Kind::Xcode, Kind::Reboot, Kind::Probe]
+    );
+    let probe = mac.get(Kind::Probe).expect("held");
+    assert_eq!(probe.prepare(&params), Ok(()));
+    assert_eq!(
+        probe.cutover(&params),
+        Err(KindError::Failed {
+            reason: "probe_unwritten",
+            detail: "the probe file could not be written: the hook keeps no run directory"
+                .to_owned(),
+        })
     );
     let refused = mac.get(Kind::Macos).expect("held").cutover(&params);
     assert_eq!(

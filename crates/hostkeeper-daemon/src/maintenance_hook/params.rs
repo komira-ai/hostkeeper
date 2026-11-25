@@ -21,18 +21,26 @@ const MAINTAIN_MESSAGE: &str = "hostkeeper.agent.v1.Maintain";
 pub const MAX_PARAMS_BYTES: u64 = 64 * 1024;
 
 /// A kind of maintenance the hook applies, in the order a cutover applies them: macOS before
-/// Xcode (a new Xcode can need a newer macOS), then Linux, then a reboot alone.
+/// Xcode (a new Xcode can need a newer macOS), then Linux, then a reboot alone; a probe, which the
+/// coordinator orders only alone, last.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
     Macos,
     Xcode,
     Linux,
     Reboot,
+    Probe,
 }
 
 impl Kind {
     /// Every kind, in the order a cutover applies them.
-    pub const ALL: [Kind; 4] = [Kind::Macos, Kind::Xcode, Kind::Linux, Kind::Reboot];
+    pub const ALL: [Kind; 5] = [
+        Kind::Macos,
+        Kind::Xcode,
+        Kind::Linux,
+        Kind::Reboot,
+        Kind::Probe,
+    ];
 
     /// The kind's word, as the design and the report name it.
     pub const fn name(self) -> &'static str {
@@ -41,6 +49,7 @@ impl Kind {
             Kind::Xcode => "xcode",
             Kind::Linux => "linux",
             Kind::Reboot => "reboot",
+            Kind::Probe => "probe",
         }
     }
 
@@ -53,6 +62,7 @@ impl Kind {
             MaintenanceKind::Xcode => Some(Kind::Xcode),
             MaintenanceKind::Linux => Some(Kind::Linux),
             MaintenanceKind::Reboot => Some(Kind::Reboot),
+            MaintenanceKind::Probe => Some(Kind::Probe),
         }
     }
 
@@ -63,6 +73,7 @@ impl Kind {
             Kind::Xcode => MaintenanceKind::Xcode,
             Kind::Linux => MaintenanceKind::Linux,
             Kind::Reboot => MaintenanceKind::Reboot,
+            Kind::Probe => MaintenanceKind::Probe,
         }
     }
 }

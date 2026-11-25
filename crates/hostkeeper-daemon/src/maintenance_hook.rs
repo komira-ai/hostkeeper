@@ -6,7 +6,7 @@
 //! proto3 canonical JSON, in the file `--params` names, or on standard input when it names `-`
 //! ([`MaintainParams`]). No argument carries a parameter, and nothing the hook writes holds one.
 //!
-//! **Kinds.** Each kind of the run (`macos`, `xcode`, `linux`, `reboot`) is the work of a
+//! **Kinds.** Each kind of the run (`macos`, `xcode`, `linux`, `reboot`, `probe`) is the work of a
 //! [`MaintenanceKind`], found in the host platform's [`Registry`] ([`registry_for`]); a kind the
 //! platform has no work for fails `unsupported_kind`. On a Linux host (systemd or OpenRC) the
 //! `cutover` and the `after_reboot` of `linux` and `reboot` are written
@@ -17,7 +17,9 @@
 //! account, its `verify` checks the target build, and every step of `xcode` ([`XcodeKind`]) but the
 //! `after_reboot` it never asks for: its `prepare` stages the Xcodes of the order, its `cutover`
 //! moves them into place, accepts their licences, runs their first launch, selects the default
-//! and removes the old Xcodes the order names, and its `verify` checks each; every other step of
+//! and removes the old Xcodes the order names, and its `verify` checks each, and every step of
+//! `probe` ([`ProbeKind`]): its `cutover` runs a fixed list of read-only programs and keeps what
+//! they gave beside the run record, which the daemon's report carries; every other step of
 //! every kind is `unsupported_kind` until its own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
@@ -59,6 +61,7 @@ pub mod linux;
 pub mod macos;
 mod params;
 mod ports;
+pub mod probe;
 mod registry;
 mod store;
 pub mod xcode;
@@ -88,6 +91,7 @@ pub use linux::LinuxCheck;
 pub use macos::MacosKind;
 pub use params::{Kind, MAX_PARAMS_BYTES, MaintainParams, ParamsError};
 pub use ports::{KindState, RebootError, Rebooter, RecordError, RunRecord, Unwired};
+pub use probe::ProbeKind;
 pub use registry::Registry;
 pub use store::StoreRecord;
 pub(crate) use store::record_kind;
@@ -243,7 +247,8 @@ fn bounded(detail: &str) -> String {
 /// install and check it, keeping the install's plan in `run_dir` (the directory of the run's
 /// parameters; `None` for parameters on standard input, where no `cutover` runs), and `xcode`
 /// ([`XcodeKind`]), whose `prepare` stages the order's Xcodes and whose `cutover` and `verify`
-/// install and check them; `reboot` keeps its stub.
+/// install and check them, and `probe` ([`ProbeKind`]), whose `cutover` runs the probe's
+/// programs and keeps what they gave in `run_dir`; `reboot` keeps its stub.
 pub fn registry_for(
     platform: &Platform,
     lock_wait_secs: u64,
@@ -280,7 +285,8 @@ pub fn registry_for(
         }
         PlatformKind::Macos => registry
             .with(Kind::Macos, Box::new(MacosKind::at_host(run_dir)))
-            .with(Kind::Xcode, Box::new(XcodeKind::at_host())),
+            .with(Kind::Xcode, Box::new(XcodeKind::at_host()))
+            .with(Kind::Probe, Box::new(ProbeKind::at_host(run_dir))),
     }
 }
 

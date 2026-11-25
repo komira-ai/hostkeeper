@@ -255,8 +255,13 @@ impl<M: Host> Node<M> {
         let log = Arc::new(RecordingLog::default());
         let clock = Arc::new(LinkClock::new(2_000_000_000, 7));
         // The scope of a Linux look; a Mac's collectors do not read it.
+        let kind = match self.machine.platform() {
+            Some(pb::Platform::DarwinArm64) => PlatformKind::Macos,
+            _ => PlatformKind::Linux,
+        };
         let maintenance = maintenance_source(
             &daemon,
+            kind,
             LinuxScope::Security,
             self.machine.collectors(),
             clock.clone(),

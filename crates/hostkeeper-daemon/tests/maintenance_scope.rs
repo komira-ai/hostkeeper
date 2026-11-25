@@ -16,7 +16,7 @@ use hostkeeper_daemon::executor::Daemon;
 use hostkeeper_daemon::maintenance_apt::Apt;
 use hostkeeper_daemon::maintenance_collect::Collector;
 use hostkeeper_daemon::testing::RecordedWaits;
-use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput};
+use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::testing::{FakeClock, RecordingLog};
 use hostkeeper_link::{Dispatch, Job};
 use hostkeeper_placed::InstalledEntry;
@@ -75,6 +75,7 @@ fn reported(name: &str, argv: &[&str]) -> Vec<String> {
     ))];
     let source = maintenance_source(
         &daemon,
+        PlatformKind::Linux,
         flags.maintenance_linux_scope,
         collectors,
         Arc::new(FakeClock::new(2_000_000_000, 0)),

@@ -385,6 +385,14 @@ impl Host for Machine {
         Registry::for_platform(PlatformKind::Macos)
             .with(Kind::Macos, Box::new(self.macos(run_dir)))
             .with(Kind::Xcode, Box::new(self.xcode()))
+            .with(
+                Kind::Probe,
+                Box::new(ProbeKind::new(
+                    Box::new(programs::HookPrograms(Arc::clone(self))),
+                    Box::new(ProbeClock),
+                    Some(run_dir),
+                )),
+            )
     }
 
     /// A Mac's: none, as the hook holds it there; the `macos` kind restarts the Mac itself.
@@ -474,5 +482,14 @@ impl Host for Machine {
 impl BootIdSource for Machine {
     fn read(&self) -> Result<BootId, BootIdError> {
         BootId::new("the fake Mac", &format!("boot-{}", self.state().boot))
+    }
+}
+
+/// The probe's clock: [`PROBED_UNIX`].
+struct ProbeClock;
+
+impl UnixClock for ProbeClock {
+    fn unix_secs(&self) -> u64 {
+        PROBED_UNIX
     }
 }

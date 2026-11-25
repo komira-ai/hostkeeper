@@ -19,6 +19,9 @@
 //! a coordinator that folds that heartbeat in holds it as well. A coordinator that starts holds
 //! none until each host's next heartbeat carries one.
 //!
+//! A report also says which kinds its daemon runs only when named (`on_demand`, [`lists_probe`]):
+//! a run of `probe` holds, and starts, only a host whose kept report lists it.
+//!
 //! # What is shown
 //!
 //! `Hosts.List` and `Hosts.Get` show the report ([`show_maintenance`]) in `Host.maintenance` with
@@ -80,6 +83,14 @@ impl Kept {
     pub(crate) fn text(&self) -> String {
         text_of(&self.0)
     }
+}
+
+/// Whether `report` lists `probe` among the kinds its daemon runs only when an operator names
+/// them (`MaintenanceReport.on_demand`): the one test of whether a host may be ordered a probe.
+pub(crate) fn lists_probe(report: &agent::MaintenanceReport) -> bool {
+    report
+        .on_demand
+        .contains(&i32::from(agent::MaintenanceKind::Probe))
 }
 
 /// The standard padded base64 of the protobuf encoding of `report`, the text of the JSON key.

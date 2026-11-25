@@ -168,7 +168,7 @@ fn a_kind_or_state_the_proto_does_not_name_is_refused_before_anything_is_sent() 
                 "--host-group",
                 "macs",
             ],
-            "--kinds takes one of: macos, xcode, linux, reboot",
+            "--kinds takes one of: macos, xcode, linux, reboot, probe",
         ),
         (
             vec![
@@ -179,7 +179,7 @@ fn a_kind_or_state_the_proto_does_not_name_is_refused_before_anything_is_sent() 
                 "--host-group",
                 "macs",
             ],
-            "--kinds takes one of: macos, xcode, linux, reboot",
+            "--kinds takes one of: macos, xcode, linux, reboot, probe",
         ),
         (
             vec!["maintenance", "list", "--states", "paused"],

@@ -36,6 +36,9 @@ pub enum Kind {
     Linux,
     /// A reboot the host needs, with nothing to install.
     Reboot,
+    /// A probe: read-only programs run on the drained host, nothing installed. A run of it holds
+    /// no other kind.
+    Probe,
 }
 
 impl fmt::Display for Kind {
@@ -45,6 +48,7 @@ impl fmt::Display for Kind {
             Kind::Xcode => "xcode",
             Kind::Linux => "linux",
             Kind::Reboot => "reboot",
+            Kind::Probe => "probe",
         })
     }
 }

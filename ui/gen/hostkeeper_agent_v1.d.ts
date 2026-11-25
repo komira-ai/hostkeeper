@@ -48,7 +48,9 @@ export namespace hostkeeper_agent_v1 {
     mdmConflicts?: string[];
   }
   export interface MaintenanceHost { osName?: string; osVersion?: string; osBuild?: string; hardwareSerial?: string; runningKernel?: string; newestKernel?: string; bootId?: string; bootUnix?: string; }
-  export type MaintenanceKind = "MAINTENANCE_KIND_UNSPECIFIED" | "MAINTENANCE_KIND_MACOS" | "MAINTENANCE_KIND_XCODE" | "MAINTENANCE_KIND_LINUX" | "MAINTENANCE_KIND_REBOOT";
+  export type MaintenanceKind = "MAINTENANCE_KIND_UNSPECIFIED" | "MAINTENANCE_KIND_MACOS" | "MAINTENANCE_KIND_XCODE" | "MAINTENANCE_KIND_LINUX" | "MAINTENANCE_KIND_REBOOT" | "MAINTENANCE_KIND_PROBE";
+  export interface MaintenanceProbe { runId?: string; probedUnix?: string; steps?: hostkeeper_agent_v1.MaintenanceProbeStep[]; }
+  export interface MaintenanceProbeStep { name?: string; exitCode?: number; output?: string; cut?: boolean; }
   export interface MaintenanceReport {
     host?: hostkeeper_agent_v1.MaintenanceHost;
     xcodes?: hostkeeper_agent_v1.InstalledXcode[];
@@ -59,6 +61,8 @@ export namespace hostkeeper_agent_v1 {
     unparsedLines?: number;
     run?: hostkeeper_agent_v1.MaintenanceRunState;
     lookFailed?: string;
+    probe?: hostkeeper_agent_v1.MaintenanceProbe;
+    onDemand?: hostkeeper_agent_v1.MaintenanceKind[];
   }
   export interface MaintenanceRunState { runId?: string; orderId?: string; step?: hostkeeper_agent_v1.MaintenanceStep; applied?: hostkeeper_agent_v1.MaintenanceKind[]; haltedReason?: string; }
   export type MaintenanceStep =
