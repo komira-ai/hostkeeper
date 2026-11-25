@@ -11,3 +11,16 @@ cargo_package(
         "//:docs/macos.md",
     ],
 )
+
+# Read by other members (their extra_srcs); exported by reference, so each stays at its path.
+[
+    export_file(
+        name = path,
+        src = path,
+        mode = "reference",
+        visibility = ["PUBLIC"],
+    )
+    for path in [
+        "tests/fixtures/sysctl-bootsessionuuid.txt",
+    ]
+]

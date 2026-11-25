@@ -81,8 +81,9 @@ fn a_linux_host_lists_the_host_the_reboot_and_the_package_manager() {
 }
 
 /// Proves the host's own collectors start with the host's facts and the reboot need on Linux,
-/// systemd or OpenRC alike, whatever the Mac's setting, and a Mac reads `macos`, `mac`, then its
-/// Xcodes, its update account and its device-management conflicts, under either setting.
+/// systemd or OpenRC alike, whatever the Mac's setting, and a Mac reads `macos`, its boot facts,
+/// `mac`, then its Xcodes, its update account and its device-management conflicts, under either
+/// setting.
 #[test]
 fn the_platforms_list_their_collectors() {
     for major in [MacosMajor::NotDue, MacosMajor::Due] {
@@ -96,11 +97,11 @@ fn the_platforms_list_their_collectors() {
                 major,
                 DEFAULT_PACKAGE_LOCK_WAIT_SECS
             )),
-            ["macos", "mac", "xcode", "update-account", "mdm"]
+            ["macos", "boot", "mac", "xcode", "update-account", "mdm"]
         );
         assert_eq!(
             names(&mac(major)),
-            ["macos", "mac", "xcode", "update-account", "mdm"]
+            ["macos", "boot", "mac", "xcode", "update-account", "mdm"]
         );
     }
 }
