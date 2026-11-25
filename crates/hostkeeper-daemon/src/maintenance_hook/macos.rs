@@ -15,9 +15,9 @@ mod apply;
 mod plan;
 mod stage;
 
-pub use apply::Apply;
-pub use stage::Stage;
-pub(crate) use stage::{HostPrograms, Programs};
+pub use apply::{AccountFile, Apply, Installers};
+pub(crate) use stage::HostPrograms;
+pub use stage::{Programs, Stage};
 
 use std::path::Path;
 
