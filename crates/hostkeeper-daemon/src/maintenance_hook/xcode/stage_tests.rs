@@ -996,3 +996,5 @@ fn a_staging_directory_swapped_in_before_the_fetch_is_refused() {
     assert!(mac.runner.ran().is_empty());
     mac.assert_clean();
 }
+#[path = "stage_hook_tests.rs"]
+mod hook;
