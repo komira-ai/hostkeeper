@@ -1,7 +1,7 @@
 //! The `action` strings of the operator login's audit entries (`docs/design/operator-login.md`
 //! section 8), of the MDM setup's (`docs/design/coordinator-mdm.md`, section 4.9, the `mdm_*`
 //! ones), of the console's (`docs/design/console-broker.md`, decision D4), of the Xcode store's
-//! (`xcode_put`, `xcode_remove`) and of the maintenance runs' (`maintenance_schedule`,
+//! (`xcode_put`, `xcode_remove`, `xcode_partial_remove`) and of the maintenance runs' (`maintenance_schedule`,
 //! `maintenance_cancel`, `maintenance_retry_host`, `maintenance_put_back`, and the coordinator's `maintenance_start` and `maintenance_step`). Each is an additive string of the existing `action` field; `by` and
 //! `subject` say who did it and whom or what it concerned.
 //!
@@ -106,6 +106,10 @@ pub const XCODE_PUT: &str = "xcode_put";
 /// the operator's, or by `coordinator`, which prunes the releases the store no longer keeps and
 /// whose reason names the release and the archive's SHA-256.
 pub const XCODE_REMOVE: &str = "xcode_remove";
+/// A partial upload of an Xcode archive was removed by an operator's `Xcode.Remove` of its SHA-256
+/// (the store held no archive of it): the reason is the operator's, the subject the release and
+/// the SHA-256. A partial upload that lapses is removed with a log line and no entry.
+pub const XCODE_PARTIAL_REMOVE: &str = "xcode_partial_remove";
 
 /// An operator's `Maintenance.Schedule` stored a run: the reason is the operator's followed by
 /// `run <id>`, and the entry's `host_group` the group the run names, if it names one.

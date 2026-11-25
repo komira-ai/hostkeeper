@@ -403,8 +403,8 @@ fn the_waiting_message_names_the_release_and_the_command() {
     assert_eq!(
         waiting_message(&release("27.2", "27B52", Channel::Release)),
         "Xcode 27.2 (27B52), which requires macOS 26.6 or later, is released and the \
-         coordinator's Xcode store holds no release as new: push it from a Mac signed in to the \
-         Apple developer account with `hk xcode-push 27.2`"
+         coordinator's Xcode store holds no release as new: add it from a Mac signed in to the \
+         Apple developer account with `hk xcode add 27.2`"
     );
 }
 

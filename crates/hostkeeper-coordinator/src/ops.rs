@@ -325,8 +325,9 @@ pub struct AuditEntry {
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
     /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
-    /// release writes none; the Xcode store's `xcode_put` (an operator's upload) and `xcode_remove`
-    /// (an operator's `Xcode.Remove` or the coordinator's pruning); the maintenance runs'
+    /// release writes none; the Xcode store's `xcode_put` (an operator's upload), `xcode_remove`
+    /// (an operator's `Xcode.Remove` or the coordinator's pruning) and `xcode_partial_remove` (an
+    /// operator's `Xcode.Remove` of a partial upload); the maintenance runs'
     /// `maintenance_schedule` and `maintenance_cancel` (an operator's `Maintenance` calls) and the
     /// coordinator's `maintenance_start` and `maintenance_step` (a host's turn started, and its
     /// step as its daemon reports it); the

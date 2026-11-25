@@ -33,6 +33,14 @@ left uploads); a newer one may be an upload another coordinator of the directory
 
 `--xcode-max-bytes` (default 21474836480, 20 GiB; at least 1) is the most bytes of one archive.
 
+An upload sent in parts (below) is kept between its requests as three more names in the directory, each
+mode 0600: `.partial-<sha256>`, the bytes received; `.partial-<sha256>.json`, the version, build and
+size it was started with and the name of the token or user whose request started it; and, while a request
+is writing it, `.partial-<sha256>.lock`. A partial upload that has not been written for 24 hours is removed
+with its record and its lock, by the start of a coordinator and by the daily `xcode-feed` job, each
+removal a log line (`a lapsed file of the Xcode store was removed`, naming the file) and no audit entry,
+since nothing of it was ever stored. The same sweep removes `.upload-` files that old.
+
 ## Adding a release from your Mac: `hk xcode add`
 
 When the alert `xcode_release_waiting` names a release, an operator brings it in with one command on
@@ -150,6 +158,9 @@ The checks run in this order, and a refusal stores nothing. Each answer is JSON,
 | 409 | `not_kept` | the store would remove this release at once: it is older than the releases the store keeps (below) and no host has it installed; the body is not read |
 | 409 | `xcode_version_taken` | the store holds another build of this version (below) |
 | 409 | `upload_in_progress` | another upload of this version is running |
+| 409 | `offset_mismatch` | a part (below) does not start at the byte the partial upload holds; the answer also has `"received"`, the bytes held |
+| 409 | `partial_differs` | a part says another size, version or build than the partial upload it continues |
+| 409 | `partial_locked` | another writer, of this coordinator or of another over the same directory, holds the partial upload's lock |
 | 400 | `digest_mismatch` | the SHA-256 of the body is not the one in the path |
 | 503 | `audit_unavailable` | the audit entry could not be written, so nothing was stored |
 | 500 | `store_failed` | the list of releases or the directory could not be read or written |
@@ -161,6 +172,71 @@ its entry.
 
 A version names one build on our hosts. A second build under a version the store holds is refused
 `xcode_version_taken` and raises the alert below, until the held archive of that version is removed.
+
+## Sending an archive in parts: `Content-Range`
+
+A `PUT` that has no `Content-Range` is the one request above, and behaves as it always did. A `PUT` that
+has `Content-Range: bytes <first>-<last>/<size>` sends one part of the archive, so that an upload that was
+cut off continues from the last byte the coordinator holds instead of from the first. The caller sends a
+part for each request, each starting where the last ended; the path and the query are those of the
+whole archive.
+
+Every check of the table above runs first, in its order, with these differences: `<size>` is the size
+that `too_large` is judged by (`--xcode-max-bytes`), since the body is only a part of the archive;
+`Content-Range` must be one range of decimal numbers with `first <= last < size`, and a `Content-Range`
+that is not, or that comes twice, is `bad_request`; and `Content-Length` must be present and equal
+`<last> - <first> + 1`, else `bad_request`. Then:
+
+1. Under the partial upload's lock (below), a partial upload of this SHA-256 that was started with
+   another size, version or build is `409 partial_differs`.
+2. `<first>` must be the number of bytes the partial upload holds, 0 when there is none: else `409
+   {"error":"offset_mismatch","received":<bytes held>}`, and the caller goes on from `received`. No partial
+   upload is made for a first part that does not start at 0.
+3. The body is appended to `.partial-<sha256>` and synced. While bytes are still due the answer is `202`
+   with `{"received":<bytes held>}`. A body that ends short of its range, fails, stalls for longer than the
+   connection's patience or has more bytes than its range is `400 bad_request`; a request that is cut off
+   has nobody to answer. Either way the bytes it wrote stay, synced, and the next part continues after
+   them.
+4. When the last byte is in, the whole file is read once and hashed. A SHA-256 other than the path's is
+   `400 digest_mismatch`, and the partial upload is removed, so the next try starts from byte 0. Else the
+   archive is committed as a whole upload is: the checks again under the store's lock, the `xcode_put`
+   audit entry first, the record, the rename, the prune, and `201` with the same body. If a check of that
+   commit refuses it, the answer is that refusal and the partial upload is removed.
+
+Any operator may continue a partial upload: the bytes are named by their SHA-256 and checked whole before
+anything is stored, so a partial upload written by someone else cannot make the store hold other bytes
+than the path names; the worst it can do is fail the final hash. The partial upload's record names who
+started it, and the `xcode_put` entry names the operator whose request completed it.
+
+**The lock.** One request writes a partial upload at a time. The writer holds
+`.partial-<sha256>.lock`, which names the writer and the second, by the coordinator's clock, of its last
+refresh, and refreshes it once for each second in which it writes a block. A lock is made so that of
+two writers one makes it and the other is refused `409 partial_locked` (a second request of the same
+coordinator for the same archive is refused the same way). A lock not refreshed for 30 seconds, or
+whose text is not a lock's, is stale: the next writer removes it and makes its own, and a writer whose
+lock was taken that way finds it at its next refresh and stops with `partial_locked`. The lock's file is
+made by writing its text to `.partial-<sha256>.lock.<writer>` (created exclusively) and linking that
+to the lock's name, which fails when the name is taken; so the directory every coordinator mounts must
+have an atomic exclusive create and `link(2)`, as a local file system and NFS do.
+Two writers that both found a lock stale can both go on for a moment: that cannot store wrong bytes,
+because the whole file's SHA-256 is checked before the archive is stored. The coordinators judge a lock
+by their own clocks, so those clocks must agree to within a few seconds.
+
+## Asking what the store holds: `GET /v1/xcode/<sha256>/upload`
+
+On the private listener, with the checks of the `PUT` in their order (`403 forbidden` for a client
+certificate, `401 unauthorized` for no operator token or CI's, `400 bad_request` for a path that is not a
+SHA-256 and `/upload`). It reads and changes nothing. The answer is `200` with
+
+```
+{"state": "held" | "partial" | "none", "received": <bytes>, "size": <bytes>}
+```
+
+`held`: the store holds an archive of these bytes (`received` and `size` are its size). `partial`: it
+keeps a partial upload of them (`received` is the bytes held, `size` the size the upload was started
+with). `none`: neither, and both numbers are 0. A store that cannot be read is `500 store_failed`. A
+coordinator without this route answers a `GET` of the path `405 method_not_allowed`, as for any other `GET`
+of `/v1/xcode/` on the private listener.
 
 ## Reading an archive: `GET /v1/xcode/<sha256>`
 
@@ -227,6 +303,9 @@ cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
   <version> (<build>), sha256 <sha256>, <size> bytes`.
 - `xcode_remove`: an archive was removed, by an operator's `Xcode.Remove` (the operator's reason) or by
   the prune (as above).
+- `xcode_partial_remove`: a partial upload was removed by an operator's `Xcode.Remove` of its SHA-256
+  (the operator's reason; the subject is `Xcode <version> (<build>) <sha256>`). A partial upload that
+  lapses writes no entry.
 
 `Xcode.List` writes no entry.
 
@@ -245,6 +324,14 @@ not 64 lowercase hex characters, or a bad reason), `no_store`, `unknown_archive`
 
 Removing the held archive of a version is what clears `xcode_version_taken` for it: the other build can
 then be pushed.
+
+**Uploads in progress.** `Xcode.List` also answers the partial uploads, the one written longest ago
+first: each one's SHA-256, version, build, the bytes received, the size, who started it and the time of
+its last write. `hk xcode remove --sha256 <sha256> --reason <text>` of a SHA-256 the store holds only as a
+partial upload removes the partial upload (and its record), audited `xcode_partial_remove` before the
+files go. It is refused `partial_locked` while a writer holds the lock, that is, while the lock has been
+refreshed within the last 30 seconds; a lock older than that is taken over and the removal is made.
+`unknown_archive` still means that the store holds neither an archive nor a partial upload of it.
 
 ## The alert `xcode_release_waiting`
 

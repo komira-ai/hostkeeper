@@ -39,6 +39,12 @@ mod kept;
 #[path = "xcode_put_dropped_tests.rs"]
 mod dropped;
 
+#[path = "xcode_put_range_tests.rs"]
+mod range;
+
+#[path = "xcode_put_range_remove_tests.rs"]
+mod range_remove;
+
 use support::{
     ARCHIVE, Chunks, Farm, OTHER, PATIENCE, Piece, ROOMY, SIXTEEN, Unreadable, bearer, builder,
     data, digest_of, farm, farm_with, feed, files_of, good_uri, id, lines, listing, polled, push,

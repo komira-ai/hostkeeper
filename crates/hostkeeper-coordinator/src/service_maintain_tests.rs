@@ -912,3 +912,6 @@ fn a_restarted_coordinator_keeps_a_macs_skipped_macos_out_of_its_order() {
 fn clean_mac_facts() -> agent::MacUpdateFacts {
     crate::maintenance_calls_tests::clean_mac()
 }
+
+#[path = "service_maintain_xcode_tests.rs"]
+mod xcode_after;

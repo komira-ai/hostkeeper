@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -42,6 +42,15 @@ pub(super) const OTHER: &[u8] = b"the bytes of another Xcode archive";
 
 /// Sixteen bytes: the cap of the tests of the cap.
 pub(super) const SIXTEEN: &[u8] = b"0123456789abcdef";
+
+/// The unix second the store's clock reads when the rig's clock reads 0.
+pub(super) const LOCK_EPOCH: u64 = 1_800_000_000;
+
+/// The clock of a store's locks over `clock`: [`LOCK_EPOCH`] and its seconds.
+pub(super) fn lock_clock(clock: &Arc<AtomicU64>) -> crate::audit_file::UnixClock {
+    let clock = Arc::clone(clock);
+    Arc::new(move || LOCK_EPOCH + clock.load(Ordering::SeqCst))
+}
 
 /// A store cap no test of the other behaviour comes near.
 pub(super) const ROOMY: u64 = 1 << 20;
@@ -269,6 +278,9 @@ pub(super) struct Farm {
     pub(super) log: Log,
     pub(super) coordinator: Arc<Coordinator>,
     pub(super) store: Arc<XcodeStore>,
+    /// Seconds since the rig's coordinator started: the store's locks are judged by it, added to
+    /// [`LOCK_EPOCH`], and no test moves it but by setting it.
+    pub(super) clock: Arc<AtomicU64>,
     /// The store's directory.
     pub(super) dir: PathBuf,
     _rig: Rig,
@@ -286,8 +298,12 @@ pub(super) fn farm_with(
     let guard = log.install();
     let dir = rig.dir.path().join("xcode");
     fs::create_dir(&dir).expect("the store's directory");
-    let store =
-        Arc::new(XcodeStore::open(&dir, max_bytes, std::time::UNIX_EPOCH).expect("a store"));
+    let clock = Arc::clone(&rig.clock);
+    let store = Arc::new(
+        XcodeStore::open(&dir, max_bytes, std::time::UNIX_EPOCH)
+            .expect("a store")
+            .with_clock(lock_clock(&clock)),
+    );
     let coordinator =
         build(Rig::start(&rig.dir, &rig.clock), &rig.dir).with_xcode_store(Arc::clone(&store));
     coordinator
@@ -300,6 +316,7 @@ pub(super) fn farm_with(
         log,
         coordinator: Arc::new(coordinator),
         store,
+        clock,
         dir,
         _rig: rig,
     }
