@@ -1,6 +1,6 @@
 //! The stage of the `xcode` kind (docs/design/maintenance-updates.md, section 2.4 step 1): while
 //! the Mac still serves, each Xcode of the run's order that is not installed is fetched from the
-//! coordinator's store, checked, expanded and verified in a staging directory on the volume of
+//! coordinator's store, checked, its signature checked, expanded and verified in a staging directory on the volume of
 //! `/Applications`, [`STAGING`]. Nothing is written to `/Applications/Xcode-<version>.app`: the
 //! move there is the drained host's `cutover`.
 //!
@@ -12,7 +12,8 @@
 //! 2. **Passed over** when `/Applications/Xcode-<version>.app` is installed with that version and
 //!    build.
 //! 3. **Re-verified** when it is staged already, `<staging>/<sha256>/Xcode.app` (only a verified
-//!    app is put there): its build and its code signature are checked again (steps 9 and 10).
+//!    app is put there): its build and its code signature are checked again (steps 10 and 11); `pkgutil`
+//!    does not run, since the archive is gone by then.
 //! 4. **Space.** Before anything is fetched, the volume must have free, for each entry to fetch,
 //!    what is left of its archive to fetch and [`EXPANSION_FACTOR`] times its size for the
 //!    expansion; short is deferred `free_space_short`.
@@ -24,12 +25,17 @@
 //!    or it is refused `xcode_archive_mismatch` before `xip` runs.
 //! 7. **Format.** An Apple Encrypted Archive (`AEA1`) is deferred `xcode_archive_encrypted`: it
 //!    is expanded by `archiveutil` [V], whose use the Mac proof has not shown yet.
-//! 8. **Expanded** by `xip --expand <archive>` in `<staging>/<sha256>/expand`, which checks
-//!    Apple's signature on the archive [V]; the archive is removed after, and the expansion must
-//!    hold exactly one app.
-//! 9. **Build.** The app's `Contents/version.plist` must name the order's version
-//!    (`CFBundleShortVersionString`) and build (`ProductBuildVersion`).
-//! 10. **Signature.** `codesign --verify --deep --strict <app>` must exit 0. The app is then
+//! 8. **Apple's signature.** `/usr/sbin/pkgutil --check-signature <archive>` in
+//!    `<staging>/<sha256>` must exit 0, and its report must be Apple's own: the status `signed
+//!    Apple Software` and a chain ending at Apple Root CA with its fingerprint ([`signature`]).
+//!    An archive uploaded from a Linux box was not checked there, so this Mac checks it; anything
+//!    else, or a `pkgutil` that cannot run or is killed, is deferred `xcode_archive_not_apple`.
+//! 9. **Expanded** by `xip --expand <archive>` in `<staging>/<sha256>/expand`, which checks
+//!    Apple's signature on the archive again [V]; the archive is removed after, and the expansion
+//!    must hold exactly one app.
+//! 10. **Build.** The app's `Contents/version.plist` must name the order's version
+//!     (`CFBundleShortVersionString`) and build (`ProductBuildVersion`).
+//! 11. **Signature.** `codesign --verify --deep --strict <app>` must exit 0. The app is then
 //!     renamed `<staging>/<sha256>/Xcode.app`.
 //!
 //! The staging directory is taken only when it is a directory of the process's user (root) that
@@ -57,6 +63,7 @@ use hostkeeper_release::grammar::is_sha256;
 use hostkeeper_steps::{Clock, Stamp};
 use sha2::{Digest, Sha256};
 
+use super::signature::{parse, verdict};
 use super::store::{Store, StoreError};
 use crate::maintenance_collect::{APPLICATIONS, HostRoot};
 use crate::maintenance_hook::KindError;
@@ -74,10 +81,14 @@ pub const ARCHIVE: &str = "Xcode.xip";
 pub const EXPAND: &str = "expand";
 /// The name of the verified app in an entry's staging directory.
 pub const STAGED_APP: &str = "Xcode.app";
-/// The program that expands an archive and checks Apple's signature on it.
+/// The program that expands an archive.
 pub const XIP: &str = "/usr/bin/xip";
 /// The program that checks the expanded app's code signature.
 pub const CODESIGN: &str = "/usr/bin/codesign";
+/// The program that checks Apple's signature on the archive before it is expanded.
+pub const PKGUTIL: &str = "/usr/sbin/pkgutil";
+/// The arguments of `pkgutil` before the archive.
+pub const PKGUTIL_ARGS: [&str; 1] = ["--check-signature"];
 /// The arguments of `codesign` before the app.
 pub const CODESIGN_ARGS: [&str; 3] = ["--verify", "--deep", "--strict"];
 /// The environment of each program: a fixed `PATH`, nothing inherited.
@@ -90,6 +101,8 @@ pub const MAX_FETCH_ATTEMPTS: u32 = 8;
 pub const FETCH_SECS: u64 = 4 * 3600;
 /// Seconds `xip --expand` may take.
 pub const XIP_SECS: u64 = 2 * 3600;
+/// Seconds `pkgutil --check-signature` may take.
+pub const PKGUTIL_SECS: u64 = 3600;
 /// Seconds `codesign --verify` may take.
 pub const CODESIGN_SECS: u64 = 3600;
 /// The first bytes of an Apple Encrypted Archive.
@@ -116,6 +129,8 @@ pub const REASON_FETCH_FAILED: &str = "xcode_fetch_failed";
 pub const REASON_ARCHIVE_MISMATCH: &str = "xcode_archive_mismatch";
 /// An Apple Encrypted Archive, which the stage does not expand.
 pub const REASON_ARCHIVE_ENCRYPTED: &str = "xcode_archive_encrypted";
+/// An archive whose `pkgutil --check-signature` failed or does not report Apple's own signature.
+pub const REASON_ARCHIVE_NOT_APPLE: &str = "xcode_archive_not_apple";
 /// An `xip --expand` that failed, or made other than one app.
 pub const REASON_EXPAND_FAILED: &str = "xcode_expand_failed";
 /// An app whose version or build is not the order's, or whose version list cannot be read.
@@ -283,7 +298,7 @@ impl Stage {
         Ok(())
     }
 
-    /// Steps 5 to 10 of the module's header for `entry`, `have` bytes of whose archive are on
+    /// Steps 5 to 11 of the module's header for `entry`, `have` bytes of whose archive are on
     /// disk.
     fn fetch_and_expand(&self, entry: &XcodeEntry, have: u64) -> Result<(), KindError> {
         let dir = self.entry_dir(entry);
@@ -304,6 +319,7 @@ impl Stage {
         let archive = dir.join(ARCHIVE);
         self.fetch(entry, &archive, have)?;
         check_archive(entry, &archive)?;
+        self.check_apple_signature(&archive, &dir)?;
         make_dir(&expand)?;
         let ran = self.run_program(
             XIP,
@@ -319,6 +335,26 @@ impl Stage {
         let staged = dir.join(STAGED_APP);
         fs::rename(&app, staged).map_err(|error| staging_failed(&app, "rename", &error))?;
         remove(&expand)
+    }
+
+    /// Step 8: `pkgutil --check-signature` on `archive`, run in `cwd`, exits 0 and reports
+    /// Apple's own signature.
+    fn check_apple_signature(&self, archive: &Path, cwd: &Path) -> Result<(), KindError> {
+        let mut args: Vec<&OsStr> = PKGUTIL_ARGS.iter().map(|arg| OsStr::new(*arg)).collect();
+        args.push(archive.as_os_str());
+        let ran = self.run_program(PKGUTIL, &args, cwd, PKGUTIL_SECS);
+        let what = "pkgutil --check-signature";
+        program_ok(&ran, what, REASON_ARCHIVE_NOT_APPLE)?;
+        let stdout = ran
+            .as_ref()
+            .map(|ran| ran.stdout.as_slice())
+            .unwrap_or_default();
+        verdict(&parse(&String::from_utf8_lossy(stdout))).map_err(|why| {
+            deferred(
+                REASON_ARCHIVE_NOT_APPLE,
+                format!("{what} does not report Apple's own signature on the archive: {why}"),
+            )
+        })
     }
 
     /// Fetches the archive of `entry` into `archive`, from its byte `have` on: what the file
@@ -383,7 +419,7 @@ impl Stage {
             .map_err(|error| staging_failed(archive, "sync", &error))
     }
 
-    /// Steps 9 and 10 for the app at the host's path `app`.
+    /// Steps 10 and 11 for the app at the host's path `app`.
     fn verify(&self, entry: &XcodeEntry, app: &str) -> Result<(), KindError> {
         let host_path = format!("{app}/Contents/version.plist");
         let found = self

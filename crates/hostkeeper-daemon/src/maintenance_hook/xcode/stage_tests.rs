@@ -16,6 +16,7 @@ use hostkeeper_link::LinkError;
 use hostkeeper_testkit::Scratch;
 
 use super::*;
+use crate::maintenance_hook::xcode::signature::tests::APPLE_REPORT;
 use crate::maintenance_plist::HostPlists;
 use crate::testing::FakeClock;
 
@@ -181,6 +182,19 @@ fn exits(code: i32, stderr: &str) -> Program {
             code: Some(code),
             timed_out: false,
             stderr: stderr.clone(),
+            ..Ran::default()
+        })
+    })
+}
+
+/// A `pkgutil` that exits 0 saying `report` on its standard output.
+fn reports(report: &str) -> Program {
+    let stdout = report.as_bytes().to_vec();
+    Box::new(move |_| {
+        Ok(Ran {
+            code: Some(0),
+            stdout: stdout.clone(),
+            ..Ran::default()
         })
     })
 }
@@ -238,6 +252,7 @@ impl Mac {
     /// `codesign` accepts it, with exactly the space staging needs free.
     fn new(name: &str) -> Mac {
         let runner = FakeRunner::default();
+        runner.answers(PKGUTIL, reports(APPLE_REPORT));
         runner.answers(XIP, xip_making("Xcode.app", V27));
         runner.answers(CODESIGN, exits(0, ""));
         let clock: Arc<dyn Clock> = FakeClock::new();
@@ -317,6 +332,24 @@ impl Mac {
         }
     }
 
+    /// The run of `pkgutil --check-signature` on the archive of `entry`.
+    fn pkgutil_run(&self, entry: &XcodeEntry) -> Spawn {
+        let dir = self.path(&format!("{STAGING}/{}", entry.sha256));
+        Spawn {
+            program: PathBuf::from(PKGUTIL),
+            args: vec![
+                OsString::from("--check-signature"),
+                dir.join(ARCHIVE).into_os_string(),
+            ],
+            env: vec![(
+                "PATH".to_owned(),
+                "/usr/bin:/bin:/usr/sbin:/sbin".to_owned(),
+            )],
+            cwd: dir,
+            deadline: self.deadline(PKGUTIL_SECS),
+        }
+    }
+
     /// The run of `xip` on the archive of `entry`.
     fn xip_run(&self, entry: &XcodeEntry) -> Spawn {
         let dir = self.path(&format!("{STAGING}/{}", entry.sha256));
@@ -389,6 +422,7 @@ fn a_good_archive_ends_with_a_verified_app_in_staging_and_nothing_in_application
     assert_eq!(
         mac.runner.ran(),
         [
+            mac.pkgutil_run(&entry),
             mac.xip_run(&entry),
             mac.codesign_run(&format!("{dir}/expand/Xcode.app")),
         ]
@@ -629,7 +663,11 @@ fn a_wrong_product_build_version_defers_and_removes_staging() {
                 &format!("{found}; the order names Xcode 27.2 (27B52)")
             )
         );
-        assert_eq!(mac.runner.ran(), [mac.xip_run(&entry)], "{found}");
+        assert_eq!(
+            mac.runner.ran(),
+            [mac.pkgutil_run(&entry), mac.xip_run(&entry)],
+            "{found}"
+        );
         mac.assert_clean();
     }
 }
@@ -653,7 +691,7 @@ fn a_failing_codesign_verify_defers_and_removes_staging() {
             "codesign --verify exited 1: Xcode.app: a sealed resource is missing or invalid"
         )
     );
-    assert_eq!(mac.runner.ran().len(), 2);
+    assert_eq!(mac.runner.ran().len(), 3);
     mac.assert_clean();
 }
 
@@ -667,6 +705,7 @@ fn a_failed_expansion_defers_and_removes_staging() {
             code: None,
             timed_out: true,
             stderr: Vec::new(),
+            ..Ran::default()
         })
     });
     let signalled: Program = Box::new(|_| {
@@ -674,6 +713,7 @@ fn a_failed_expansion_defers_and_removes_staging() {
             code: None,
             timed_out: false,
             stderr: b"terminated".to_vec(),
+            ..Ran::default()
         })
     });
     let unstartable: Program = Box::new(|_| Err(io::Error::other("no such program")));
@@ -706,7 +746,7 @@ fn a_failed_expansion_defers_and_removes_staging() {
             mac.run(&[entry_of(ARCHIVE_BYTES)]),
             deferral(REASON_EXPAND_FAILED, detail)
         );
-        assert_eq!(mac.runner.ran().len(), 1, "{detail}");
+        assert_eq!(mac.runner.ran().len(), 2, "{detail}");
         mac.assert_clean();
     }
 }
@@ -978,3 +1018,7 @@ fn a_staging_directory_swapped_in_before_the_fetch_is_refused() {
 // The stage as the maintenance hook runs it, and the stage over an archive a stage left.
 #[path = "stage_hook_tests.rs"]
 mod hook;
+
+// The signature check of the archive, before it is expanded.
+#[path = "stage_signature_tests.rs"]
+mod signature;

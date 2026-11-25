@@ -25,8 +25,9 @@ use support_mac::{
     ACCOUNT, Account, CODESIGN, FDESETUP, FULL_DISK_FREE, INSTALLER_APP, INSTALLER_NAME, Input,
     MAJOR_BUILD, MAJOR_VERSION, MINOR_BUILD, MINOR_BYTES, MINOR_LABEL, MINOR_VERSION, Mac,
     NEW_XCODE, NEW_XCODE_ARCHIVE, NEW_XCODE_BUILD, Node, OLD_BUILD, OLD_VERSION, OLD_XCODE,
-    Ordered, PASSWORD, SERVICE, SOFTWAREUPDATE, SW_VERS, World, XCODE_SELECT, XIP, after_drained,
-    args, first_offer, one_at_a_time, password_only_on_stdin, restart_plist, turns, xcodebuild,
+    Ordered, PASSWORD, PKGUTIL_PROGRAM, SERVICE, SOFTWAREUPDATE, SW_VERS, World, XCODE_SELECT, XIP,
+    after_drained, args, first_offer, one_at_a_time, password_only_on_stdin, restart_plist, turns,
+    xcodebuild,
 };
 
 /// The group of every test.
@@ -601,6 +602,10 @@ fn a_macos_and_xcode_turn_restarts_after_macos_and_installs_xcode_after_the_rest
     let mut effects = minor_stage();
     effects.extend([
         format!("GET /v1/xcode/{sha} from byte 0"),
+        ran(
+            PKGUTIL_PROGRAM,
+            &["--check-signature", &format!("{staging}/{sha}/Xcode.xip")],
+        ),
         ran(XIP, &["--expand", &format!("{staging}/{sha}/Xcode.xip")]),
         ran(
             CODESIGN,
@@ -704,6 +709,10 @@ fn an_xcode_that_does_not_expand_defers_the_turn_at_stage_with_nothing_installed
     let mut effects = minor_stage();
     effects.extend([
         format!("GET /v1/xcode/{sha} from byte 0"),
+        ran(
+            PKGUTIL_PROGRAM,
+            &["--check-signature", &format!("{staging}/{sha}/Xcode.xip")],
+        ),
         ran(XIP, &["--expand", &format!("{staging}/{sha}/Xcode.xip")]),
     ]);
     assert_eq!(h1.machine.effects(), effects);
