@@ -69,7 +69,13 @@ Valid from a minute before the database's time to `--ssh-cert-ttl-s` (default 36
 The one extension is `permit-pty`: no agent, port or X11 forwarding and no `~/.ssh/rc`. Keys: `ssh-ed25519`,
 `ecdsa-sha2-nistp256`, or RSA of at least 3072 bits. The reason (at most 200 printable ASCII characters) is
 stored and audited and never in the certificate. The control-plane class is the hosts named by
-`--ssh-control-plane-host`; every other host is `fleet`.
+`--ssh-control-plane-host`; every other host is `fleet`. The answer names the account to log in as:
+`--ssh-login-user-linux`, or `--ssh-login-user-macos` for a Mac. While `--ssh-login-user-macos` is empty
+(its default) a Mac's daemon still sets sshd up for its one administrator, but the coordinator does not
+learn that account, so a certificate for a Mac is refused `not_configured` before the ledger is written (no
+serial, no audit line); `hk ssh` refuses an answer whose login user is empty or not an account name. A
+coordinator that serves Macs is given `--ssh-login-user-macos <account>`, the one account every Mac logs
+in as.
 
 ## Rotation
 
@@ -301,8 +307,9 @@ whether or not it named it; without the flag it advertises it only to a daemon t
 - `ca_public_keys`: the keys of the host's class only. A fleet host gets every key of `--ssh-ca-secret-file`, the
   current one then the next (so both are trusted while a rotation runs). A control-plane host gets the key of
   `--ssh-cp-ca-public-file`, or the public half of `--ssh-cp-ca-secret-file`.
-- `principal` (`hk-host-<host id>`), `login_user` (`--ssh-login-user-linux`, or `--ssh-login-user-macos` for a Mac)
-  and `password_auth` (`--ssh-password-auth`).
+- `principal` (`hk-host-<host id>`), `login_user` (`--ssh-login-user-linux`, or `--ssh-login-user-macos` for a Mac,
+  empty when that flag is: the Mac's daemon then picks its administrator, and signing for the Mac is refused, as
+  "The certificate" says) and `password_auth` (`--ssh-password-auth`).
 - `revoked_serials`: the serials of the host's own revoked certificates that sshd could still accept by the
   database's clock: through the second of its expiry itself, as its `valid_before` is one second after (a certificate
   is valid only for its host's principal, and one past its `valid_before` is refused by sshd anyway, on a host whose

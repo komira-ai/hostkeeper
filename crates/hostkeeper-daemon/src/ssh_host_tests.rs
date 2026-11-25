@@ -259,8 +259,8 @@ fn a_start_that_fails_says_what_failed() {
     );
 }
 
-/// Proves a reload of a service asks the manager to reload it (never a restart), a socket has
-/// none, and a reload that fails is an error.
+/// Proves a reload of a service asks the manager to reload it (never a restart), and a reload
+/// that fails is an error.
 #[test]
 fn a_reload_is_a_reload() {
     let runner = Runner::new(|_| ok(""));
@@ -268,12 +268,91 @@ fn a_reload_is_a_reload() {
     host(&runner, Path::new("/nowhere"))
         .reload(&unit)
         .expect("reloaded");
-    host(&runner, Path::new("/nowhere"))
-        .reload(&SshdUnit::Socket)
-        .expect("none");
     assert_eq!(runner.lines(), ["systemctl reload sshd.service"]);
     let failing = Runner::new(|_| out(Some(1), ""));
     assert!(host(&failing, Path::new("/nowhere")).reload(&unit).is_err());
+}
+
+/// What `systemctl show -p Accept,Triggers ssh.socket` asks.
+const SOCKET_SHOW: &str = "systemctl show -p Accept,Triggers ssh.socket";
+
+/// What `systemctl show` asks of `ssh.service`.
+const SERVICE_SHOW: &str = "systemctl show -p LoadState,ActiveState,UnitFileState ssh.service";
+
+/// A manager whose `ssh.socket` prints `socket` for its `Accept` and `Triggers`, whose
+/// `ssh.service` is in the active state `service`, and whose `systemctl reload` exits `reload`.
+fn socket_manager(socket: &'static str, service: &'static str, reload: i32) -> Arc<Runner> {
+    Runner::new(move |argv| match argv[1..].join(" ").as_str() {
+        "show -p Accept,Triggers ssh.socket" => ok(socket),
+        "show -p LoadState,ActiveState,UnitFileState ssh.service" => {
+            shown("loaded", service, "disabled")
+        }
+        "reload ssh.service" => out(Some(reload), ""),
+        _ => out(Some(1), ""),
+    })
+}
+
+/// Proves that where `ssh.socket` hands every connection to one listener (`Accept=no`, Debian's
+/// and Ubuntu's default) and the service it triggers runs, a reload reloads that service:
+/// that listener read its configuration when the socket started it and reads the setup's
+/// files only at a reload. Catches: a socket-activated host where the files are written,
+/// `sshd -T` shows them, and the running sshd still refuses every certificate.
+#[test]
+fn a_socket_with_one_listener_reloads_the_service_it_started() {
+    let runner = socket_manager("Accept=no\nTriggers=ssh.service\n", "active", 0);
+    assert_eq!(
+        host(&runner, Path::new("/nowhere")).reload(&SshdUnit::Socket),
+        Ok(())
+    );
+    assert_eq!(
+        runner.lines(),
+        [SOCKET_SHOW, SERVICE_SHOW, "systemctl reload ssh.service"]
+    );
+}
+
+/// Proves a socket that has started no listener yet, and a socket that starts sshd per
+/// connection (`Accept=yes`), are not reloaded: the next sshd reads the files when it starts,
+/// and nothing is started or reloaded that does not run.
+#[test]
+fn a_socket_with_no_running_listener_has_nothing_to_reload() {
+    let idle = socket_manager("Accept=no\nTriggers=ssh.service\n", "inactive", 0);
+    assert_eq!(
+        host(&idle, Path::new("/nowhere")).reload(&SshdUnit::Socket),
+        Ok(())
+    );
+    assert_eq!(idle.lines(), [SOCKET_SHOW, SERVICE_SHOW]);
+    let per_connection = socket_manager("Accept=yes\nTriggers=\n", "active", 0);
+    assert_eq!(
+        host(&per_connection, Path::new("/nowhere")).reload(&SshdUnit::Socket),
+        Ok(())
+    );
+    assert_eq!(per_connection.lines(), [SOCKET_SHOW]);
+}
+
+/// Proves a socket reload fails, and says what failed, when the socket cannot be asked, when the
+/// service it triggers cannot be asked, and when that service's reload fails: the setup then
+/// puts the files back rather than report a trust the listening sshd does not hold.
+#[test]
+fn a_socket_reload_that_cannot_be_made_is_an_error() {
+    let unaskable = Runner::new(|_| out(Some(1), ""));
+    assert_eq!(
+        host(&unaskable, Path::new("/nowhere")).reload(&SshdUnit::Socket),
+        Err("systemctl ended with exit 1".to_owned())
+    );
+    let service_unaskable = socket_manager("Accept=no\nTriggers=sshd-other.service\n", "", 0);
+    assert_eq!(
+        host(&service_unaskable, Path::new("/nowhere")).reload(&SshdUnit::Socket),
+        Err("systemctl failed".to_owned())
+    );
+    let reload_fails = socket_manager("Accept=no\nTriggers=ssh.service\n", "active", 1);
+    assert_eq!(
+        host(&reload_fails, Path::new("/nowhere")).reload(&SshdUnit::Socket),
+        Err("systemctl ended with exit 1".to_owned())
+    );
+    assert_eq!(
+        reload_fails.lines(),
+        [SOCKET_SHOW, SERVICE_SHOW, "systemctl reload ssh.service"]
+    );
 }
 
 /// Proves `sshd -t -f` is run over the candidate and a failing exit is an error.

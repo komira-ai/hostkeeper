@@ -84,11 +84,11 @@ impl SshHost for FakeHost {
     }
 
     fn reload(&self, unit: &SshdUnit) -> Result<(), String> {
-        if *unit == SshdUnit::Socket {
-            return Ok(());
-        }
         let mut fake = self.lock();
-        fake.calls.push("reload".to_owned());
+        fake.calls.push(match unit {
+            SshdUnit::Service(_) => "reload".to_owned(),
+            other => format!("reload {other:?}"),
+        });
         if let Some(path) = &fake.sabotage {
             let _ = fs::remove_file(path);
             fs::create_dir_all(path).expect("a directory in the way");
@@ -350,33 +350,6 @@ fn the_first_record_is_applied_in_order() {
 fn nothing_is_reported_before_a_record() {
     let rig = Rig::new("ssh-silent");
     assert_eq!(rig.setup.report(), None);
-}
-
-/// Proves the same generation again does nothing, and a new generation with the same content
-/// checks and reads the banner but writes nothing, reloads nothing and builds no new list.
-#[test]
-fn a_record_again_changes_nothing() {
-    let rig = Rig::new("ssh-again");
-    rig.apply(&access(1));
-    let before = rig.host.calls();
-    let effective_calls = rig.host.lock().effective_calls;
-    assert_eq!(rig.apply(&access(1)).applied_generation, 1);
-    assert_eq!(rig.host.calls(), before);
-    assert_eq!(
-        rig.host.lock().effective_calls,
-        effective_calls,
-        "nothing was asked of sshd"
-    );
-
-    let report = rig.apply(&access(2));
-    assert_eq!(
-        (report.applied_generation, report.state.as_str()),
-        (2, "applied")
-    );
-    assert_eq!(
-        rig.host.calls()[before.len()..],
-        ["start", "check", "banner 127.0.0.1:22"]
-    );
 }
 
 /// Proves a new list of revoked serials is built and written, at its generation, and a reload
@@ -866,18 +839,6 @@ fn an_account_with_keys_that_is_unchanged_is_fine() {
     assert_eq!(rig.apply(&access(1)).state, "applied");
 }
 
-/// Proves under socket activation there is no reload, only the check, the banner and the files.
-#[test]
-fn a_socket_has_no_reload() {
-    let rig = Rig::new("ssh-socket");
-    rig.host.lock().unit = Ok(SshdUnit::Socket);
-    assert_eq!(rig.apply(&access(1)).state, "applied");
-    assert_eq!(
-        rig.host.calls(),
-        ["start", "revocations", "check", "banner 127.0.0.1:22"].map(str::to_owned)
-    );
-}
-
 /// Proves a record with `enabled = false` removes the files, reloads, reads the banner and
 /// reports `disabled`, then is a no-op, then puts a file that came back away again, and a later
 /// enabling builds the list again.
@@ -1005,3 +966,6 @@ fn the_report_follows_the_last_record() {
         ]
     );
 }
+
+#[path = "ssh_setup_reload_tests.rs"]
+mod reload;

@@ -78,6 +78,32 @@ pub fn identity(
     })
 }
 
+/// Whether `name` is an account `ssh` can be given as `<name>@<host>`: what the coordinator takes
+/// for `--ssh-login-user-linux` and `--ssh-login-user-macos`, 1 to 32 of ASCII letters, digits,
+/// `.`, `_` and `-`, not starting with `-` (so that it cannot read as an option of ssh).
+fn account(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+/// The refusal of a login user the coordinator answered for `host` that `ssh` cannot log in as.
+fn no_account(host: &str, login_user: &str) -> Error {
+    if login_user.is_empty() {
+        Error::Unusable(format!(
+            "the coordinator named no login user for {host}; for a Mac it names one only when \
+             it is given --ssh-login-user-macos (docs/operations/ssh-ca.md)"
+        ))
+    } else {
+        Error::Unusable(format!(
+            "the coordinator named {login_user:?} as the login user for {host}, which is not an \
+             account name"
+        ))
+    }
+}
+
 /// The serial of a certificate whose key id is `<operator name>/<serial>`.
 fn serial_of(key_id: &str) -> Result<u64, Error> {
     key_id
@@ -86,8 +112,10 @@ fn serial_of(key_id: &str) -> Result<u64, Error> {
         .ok_or_else(|| Error::Unusable("the certificate's key id has no serial".into()))
 }
 
-/// A certificate of `identity` for `host` that is valid for at least two more minutes: the one
-/// held when there is one, else a new one from the coordinator (kept for the next call).
+/// A certificate of `identity` for `host` that is valid for at least two more minutes and names
+/// an account to log in as: the one held when there is one, else a new one from the coordinator
+/// (kept for the next call). An answer whose login user is empty or not an account name is
+/// refused and not kept; a held one (kept by an earlier release) is asked for again.
 pub async fn certificate(
     client: &mut Client,
     coordinator: &Coordinator,
@@ -100,6 +128,7 @@ pub async fn certificate(
     if let Some(held) = state.cert_info(host)
         && held.public_key == identity.public_key
         && held.expires > now + RENEW_BEFORE_SECS
+        && account(&held.login_user)
         && state.cert_file(host).exists()
     {
         return Ok(held);
@@ -119,6 +148,9 @@ pub async fn certificate(
         return Err(Error::Unusable(
             "the coordinator's answer is not an OpenSSH certificate".into(),
         ));
+    }
+    if !account(&reply.login_user) {
+        return Err(no_account(host, &reply.login_user));
     }
     let info = CertInfo {
         serial: serial_of(&reply.key_id)?,
