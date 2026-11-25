@@ -131,8 +131,22 @@ address of the host's last heartbeat, written to `ssh_host` by the instance that
 the port is always 22. A heartbeat that arrives on a connection with no address says nothing; a host with
 none is refused `no_address`. A proxy that forwards the heartbeat listener's connections (a load balancer,
 Envoy) without preserving the client address makes the peer address the proxy's: the coordinator then dials
-the proxy's address on port 22, which is refused (`dial_failed`) or reaches another machine. The defence is
-the host key, not the address: `ssh` checks the host key it was given before it shows any credential, so a
+the proxy's address on port 22, which is refused (`dial_failed`) or reaches another machine.
+
+**Behind a TCP passthrough.** When the heartbeat listener sits behind a proxy that passes the mutual-TLS
+connection through unopened (Envoy's TLS passthrough by SNI, a TCP load balancer), have the proxy send a PROXY
+protocol header (version 1 or 2; in Envoy, the upstream transport socket
+`envoy.transport_sockets.upstream_proxy_protocol` on the heartbeat listener's cluster) and give the coordinator
+`--heartbeat-proxy-protocol-from <address>` (or `<address>/<bits>` for the proxy's network; repeatable, never
+`/0`). A connection whose peer is one of them must start with a header: the address recorded for the host, and
+dialled for its tunnels, is the header's source, and a connection from it with no header or a malformed one is
+closed before its TLS handshake (a `warn` line says why). A header that names no address (version 2's `LOCAL`,
+version 1's `UNKNOWN`, the proxy's own health check) is taken and records nothing. A connection from any other
+peer is read as TLS from its first byte, as without the flag, so a header it sends fails the handshake: only
+the proxy can say where a host is. The LAN listener (`--lan-listen`) reads no header. Without the flag no
+header is read anywhere.
+
+The defence is the host key, not the address: `ssh` checks the host key it was given before it shows any credential, so a
 dial that lands on another machine ends in a host key mismatch and the certificate is never presented. A host
 heard from an address other than the one before writes an `ssh_address_changed` line.
 

@@ -88,6 +88,7 @@ use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::operator_keys::OperatorKeys;
 use crate::ops::OpsStore;
 use crate::prerequisites::HostPrerequisites;
+use crate::proxy_protocol::{Proxies, ProxySource};
 use crate::service::{Clock, Coordinator};
 use crate::ssh_tunnel::run_poll;
 use crate::store::Spent;
@@ -209,6 +210,9 @@ pub struct Serve {
     /// Where updaters dial (mutual TLS).
     #[arg(long)]
     pub heartbeat_listen: SocketAddr,
+    /// The proxies the heartbeat listener reads a PROXY protocol header from.
+    #[command(flatten)]
+    pub proxy: listen::ProxyFlags,
     /// The private listener (TLS): where CI sets the desired state and reads the convergence
     /// with its OIDC token, and where an operator reads the status and acts with a token. It
     /// takes the address of one interface (loopback, a tunnel or a management network): a
@@ -521,6 +525,8 @@ pub struct Parts {
     pub control_tls: TlsSource,
     /// Where to bind the heartbeat listener.
     pub heartbeat_listen: SocketAddr,
+    /// The sources whose connections to the heartbeat listener start with a PROXY protocol header.
+    pub heartbeat_proxies: Vec<ProxySource>,
     /// Where to bind the private listener.
     pub control_listen: SocketAddr,
     /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
@@ -723,6 +729,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         heartbeat_tls,
         control_tls: TlsSource::files("control", files(None), interval)?,
         heartbeat_listen: flags.heartbeat_listen,
+        heartbeat_proxies: flags.proxy.heartbeat_proxy_protocol_from.clone(),
         control_listen: flags.private_listen,
         lan_listen: flags.lan_listen,
         health_listen: flags.health_listen,
@@ -853,8 +860,9 @@ where
     // Every console session open before this start ended with the one that held it.
     coordinator.console_started();
     let sweeping = crate::console::sweep_every(Arc::clone(&coordinator));
-    // Without a LAN listener, a future that never finishes stands in for it.
-    let serving_one = |listener, coordinator| {
+    // Without a LAN listener, a future that never finishes stands in for it. Only the heartbeat
+    // listener reads a PROXY protocol header, and only from the sources of its flag.
+    let serving_one = |listener, coordinator, proxies| {
         let stops = graceful.clone();
         serve_until_stopped(
             listener,
@@ -862,16 +870,19 @@ where
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
             stops,
+            proxies,
         )
     };
+    let none = Proxies::default;
     let serving_lan = match lan {
-        Some(lan) => Either::Left(serving_one(lan, Arc::clone(&coordinator))),
+        Some(lan) => Either::Left(serving_one(lan, Arc::clone(&coordinator), none())),
         None => Either::Right(std::future::pending()),
     };
     let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
+    let proxies = Proxies::new(&parts.heartbeat_proxies);
     let serving = together(
-        serving_one(heartbeat, for_heartbeat),
-        serving_one(control, for_control),
+        serving_one(heartbeat, for_heartbeat, proxies),
+        serving_one(control, for_control, none()),
     );
     let accepting = accept_until_stopped(&graceful, together(serving, serving_lan));
     let expire = !coordinator.claims_jobs();

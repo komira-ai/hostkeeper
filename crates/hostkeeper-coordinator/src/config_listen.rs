@@ -4,6 +4,8 @@ use std::net::{IpAddr, SocketAddr};
 
 use clap::Args;
 
+use crate::proxy_protocol::ProxySource;
+
 use super::{Serve, StartError};
 
 /// The flags of a LAN listener bound on every interface, as a Swarm task's is.
@@ -45,6 +47,21 @@ pub struct HealthFlags {
     /// Requires --health-listen.
     #[arg(long, requires = "health_listen")]
     pub health_listen_wildcard: bool,
+}
+
+/// The proxies whose connections to the heartbeat listener start with a PROXY protocol header.
+#[derive(Clone, Debug, Args)]
+pub struct ProxyFlags {
+    /// A source of the heartbeat listener's connections that sends a PROXY protocol header
+    /// (version 1 or 2) before the TLS handshake, such as a TCP passthrough in front of the
+    /// listener: an IP address, or a network written `ADDRESS/BITS` (not `/0`). Repeatable. A
+    /// connection from one of them must start with a header, and the address the coordinator
+    /// records for the host that heartbeats on it, and dials for its SSH tunnels, is the
+    /// header's source; one without a header is closed. A connection from any other address is
+    /// read as TLS from its first byte, so a header it sends fails its handshake. The LAN
+    /// listener reads no header. Without it, no connection's header is read.
+    #[arg(long = "heartbeat-proxy-protocol-from", value_name = "ADDRESS[/BITS]")]
+    pub heartbeat_proxy_protocol_from: Vec<ProxySource>,
 }
 
 /// Why `--lan-name` takes `name` as no DNS name, as the start's refusal states it, or `Ok`.

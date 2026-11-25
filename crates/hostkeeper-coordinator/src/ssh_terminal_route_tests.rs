@@ -483,6 +483,7 @@ async fn an_upgraded_connection_holds_its_slot_until_the_terminal_ends() {
                 Arc::clone(&coordinator),
                 CLIENT_PATIENCE,
                 graceful,
+                crate::proxy_protocol::Proxies::default(),
             )
         },
     ));

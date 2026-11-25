@@ -220,6 +220,7 @@ pub mod password;
 pub(crate) mod picks;
 mod plan_memo;
 pub mod prerequisites;
+pub mod proxy_protocol;
 mod queue;
 pub mod reconcile;
 pub mod registry;
