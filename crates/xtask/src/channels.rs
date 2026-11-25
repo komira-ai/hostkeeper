@@ -290,6 +290,7 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
                 region: &region,
                 env_file: &env_file,
                 https_only: true,
+                pause: &std::thread::sleep,
             },
         ),
         Verb::Apt { verb } => apt::run(verb, exec),

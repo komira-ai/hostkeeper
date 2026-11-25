@@ -263,7 +263,7 @@ The enrollment request gains `repeated string host_key_fingerprints` (additive, 
 | `--ssh-keepalive-s` | 30 | HTTP/2 PING interval of a tunnel |
 | `--ssh-drain-s` | 600 | how long a stopping instance lets tunnels run |
 
-Daemon: no key, no file, no flag. The feature is announced by `ssh-v1`; a daemon that does not announce it is sent nothing. Existing hosts get it by a coordinator setting `--ssh-ca-secret-file`; the whole fleet then applies it at its next heartbeat after its daemon update.
+Daemon: no key, no file, no flag. The feature is announced by `ssh-v1`; a daemon that does not announce it is sent nothing. Existing hosts get it by a coordinator setting `--ssh-ca-secret-file`, which then offers `ssh-v1` in its answer to every gRPC heartbeat that announces features (a daemon names it only once a reply advertised it; Built: `crates/hostkeeper-coordinator/src/features.rs`, `OFFERED`); the whole fleet then applies it at its next heartbeat after its daemon update.
 
 ## 11. Build items (parallel after C1)
 

@@ -280,7 +280,9 @@ Each needs `--ssh-ca-secret-file`.
 
 A daemon that announces `ssh-v1` is answered, in the heartbeat over gRPC, an `SshAccess` made for its host (a
 daemon that does not announce it, and the JSON route, are sent nothing; so is every host while no
-`--ssh-ca-secret-file` is given):
+`--ssh-ca-secret-file` is given). A daemon names `ssh-v1` only once a reply advertised it, so a coordinator
+given `--ssh-ca-secret-file` advertises it in its answer to every heartbeat over gRPC that announces features,
+whether or not it named it; without the flag it advertises it only to a daemon that named it. The access:
 
 - `ca_public_keys`: the keys of the host's class only. A fleet host gets every key of `--ssh-ca-secret-file`, the
   current one then the next (so both are trusted while a rotation runs). A control-plane host gets the key of
