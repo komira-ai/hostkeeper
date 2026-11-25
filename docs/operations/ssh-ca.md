@@ -21,8 +21,8 @@ It writes `./fleet-ca/ssh_user_ca` (an unencrypted OpenSSH Ed25519 private key, 
 reads it) and prints the public key line and its fingerprint. It never replaces a key that is there. It is
 run by hand, once, because N coordinator instances that each made a key at start would hold N different CAs.
 
-Load the file as a Swarm secret, read-only in every instance, and keep the offline copy as
-[ca-backup.md](ca-backup.md) keeps the other CA's:
+Load the file as a Swarm secret, read-only in every instance, and make the sealed offline copy (and
+check it with `hostkeeper-coordinator check-ca ssh`) as [ca-backup.md](ca-backup.md) says:
 
 ```
 docker secret create hostkeeper-ssh-ca ./fleet-ca/ssh_user_ca

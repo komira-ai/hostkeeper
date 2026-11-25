@@ -465,8 +465,8 @@ is the binary, so `backup ...` is the container's arguments, as `serve ...` is.
 
 ## Restoring after a lost disk
 
-1. Put the CA's key and its `.cert` back from the sealed copy, at the path `--ca-key-file` names
-   ([ca-backup.md](ca-backup.md)). The server certificate file need not be restored: the start
+1. Put the CA's key and its `.cert` back from the sealed copy, at the path `--ca-key-file` names,
+   checked with `hostkeeper-coordinator check-ca enrollment` ([ca-backup.md](ca-backup.md)). The server certificate file need not be restored: the start
    makes it when it is missing.
 2. Restore the snapshot to the paths `serve` will run with:
 

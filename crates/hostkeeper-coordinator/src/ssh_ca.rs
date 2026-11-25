@@ -5,9 +5,9 @@
 //! `init --out <dir>` makes one Ed25519 CA key, once, offline: it writes the private key file
 //! into the directory (mode 0600, and never over a file that is there), and prints the public key
 //! and its fingerprint, nothing of the private key. The owner loads the file as the Swarm secret
-//! `--ssh-ca-secret-file` reads, and keeps the offline copy as `docs/operations/ca-backup.md`
-//! keeps the other CA's. Why the coordinator does not make it at its first start: N instances
-//! would each make one.
+//! `--ssh-ca-secret-file` reads, and makes the sealed offline copy as
+//! `docs/operations/ca-backup.md` says (`check-ca ssh` checks it). Why the coordinator does not
+//! make it at its first start: N instances would each make one.
 //!
 //! `sign` makes a certificate by the same rules as the coordinator's, for a host the coordinator
 //! may not sign for (the control plane's, section 5), on the owner's machine. It prints the

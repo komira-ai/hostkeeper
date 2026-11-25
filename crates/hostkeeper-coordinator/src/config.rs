@@ -70,7 +70,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::accounts::AccountStore;
 use crate::alerts::{DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS};
 use crate::audit_file::wall_clock;
-use crate::backup::{Backup, Report, Restore, backup, restore};
+use crate::backup::{Backup, Restore, backup, finish, restore};
 use crate::desired::DesiredStore;
 use crate::enrollment::{Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
@@ -191,6 +191,8 @@ pub enum Command {
     Export(Export),
     /// Make the SSH user CA's key (`init`), or sign a certificate with it offline (`sign`).
     SshCa(crate::ssh_ca::SshCa),
+    /// Check, reading only, that a copy of a CA's files is the CA the fleet trusts.
+    CheckCa(crate::ca_check::CheckCa),
 }
 
 /// The flags of `serve`.
@@ -941,8 +943,9 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
-/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore or
-/// export is exit 1; SIGTERM or SIGINT, a backup made, and a restore or export done are exit 0.
+/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore,
+/// export or `ssh-ca` verb, and a CA copy `check-ca` refuses, are exit 1; SIGTERM or SIGINT, a
+/// backup made, a restore or export done, and a CA copy `check-ca` passes are exit 0.
 /// `serve` without
 /// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
@@ -980,20 +983,6 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
             wall_clock()(),
             &os_random(),
         )),
-    }
-}
-
-/// The exit of a backup, a restore or an export: its report on standard output and
-/// exit 0, or why it was refused on standard error and exit 1.
-fn finish(done: Result<Report, impl std::fmt::Display>) -> ExitCode {
-    match done {
-        Ok(report) => {
-            print!("{report}");
-            ExitCode::SUCCESS
-        }
-        Err(why) => {
-            eprintln!("hostkeeper-coordinator: {why}");
-            ExitCode::from(1)
-        }
+        Command::CheckCa(check) => finish(crate::ca_check::run(&check.command)),
     }
 }
