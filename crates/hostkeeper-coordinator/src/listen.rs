@@ -9,8 +9,11 @@
 //! ([`reload_every`]). A heartbeat listener's source (the LAN listener's is the same one) requires a
 //! client certificate that chains to the farm CA, or, with enrollment, lets a client without one
 //! through the handshake and admits one of the coordinator's CA too (each route then decides:
-//! only `Enroll` and `Poll` answer a caller without one); the private listener's asks for none. A
-//! handshake offers `h2` and `http/1.1`, whatever the source's own protocols are: a connection
+//! only `Enroll` and `Poll` answer a caller without one); the private listener's asks for none.
+//! On a connection from a proxy of `--heartbeat-proxy-protocol-from`, the heartbeat listener reads
+//! a PROXY protocol header before the handshake, and the address of the connection is the
+//! header's source ([`crate::proxy_protocol`]). A handshake offers `h2` and `http/1.1`, whatever
+//! the source's own protocols are: a connection
 //! that negotiates `h2` speaks HTTP/2 (gRPC, and the JSON routes over HTTP/2), any other speaks
 //! HTTP/1.1 (the JSON routes). Either has a limit on its handshake, its request body and on any
 //! single write of a response that its peer does not read; an HTTP/1.1 connection has a limit on
@@ -57,6 +60,7 @@ use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
 use crate::operator_keys::OperatorKeys;
 use crate::prerequisites::HostPrerequisites;
+use crate::proxy_protocol::{self, Proxies};
 use crate::service::Coordinator;
 use crate::ssh_terminal_route::Shared;
 use crate::tokens::OperatorTokens;
@@ -144,19 +148,22 @@ where
         patience,
         max_connections,
         Graceful::default(),
+        Proxies::default(),
     )
 }
 
 /// [`serve`] for a listener of `graceful` (the heartbeat, private and LAN ones of a coordinator
 /// that stops): each connection is counted as open on it while it is served, and is told to finish
-/// when it is told to stop ([`crate::graceful`]). It never returns; the listener's accepting ends
-/// by [`crate::graceful::accept_until_stopped`] dropping it.
+/// when it is told to stop ([`crate::graceful`]). A connection whose peer is one of `proxies`
+/// starts with a PROXY protocol header ([`crate::proxy_protocol`]). It never returns; the
+/// listener's accepting ends by [`crate::graceful::accept_until_stopped`] dropping it.
 pub(crate) fn serve_until_stopped<A, F, S>(
     listener: Listener<A>,
     coordinator: Arc<Coordinator>,
     patience: Duration,
     max_connections: usize,
     graceful: Graceful,
+    proxies: Proxies,
 ) -> impl Future<Output = Infallible>
 where
     A: FnMut() -> F + Send,
@@ -169,6 +176,7 @@ where
         patience,
         Arc::new(Semaphore::new(max_connections)),
         graceful,
+        proxies,
     )
 }
 
@@ -185,16 +193,26 @@ where
     F: Future<Output = io::Result<S>> + Send,
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    serve_counted(listener, coordinator, patience, slots, Graceful::default()).await
+    serve_counted(
+        listener,
+        coordinator,
+        patience,
+        slots,
+        Graceful::default(),
+        Proxies::default(),
+    )
+    .await
 }
 
-/// [`serve_with_slots`] counting its connections on `graceful`.
+/// [`serve_with_slots`] counting its connections on `graceful`, reading a PROXY protocol header
+/// on each connection from one of `proxies`.
 async fn serve_counted<A, F, S>(
     listener: Listener<A>,
     coordinator: Arc<Coordinator>,
     patience: Duration,
     slots: Arc<Semaphore>,
     graceful: Graceful,
+    proxies: Proxies,
 ) -> Infallible
 where
     A: FnMut() -> F + Send,
@@ -214,6 +232,7 @@ where
             Arc::clone(&coordinator),
             patience,
             graceful,
+            proxies.clone(),
         )
     })
     .await
@@ -445,6 +464,7 @@ pub async fn connection<S>(
         coordinator,
         patience,
         Graceful::default(),
+        Proxies::default(),
     )
     .await;
 }
@@ -455,21 +475,43 @@ pub async fn connection<S>(
 /// wait ends), an HTTP/1.1 connection closes after the request in flight (one that is idle closes
 /// at once), and an upgraded one is left to its socket. A connection still in its TLS handshake
 /// at the stop finishes it by its patience and is told then.
+///
+/// A connection whose peer is one of `proxies` first sends a PROXY protocol header, within the
+/// handshake's patience, and the address it came from is the one the header names (none when it
+/// names none); one without a header, or with a malformed one, is closed before the handshake. A
+/// connection from any other peer is read from its first byte as TLS.
 pub(crate) async fn connection_with<S>(
-    stream: S,
+    mut stream: S,
     config: Arc<ServerConfig>,
     surface: Surface,
     coordinator: Arc<Coordinator>,
     patience: Duration,
     graceful: Graceful,
+    proxies: Proxies,
 ) where
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
-    let remote = stream.remote();
+    let mut remote = stream.remote();
     let mut config = (*config).clone();
     config.alpn_protocols = ALPN.iter().map(|name| name.to_vec()).collect();
-    let shaken = tokio::time::timeout(patience, TlsAcceptor::from(Arc::new(config)).accept(stream));
-    let tls = match shaken.await {
+    // The header and the handshake share the one patience.
+    let deadline = Instant::now() + patience;
+    if proxies.trusts(remote) {
+        let proxy = remote;
+        remote = match tokio::time::timeout_at(deadline, proxy_protocol::read(&mut stream)).await {
+            Ok(Ok(source)) => source,
+            Ok(Err(why)) => {
+                tracing::warn!(%why, ?proxy, "a connection from a trusted proxy was refused");
+                return;
+            }
+            Err(_) => {
+                tracing::warn!(?proxy, "a trusted proxy did not send its header in time");
+                return;
+            }
+        };
+    }
+    let accepting = TlsAcceptor::from(Arc::new(config)).accept(stream);
+    let tls = match tokio::time::timeout_at(deadline, accepting).await {
         Ok(Ok(tls)) => tls,
         Ok(Err(why)) => {
             tracing::debug!(%why, ?remote, "a TLS handshake failed");

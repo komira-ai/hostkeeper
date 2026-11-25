@@ -430,6 +430,7 @@ impl Farm {
             heartbeat_tls: heartbeat_tls.clone(),
             control_tls: control_tls.clone(),
             heartbeat_listen: HEARTBEAT_ADDR.parse().expect("an address"),
+            heartbeat_proxies: Vec::new(),
             control_listen: CONTROL_ADDR.parse().expect("an address"),
             lan_listen: None,
             health_listen: None,

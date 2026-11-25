@@ -97,6 +97,7 @@ async fn a_held_http2_connection_is_answered_and_closed_at_the_stop() {
                     Arc::clone(&served),
                     CLIENT_PATIENCE,
                     graceful,
+                    crate::proxy_protocol::Proxies::default(),
                 )
             },
         ));
