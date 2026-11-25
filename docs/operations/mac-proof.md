@@ -677,7 +677,7 @@ again (FileVault on), A8, A9. Copy `sw_vers`, `fdesetup status` and `fdesetup li
 
 ### MP-A1 The reads the daemon already makes, before the account exists
 
-Settles section 5.5 (the built reads, [V] in `maintenance_account.rs` line 6 and the Secure Token stream). Run by a root shell on the proof Mac. Needs MP-E8. `hkproof` must not exist (a `dscl` exit other than 56 for it: stop).
+Settles section 5.5 (the built reads: the exit of `dscl` for a missing user and the Secure Token stream; shown on macOS 27.2.1, design 10.1.2, and run again on a new macOS). Run by a root shell on the proof Mac. Needs MP-E4 (the reads need no launchd job). `hkproof` must not exist (a `dscl` exit other than 56 for it: stop).
 
 ```sh
 umask 077; cd /var/root/hk-proof
@@ -695,7 +695,7 @@ done
 
 Argv as merged: `maintenance_account.rs` `secure_token`, `collect()`, `RECORD_NOT_FOUND` (56), `TOKEN_ENABLED`, `TOKEN_DISABLED`; `maintenance_mac.rs:35,41`. Record: exit, stdout and stderr of each call apart; which stream carries the Secure Token line and its exact text; `fdesetup status`; the admin's name is not a secret.
 Decides:
-- dscl exits 56 for the missing user -> keep `RECORD_NOT_FOUND` (`maintenance_account.rs`), drop the [V] in its module doc; other code -> change the `Some(RECORD_NOT_FOUND)` arm in `collect()` and its fixtures.
+- dscl exits 56 for the missing user -> keep `RECORD_NOT_FOUND` (`maintenance_account.rs`, its module doc says it was shown); other code -> change the `Some(RECORD_NOT_FOUND)` arm in `collect()` and its fixtures.
 - Token line text differs from `Secure token is ENABLED/DISABLED for user` -> change `TOKEN_ENABLED`/`TOKEN_DISABLED` in `maintenance_account.rs` and `tests/fixtures/maintenance/account/token-*.txt`.
 - Only one stream carries the line -> no code change (both are joined in `secure_token`); say which in the doc comment; add the real text as a fixture.
 - The admin reads DISABLED -> stop; the grant in A3 cannot work; use another Mac.
@@ -768,7 +768,7 @@ Decides:
 
 ### MP-A5 Hidden, no shell, not in ssh
 
-Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs:210-213` (`is_hidden`), `maintenance_account.rs` `collect()`; the account-making start (`update_account_make.rs`) writes `IsHidden 1` and `UserShell /usr/bin/false` with `dscl . -create` and takes the account out of `com.apple.access_ssh` with `dseditgroup -o edit -d`, each only when it is not so already.
+Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.access_ssh`). Root shell. Needs A2 (the hide was done there). Built reads: `login_account.rs` `is_hidden` (with `dscl_value`), `maintenance_account.rs` `collect()`; the account-making start (`update_account_make.rs`) writes `IsHidden 1` and `UserShell /usr/bin/false` with `dscl . -create` and takes the account out of `com.apple.access_ssh` with `dseditgroup -o edit -d`, each only when it is not so already.
 
 ```sh
 /usr/bin/dscl . -read "$U/hkproof" RecordName IsHidden; echo "exit=$?"
