@@ -34,8 +34,11 @@ pub enum Tunnel {
     /// `host_closed`; the cause the coordinator audits is sent to [`Rig::audited`].
     Echo,
     /// As [`Tunnel::Echo`], but at the client's `close` the host answers `half-closed` and does
-    /// not close: the tunnel ends at the client's next move.
+    /// not close until [`Script::release`] is notified (then `bye` and `host_closed`), or the
+    /// client's next move ends the tunnel.
     Linger,
+    /// The `open` is taken and never answered: [`Rig::audited`] says `open held`.
+    HoldOpen,
     /// Refused with this token.
     Refuse(&'static str),
     /// A first answer that is not `opened`.
@@ -66,6 +69,8 @@ pub struct Seen {
 pub struct Script {
     /// The cause of each close the fake audits, in order.
     pub audit: Mutex<std::sync::mpsc::Sender<&'static str>>,
+    /// Lets the host of a [`Tunnel::Linger`] tunnel close.
+    pub release: tokio::sync::Notify,
     pub sign: Mutex<Result<proto::SignUserCertResponse, Status>>,
     pub keys: Mutex<Result<proto::HostKeysResponse, Status>>,
     pub revoke: Mutex<Result<proto::RevokeResponse, Status>>,
@@ -86,6 +91,7 @@ impl Script {
     fn new(audit: std::sync::mpsc::Sender<&'static str>) -> Script {
         Script {
             audit: Mutex::new(audit),
+            release: tokio::sync::Notify::new(),
             sign: Mutex::new(Ok(certificate_reply(41, NOW + 3600))),
             keys: Mutex::new(Ok(proto::HostKeysResponse {
                 fingerprints: vec![PIN.into()],
@@ -112,11 +118,13 @@ fn note(script: &Script, request: &Request<impl Sized>) {
 
 struct Service(Arc<Script>);
 
-/// The relay of an open tunnel, ended as the coordinator's (`pump` in hostkeeper-coordinator's
-/// `ssh_tunnel.rs`) ends it, and the cause it audits: a client's `close` shuts the host's input
-/// and the host answers `bye` and closes (`host_closed`); a request stream that ends is `eof`;
-/// one that fails, which is a client that went away, is `error`. With `linger`, the host answers
-/// a `close` with `half-closed` and stays; then a second `close` or more data is audited as such.
+/// The relay of an open tunnel and the cause audited at its end, with the causes the
+/// coordinator's relay (`pump` in hostkeeper-coordinator's `ssh_tunnel.rs`) gives the same ends:
+/// a client's `close` shuts the host's input and the host answers `bye` and closes
+/// (`host_closed`); a request stream that ends is `eof`; one that fails, which is a client that
+/// went away, is `error`. Stricter than the coordinator, which reads nothing after a `close`:
+/// with `linger` the host answers a `close` with `half-closed` and stays until released, and a
+/// second `close` or more data from the client is audited as such.
 async fn relay(
     script: &Script,
     incoming: &mut Streaming<proto::TunnelFrame>,
@@ -125,7 +133,14 @@ async fn relay(
 ) -> &'static str {
     let mut closed = false;
     loop {
-        match incoming.message().await {
+        let next = tokio::select! {
+            next = incoming.message() => next,
+            () = script.release.notified(), if closed => {
+                let _ = out.send(Ok(frame(Frame::Data(b"bye".to_vec())))).await;
+                return "host_closed";
+            }
+        };
+        match next {
             Ok(Some(proto::TunnelFrame {
                 frame: Some(Frame::Data(bytes)),
             })) => {
@@ -289,6 +304,12 @@ impl Ssh for Service {
                         cause: cause.into(),
                     });
                     let _ = out.send(Ok(frame(close))).await;
+                }
+                Tunnel::HoldOpen => {
+                    let _ = script.audit.lock().expect("audit").send("open held");
+                    // Kept until the client goes away.
+                    while let Ok(Some(_)) = incoming.message().await {}
+                    drop(out);
                 }
                 Tunnel::Refuse(_) => {}
             }

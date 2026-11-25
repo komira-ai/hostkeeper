@@ -61,11 +61,20 @@ async fn open(client: &mut Client, host: &str, serial: u64) -> Result<Opened, Er
     }
 }
 
-/// The signals that stop a proxy, one item each time one comes.
-pub(crate) type Signals = Pin<Box<dyn Stream<Item = ()> + Send>>;
+/// A signal that stops a proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// SIGHUP: ssh sends it to its `ProxyCommand` when it exits, and a terminal that closes sends
+    /// it too, so two can come for one end.
+    Hangup,
+    /// SIGTERM.
+    Terminate,
+}
 
-/// SIGHUP, which ssh sends its `ProxyCommand` when it exits, and SIGTERM, as [`Signals`]. From
-/// here on neither ends the process: [`proxy`] does.
+/// The signals that stop a proxy, one item each time one comes.
+pub(crate) type Signals = Pin<Box<dyn Stream<Item = Stop> + Send>>;
+
+/// SIGHUP and SIGTERM as [`Signals`]. From here on neither ends the process: [`proxy`] does.
 pub(crate) fn stop_signals() -> Result<Signals, Error> {
     let watch = |kind| {
         signal(kind).map(SignalStream::new).map_err(|source| {
@@ -74,8 +83,8 @@ pub(crate) fn stop_signals() -> Result<Signals, Error> {
             ))
         })
     };
-    let hangup = watch(SignalKind::hangup())?;
-    let terminate = watch(SignalKind::terminate())?;
+    let hangup = watch(SignalKind::hangup())?.map(|()| Stop::Hangup);
+    let terminate = watch(SignalKind::terminate())?.map(|()| Stop::Terminate);
     Ok(Box::pin(hangup.merge(terminate)))
 }
 
@@ -84,10 +93,12 @@ pub(crate) fn stop_signals() -> Result<Signals, Error> {
 /// the host closes (what `scp` and `rsync` need). A first signal of `signals`, and an `output`
 /// that takes no more bytes (ssh has gone), end `input` the same way: `Close{eof}` is sent, once,
 /// and the relay waits for the coordinator to end the stream, dropping what the host still sends
-/// when `output` is gone, so the coordinator records the close's cause and not an error. A
-/// second signal ends the relay at once. Returns how the stream ended: `Ok` for the host's close
-/// or an end after `input` did, an error when the coordinator closed it for another reason or a
-/// second signal came first.
+/// when `output` is gone, so the coordinator records the close's cause and not an error. That
+/// wait lasts until the host closes, or at most until the coordinator's idle or session limit
+/// ends the tunnel. A SIGTERM after a first signal ends the relay at once; a further SIGHUP does
+/// not. A signal before the coordinator's `opened` ends the proxy before any byte moves.
+/// Returns how the stream ended: `Ok` for the host's close or an end after `input` did, an
+/// error when the coordinator closed it for another reason or a signal cut it.
 pub async fn proxy(
     client: &mut Client,
     host: &str,
@@ -96,7 +107,14 @@ pub async fn proxy(
     output: &mut (dyn AsyncWrite + Unpin),
     mut signals: Signals,
 ) -> Result<(), Error> {
-    let (sender, mut answers) = open(client, host, serial).await?;
+    let (sender, mut answers) = tokio::select! {
+        opened = open(client, host, serial) => opened?,
+        Some(_) = signals.next() => {
+            return Err(Error::Unusable(
+                "a signal ended the proxy before the tunnel opened".into(),
+            ));
+        }
+    };
     // Set when `input` is to be taken as ended: at a signal, or when `output` fails.
     let (stop, mut stopped) = watch::channel(false);
     let upstream = tokio::spawn(async move {
@@ -130,10 +148,11 @@ pub async fn proxy(
     let ended = loop {
         let answer = tokio::select! {
             answer = answers.message() => answer,
-            Some(()) = signals.next() => {
-                if signalled {
+            Some(signal) = signals.next() => {
+                if signalled && signal == Stop::Terminate {
                     break Err(Error::Unusable(
-                        "a second signal ended the proxy before the tunnel closed".into(),
+                        "SIGTERM after a first signal ended the proxy before the tunnel closed"
+                            .into(),
                     ));
                 }
                 signalled = true;

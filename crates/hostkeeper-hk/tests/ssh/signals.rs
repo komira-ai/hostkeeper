@@ -163,10 +163,10 @@ fn a_proxy_whose_stdout_is_gone_closes_its_tunnel_as_host_closed() {
 }
 
 /// Proves: after a first signal the proxy sends exactly one `close` and waits for the host,
-/// still relaying what the host sends; a second signal ends it at once, with exit code 1 and the
+/// still relaying what the host sends; a SIGTERM then ends it at once, with exit code 1 and the
 /// reason on stderr, and with no second `close` sent.
 #[test]
-fn a_second_signal_ends_a_proxy_whose_host_has_not_closed() {
+fn sigterm_after_a_first_signal_ends_a_proxy_whose_host_has_not_closed() {
     let rig = Rig::start();
     queue(&rig, Tunnel::Linger);
     let mut proxy = Proxy::start(&rig);
@@ -174,6 +174,69 @@ fn a_second_signal_ends_a_proxy_whose_host_has_not_closed() {
     proxy.signal(Signal::HUP);
     // The host's answer to the `close` the first signal sent.
     assert_eq!(proxy.receive(11), b"half-closed");
+    proxy.signal(Signal::TERM);
+    let (status, rest, stderr) = proxy.finish();
+    assert_eq!(
+        (status.code(), rest.as_slice(), stderr.as_str()),
+        (
+            Some(1),
+            &b""[..],
+            "hk: SIGTERM after a first signal ended the proxy before the tunnel closed\n"
+        )
+    );
+    assert_eq!(rig.audited(), "error");
+}
+
+/// Proves: a second SIGHUP (a terminal that closes sends one to the proxy as well as ssh's) does
+/// not end a proxy that is waiting for its host: the host's close still ends it with exit code 0
+/// and the tunnel is audited `host_closed`, with one `close` sent.
+#[test]
+fn a_second_sighup_leaves_the_proxy_waiting_for_its_host() {
+    let rig = Rig::start();
+    queue(&rig, Tunnel::Linger);
+    let mut proxy = Proxy::start(&rig);
+    proxy.ping();
+    proxy.signal(Signal::HUP);
+    assert_eq!(proxy.receive(11), b"half-closed");
+    proxy.signal(Signal::HUP);
+    rig.script.release.notify_one();
+    let (status, rest, stderr) = proxy.finish();
+    assert_eq!(
+        (status.code(), rest.as_slice(), stderr.as_str()),
+        (Some(0), &b"bye"[..], "")
+    );
+    assert_eq!(rig.audited(), "host_closed");
+}
+
+/// Proves: a signal after the proxy's stdin has ended, when its `close` is already sent, sends no
+/// second `close`: the host's close ends the proxy with exit code 0 and the tunnel is audited
+/// `host_closed`.
+#[test]
+fn a_signal_after_end_of_stdin_sends_no_second_close() {
+    let rig = Rig::start();
+    queue(&rig, Tunnel::Linger);
+    let mut proxy = Proxy::start(&rig);
+    proxy.ping();
+    drop(proxy.stdin.take());
+    assert_eq!(proxy.receive(11), b"half-closed");
+    proxy.signal(Signal::HUP);
+    rig.script.release.notify_one();
+    let (status, rest, stderr) = proxy.finish();
+    assert_eq!(
+        (status.code(), rest.as_slice(), stderr.as_str()),
+        (Some(0), &b"bye"[..], "")
+    );
+    assert_eq!(rig.audited(), "host_closed");
+}
+
+/// Proves: a signal while the proxy waits for the coordinator's `opened` ends it with exit code 1
+/// and the reason on stderr, instead of being held until the tunnel opens.
+#[test]
+fn a_signal_before_the_tunnel_opens_ends_the_proxy() {
+    let rig = Rig::start();
+    queue(&rig, Tunnel::HoldOpen);
+    let proxy = Proxy::start(&rig);
+    assert_eq!(rig.audited(), "open held");
     proxy.signal(Signal::HUP);
     let (status, rest, stderr) = proxy.finish();
     assert_eq!(
@@ -181,8 +244,7 @@ fn a_second_signal_ends_a_proxy_whose_host_has_not_closed() {
         (
             Some(1),
             &b""[..],
-            "hk: a second signal ended the proxy before the tunnel closed\n"
+            "hk: a signal ended the proxy before the tunnel opened\n"
         )
     );
-    assert_eq!(rig.audited(), "error");
 }
