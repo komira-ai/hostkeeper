@@ -6,7 +6,7 @@
 mod support;
 
 use std::ffi::OsString;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 use clap::Parser;
 use clap::error::ErrorKind;
@@ -71,22 +71,58 @@ fn another_value_stops_the_start_with_exit_2() {
     }
 }
 
+/// The binary run over `serve` with the flags of `files` and `--config serve.toml` holding
+/// `text`: its exit code and its stderr.
+fn run_with_file(files: &Files, text: &str) -> (Option<i32>, String) {
+    files.put("serve.toml", text, 0o644);
+    let mut given = files.args();
+    given.extend([
+        OsString::from("--config"),
+        files.path("serve.toml").into_os_string(),
+    ]);
+    let out = Command::new(env!("CARGO_BIN_EXE_hostkeeper-coordinator"))
+        .args(&given[1..])
+        .output()
+        .expect("run hostkeeper-coordinator");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// Proves: `macos-update-via = "apple-business"` in the `--config` file stops the start with
-/// exit 2, as the flag does.
+/// exit 2 and the parser's own message, which names the flag, the value and that apple-business
+/// is not built, as the flag's refusal does; and the in-process entry also exits 2.
 ///
-/// Catches: a file that sets the way around the flag's check.
+/// Catches: a file that sets the way around the flag's check, and an exit 2 that comes from
+/// some other key or parse error.
 #[test]
 fn the_config_file_key_is_refused_like_the_flag() {
     let files = Files::new("start-maintenance-config");
-    files.put(
-        "serve.toml",
-        "macos-update-via = \"apple-business\"\n",
-        0o644,
-    );
+    let (code, stderr) = run_with_file(&files, "macos-update-via = \"apple-business\"\n");
+    assert_eq!(code, Some(2), "{stderr}");
+    let want = "error: invalid value 'apple-business' for '--macos-update-via <WAY>': \
+                apple-business is not built: Apple Business offers no call that installs an \
+                update on one Mac; only daemon is taken\n";
+    assert!(stderr.starts_with(want), "{stderr}");
     let mut given = files.args();
     given.extend([
         OsString::from("--config"),
         files.path("serve.toml").into_os_string(),
     ]);
     assert_eq!(exit_code(given), ExitCode::from(2));
+}
+
+/// Proves: `macos-update-via = "daemon"` in the `--config` file is a known key with a value the
+/// flag takes: the start is not refused as a bad flag (not exit 2, no word of the flag in the
+/// message), where the same key with another value is.
+///
+/// Catches: a file key the parser does not know, which would make the refusal above say nothing
+/// about apple-business.
+#[test]
+fn the_config_file_key_with_daemon_is_accepted() {
+    let files = Files::new("start-maintenance-config-daemon");
+    let (code, stderr) = run_with_file(&files, "macos-update-via = \"daemon\"\n");
+    assert_ne!(code, Some(2), "{stderr}");
+    assert!(!stderr.contains("macos-update-via"), "{stderr}");
 }
