@@ -62,7 +62,7 @@ function copyLine(env, key, line) {
 export function addPanel(env) {
   const { ctx, target } = env;
   return h("section", { class: "card", name: "add-panel" },
-    h("h3", {}, target === null ? "Add Xcode" : `Add Xcode ${target.version} (${target.build})`),
+    h("h3", {}, target === null ? "Add Xcode" : `Add Xcode ${target.version} (${target["build"]})`),
     h("p", {}, "On the Mac signed in to the Apple developer account, in Terminal:"),
     copyLine(env, "add", addCommand(target)),
     target === null
@@ -77,7 +77,7 @@ export function addPanel(env) {
       "), then"),
     copyLine(env, "settings", settingsLine(env.origin)),
     env.progress === null ? null : h("p", { name: "upload-progress" },
-      `Uploading: ${uploadWords(env.now, env.progress)}`),
+      `Uploading: ${uploadWords(env["now"], env.progress)}`),
     env.stored === null ? null : h("p", { name: "upload-stored" },
       h("strong", {}, `Stored. ${env.stored}`), " ",
       h("button", {

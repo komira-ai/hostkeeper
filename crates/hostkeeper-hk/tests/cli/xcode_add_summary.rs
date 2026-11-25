@@ -421,8 +421,8 @@ fn an_xcode_installed_elsewhere_or_of_another_build_does_not_count() {
 #[test]
 fn a_mac_in_a_run_that_takes_xcode_says_the_run_and_its_window() {
     let mut window = run("r-win", "SCHEDULED");
-    window["windowStartUnix"] = json!("1780000000");
-    window["windowEndUnix"] = json!(1_780_009_000);
+    window["windowStartUnix"] = json!("1790000000");
+    window["windowEndUnix"] = json!(1_790_009_000);
     let fleet = Fleet {
         hosts: vec![json!({"hosts": [
             mac("mac-01", "g", &[]),
@@ -452,7 +452,7 @@ fn a_mac_in_a_run_that_takes_xcode_says_the_run_and_its_window() {
         ran.stdout,
         format!(
             "{HELD}Xcode 27.2 is now due on 3 Macs:\n  g (xcode_keep 1, batch 1): mac-01, \
-             mac-02\n    mac-01: in run r-win, window 2026-05-28 20:26 UTC to 2026-05-28 22:56 \
+             mac-02\n    mac-01: in run r-win, window 2026-09-21 14:13 UTC to 2026-09-21 16:43 \
              UTC\n    mac-02: in run r-now, now\n  h (xcode_keep 1, batch 1): mac-03\n    no run \
              takes it yet; a run would take mac-03 (batch 1)\n{}",
             command("h")
@@ -471,7 +471,7 @@ fn a_mac_in_a_run_that_takes_xcode_says_the_run_and_its_window() {
 #[test]
 fn a_window_with_no_end_says_so() {
     let mut window = run("r-win", "SCHEDULED");
-    window["windowStartUnix"] = json!("1780000000");
+    window["windowStartUnix"] = json!("1790000000");
     let fleet = Fleet {
         hosts: vec![json!({"hosts": [mac("mac-01", "g", &[])]})],
         groups: vec![json!({"hostGroups": [group("g", 1, None, None)]})],
@@ -481,7 +481,7 @@ fn a_window_with_no_end_says_so() {
     let (_add, _server, ran) = add("no-end", store(&[]), &fleet);
     assert!(
         ran.stdout
-            .contains("    mac-01: in run r-win, window 2026-05-28 20:26 UTC to no end\n"),
+            .contains("    mac-01: in run r-win, window 2026-09-21 14:13 UTC to no end\n"),
         "{ran:?}"
     );
 }

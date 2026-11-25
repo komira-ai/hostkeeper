@@ -411,9 +411,9 @@ fn a_read_that_fails_at_the_start_is_the_page_and_one_that_fails_again_keeps_the
         "[]",
         r#"
 await seen.repeats[0].run();
-const failed = { warning: t(nodes(cur()).find((n) => n.attrs["role"] === "alert")), macs: macTable(cur()).map((r) => r.name), archives: named(cur(), "archive").length };
+const failed = { warning: t(nodes(cur()).find((n) => n.attrs["role"] === "alert")), macs: macTable(cur()).map(({ name }) => name), archives: named(cur(), "archive").length };
 await seen.repeats[0].run();
-const mended = { alerts: nodes(cur()).filter((n) => n.attrs["role"] === "alert").length, macs: macTable(cur()).map((r) => r.name), waiting: t(named(cur(), "xcode-waiting")[0]).startsWith("No release waits") };
+const mended = { alerts: nodes(cur()).filter((n) => n.attrs["role"] === "alert").length, macs: macTable(cur()).map(({ name }) => name), waiting: t(named(cur(), "xcode-waiting")[0]).startsWith("No release waits") };
 return { failed, mended };"#,
     );
     assert_eq!(
@@ -456,7 +456,7 @@ fn the_hosts_and_the_groups_are_read_to_the_last_page() {
     let out = drive(
         &mut ui,
         "[]",
-        "return macTable(tree).map((r) => [r.name, r.keeps]);",
+        "return macTable(tree).map(({ name, keeps }) => [name, keeps]);",
     );
     assert_eq!(
         out["out"],

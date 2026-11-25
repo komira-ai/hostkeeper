@@ -86,7 +86,7 @@ fn the_due_column_follows_the_rule_of_the_coordinators_plan() {
     let out = drive(
         &mut ui,
         "[]",
-        "return macTable(tree).map((r) => [r.name, r.group, r.keeps, r.due]);",
+        "return macTable(tree).map(({ name, group, keeps, due }) => [name, group, keeps, due]);",
     );
     assert_eq!(
         out["out"],
@@ -170,7 +170,7 @@ fn a_version_of_ten_is_newer_than_a_version_of_nine_and_a_default_no_kept_releas
     let out = drive(
         &mut ui,
         "[]",
-        "return macTable(tree).map((r) => [r.name, r.due]);",
+        "return macTable(tree).map(({ name, due }) => [name, due]);",
     );
     assert_eq!(
         out["out"],
@@ -246,7 +246,7 @@ fn the_device_management_column_says_nothing_blocks_updates_or_names_the_keys() 
     let out = drive(
         &mut ui,
         "[]",
-        "return macTable(tree).map((r) => [r.name, r.device]);",
+        "return macTable(tree).map(({ name, device }) => [name, device]);",
     );
     assert_eq!(
         out["out"],
@@ -306,7 +306,7 @@ fn a_mac_in_an_open_run_links_the_maintenance_page_and_says_when_the_run_does_no
         &mut ui,
         "[]",
         r#"
-const runs = macTable(tree).map((r) => [r.name, r.run]);
+const runs = macTable(tree).map(({ name, run }) => [name, run]);
 await click(named(tree, "mac")[0], "open-run");
 return { runs, navigations: seen.navigations };"#,
     );
@@ -350,7 +350,11 @@ fn a_run_takes_xcode_for_a_mac_only_by_the_kinds_of_its_turn_and_a_failed_read_i
             vec![turn("m-1", &["XCODE", "MACOS"]), turn("m-2", &[])],
         )],
     );
-    let out = drive(&mut ui, "[]", "return macTable(tree).map((r) => r.run);");
+    let out = drive(
+        &mut ui,
+        "[]",
+        "return macTable(tree).map(({ run }) => run);",
+    );
     assert_eq!(
         out["out"],
         json!([
@@ -379,7 +383,7 @@ fn a_run_takes_xcode_for_a_mac_only_by_the_kinds_of_its_turn_and_a_failed_read_i
     let out = drive(
         &mut ui,
         "[]",
-        "return macTable(tree).map((r) => [r.name, r.run]);",
+        "return macTable(tree).map(({ name, run }) => [name, run]);",
     );
     assert_eq!(out["out"], json!([["m-1", ""]]));
     assert!(
@@ -410,7 +414,7 @@ fn a_refused_run_list_is_said_and_the_macs_stay() {
     let out = drive(
         &mut ui,
         "[]",
-        "return macTable(tree).map((r) => [r.name, r.run]);",
+        "return macTable(tree).map(({ name, run }) => [name, run]);",
     );
     assert_eq!(out["out"], json!([["m-1", ""]]));
     assert!(

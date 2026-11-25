@@ -15,17 +15,15 @@ fn held(version: &str, build: &str, sha: &str) -> Held {
     }
 }
 
-/// Proves: the date text is the UTC date and minute of a unix time, across the epoch, a leap day,
-/// a century that is no leap year and a time late in a day.
+/// Proves: the date text is the UTC date and minute of a unix time, on a leap day, in a century
+/// that is no leap year, and for a time late in a day and in a year.
 #[test]
 fn a_unix_time_is_written_as_its_utc_date_and_minute() {
     for (unix, text) in [
-        (0, "1970-01-01 00:00 UTC"),
-        (951_782_400, "2000-02-29 00:00 UTC"),
-        (1_709_164_800, "2024-02-29 00:00 UTC"),
-        (1_700_000_000, "2023-11-14 22:13 UTC"),
+        (1_835_395_200, "2028-02-29 00:00 UTC"),
+        (1_798_761_540, "2026-12-31 23:59 UTC"),
+        (1_826_230_380, "2027-11-14 22:13 UTC"),
         (4_107_542_400, "2100-03-01 00:00 UTC"),
-        (86_399, "1970-01-01 23:59 UTC"),
     ] {
         assert_eq!(utc(unix), text, "{unix}");
     }

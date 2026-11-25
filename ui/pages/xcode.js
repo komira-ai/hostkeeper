@@ -11,7 +11,7 @@
 //   panel of the bare command. Without a store (`configured` false) the page says so and has no
 //   button.
 // - Uploads: each partial upload, who started it and how far it is ("7.31 of 11.92 GB, last write 2
-//   minutes ago", by the page's clock `ctx.now`).
+//   minutes ago", by the clock the page is given).
 // - The store: each archive with its version, build, size, who uploaded it, when, and how many Macs
 //   have it installed. Remove has a Reason field, as `hk xcode remove` does, and after one question
 //   that names the Macs on which the archive is still due (a kept release they lack: the rule of
@@ -85,7 +85,7 @@ async function readFleet(ctx) {
   const hosts = await allPages((pageToken) => ctx.api.hosts.list(pageToken === "" ? {} : { pageToken }), "hosts");
   const states = await allPages((pageToken) => ctx.api.hostGroups.list(pageToken === "" ? {} : { pageToken }),
     "hostGroups");
-  const groups = new Map(states.map((state) => [(state.group || {}).name, policyOf(state)]));
+  const groups = new Map(states.map((state) => [(state["group"] || {}).name, policyOf(state)]));
   return { xcode, hosts, groups };
 }
 
@@ -133,8 +133,8 @@ export async function render(ctx) {
         const policy = policyFor(group);
         return { host, group, policy, plan: planOf(policy, archives(), xcodesOf(host)) };
       })
-      .sort((a, b) => (a.group === b.group ? order(nameOf(a.host), nameOf(b.host))
-        : a.group === "" ? 1 : b.group === "" ? -1 : order(a.group, b.group)));
+      .sort((a, b) => (a["group"] === b["group"] ? order(nameOf(a["host"]), nameOf(b["host"]))
+        : a["group"] === "" ? 1 : b["group"] === "" ? -1 : order(a["group"], b["group"])));
   };
 
   // The Macs on which `archive` is still due: a kept release the Mac lacks.
@@ -230,7 +230,7 @@ export async function render(ctx) {
   const macRow = ({ host, group, policy, plan }) => {
     const report = host.maintenance;
     const held = runOf(host);
-    const run = held === undefined ? undefined : held.run;
+    const run = held === undefined ? undefined : held["run"];
     // The run's turn for this Mac, whose kinds the coordinator fixed when it scheduled the run: a Mac
     // with no turn (nothing due of the run's kinds then) or a turn without Xcode is not given the
     // release by the run.
@@ -275,17 +275,18 @@ export async function render(ctx) {
     }
     const groups = [...by.entries()].map(([group, n]) => `${counted(n, "Mac")} of ${group === "" ? UNASSIGNED : group}`);
     const due = groups.length === 0 ? "Due on no Mac." : `Due on ${groups.join(", ")}.`;
-    return panel.target === null ? `${idOf(archive)}. ${due}` : due;
+    return panel["target"] === null ? `${idOf(archive)}. ${due}` : due;
   };
 
   const panelView = () => {
     const stored = archives().find((archive) => !panel.baseline.has(archive.sha256));
     const uploads = list(fleet.xcode, "uploads");
-    const progress = panel.target === null ? uploads[0]
-      : uploads.find((upload) => upload.version === panel.target.version && upload["build"] === panel.target.build);
+    const progress = panel["target"] === null ? uploads[0]
+      : uploads.find((upload) => upload.version === panel["target"].version
+        && upload["build"] === panel["target"]["build"]);
     return addPanel({
       ctx,
-      target: panel.target,
+      target: panel["target"],
       origin: typeof ctx.origin === "string" ? ctx.origin : "",
       progress: stored !== undefined || progress === undefined ? null : progress,
       stored: stored === undefined ? null : storedWords(stored),

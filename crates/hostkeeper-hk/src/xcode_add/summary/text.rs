@@ -19,8 +19,8 @@ pub(super) struct Row {
 /// `2026-12-01 02:00 UTC` for `unix` seconds.
 pub(super) fn utc(unix: u64) -> String {
     let (days, secs) = (unix / 86_400, unix % 86_400);
-    // The civil date of a day count from 1970-01-01 (Howard Hinnant's algorithm), in days
-    // counted from 0000-03-01.
+    // The civil date of a day count from the unix epoch (Howard Hinnant's algorithm), in days
+    // counted from the first of March of year zero.
     let z = days + 719_468;
     let era = z / 146_097;
     let day_of_era = z % 146_097;
