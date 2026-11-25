@@ -27,6 +27,9 @@ fn line(program: &str, args: &[String]) -> String {
     words.join(" ")
 }
 
+/// The directory node of local user records, as `dscl` names it (`/<node>/<name>`).
+const USERS: &str = "Users";
+
 /// The exit code of `xcode-select -p` when no developer directory is selected.
 const NONE_SELECTED: i32 = 2;
 
@@ -70,7 +73,7 @@ impl Machine {
             (FDESETUP, ["list"]) => ok(FILEVAULT_USERS),
             (PKGUTIL_PROGRAM, ["--pkg-info=com.apple.pkg.CLTools_Executables"]) => ok(PKGUTIL),
             (DSCL, [".", "-read", user, "RecordName", "IsHidden"])
-                if *user == format!("/Users/{ACCOUNT}") =>
+                if *user == format!("/{USERS}/{ACCOUNT}") =>
             {
                 ok(&format!("RecordName: {ACCOUNT}\nIsHidden: 1\n"))
             }

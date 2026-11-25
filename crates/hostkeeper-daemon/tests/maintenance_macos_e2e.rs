@@ -22,11 +22,11 @@ use hostkeeper_steps::maintenance::{Ending, Kind};
 use op::MaintenanceHostStep as Step;
 use op::MaintenanceSkip as Skip;
 use support_mac::{
-    ACCOUNT, Account, CODESIGN, FDESETUP, FULL_DISK_FREE, INSTALLER_APP, Input, MAJOR_BUILD,
-    MAJOR_VERSION, MINOR_BUILD, MINOR_BYTES, MINOR_LABEL, MINOR_VERSION, Mac, NEW_XCODE,
-    NEW_XCODE_ARCHIVE, NEW_XCODE_BUILD, Node, OLD_BUILD, OLD_VERSION, OLD_XCODE, Ordered, PASSWORD,
-    SERVICE, SOFTWAREUPDATE, SW_VERS, World, XCODE_SELECT, XIP, after_drained, args, first_offer,
-    one_at_a_time, password_only_on_stdin, restart_plist, turns, xcodebuild,
+    ACCOUNT, Account, CODESIGN, FDESETUP, FULL_DISK_FREE, INSTALLER_APP, INSTALLER_NAME, Input,
+    MAJOR_BUILD, MAJOR_VERSION, MINOR_BUILD, MINOR_BYTES, MINOR_LABEL, MINOR_VERSION, Mac,
+    NEW_XCODE, NEW_XCODE_ARCHIVE, NEW_XCODE_BUILD, Node, OLD_BUILD, OLD_VERSION, OLD_XCODE,
+    Ordered, PASSWORD, SERVICE, SOFTWAREUPDATE, SW_VERS, World, XCODE_SELECT, XIP, after_drained,
+    args, first_offer, one_at_a_time, password_only_on_stdin, restart_plist, turns, xcodebuild,
 };
 
 /// The group of every test.
@@ -474,7 +474,7 @@ fn a_major_upgrade_fetches_the_full_installer_and_runs_startosinstall() {
         ..first_offer(&run, &[pb::MaintenanceKind::Macos])
     };
     assert_eq!(h1.beat(), Some(order.clone()));
-    assert_eq!(h1.machine.applications(), ["Install macOS 27.app"]);
+    assert_eq!(h1.machine.applications(), [INSTALLER_NAME]);
     restart_to_done(&mut h1);
 
     let startosinstall = format!("{INSTALLER_APP}/Contents/Resources/startosinstall");
