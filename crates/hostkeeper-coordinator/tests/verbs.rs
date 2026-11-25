@@ -1,8 +1,9 @@
 //! The verbs of `hostkeeper-coordinator`: `serve`, `backup`, `restore` and `export`, as the binary
-//! parses them and the exit codes of `backup` and `restore`, driven in-process through
-//! `config::main`. What a backup and a restore copy, check and refuse is in the crate's
+//! parses them, and the exit codes of `backup`, `restore` and `check-ca`, driven in-process
+//! through `config::main`. What a backup and a restore copy, check and refuse is in the crate's
 //! `backup_tests` and `backup_refusal_tests`; what an export writes and refuses, in its
-//! `transfer_tests` and the integration test `transfer.rs`.
+//! `transfer_tests` and the integration test `transfer.rs`; what `check-ca` passes and refuses, in
+//! its `ca_check_tests`.
 
 mod support;
 
@@ -202,4 +203,104 @@ fn a_backup_and_a_restore_exit_0_and_a_refused_restore_exit_1() {
         text(&snapshot),
     ]);
     assert_eq!(main(again), ExitCode::from(1), "a backup over a snapshot");
+}
+
+/// Catches: `check-ca` not wired to the binary, or a refused copy that still exits 0: a copy of
+/// the enrollment CA checked against its own SHA-256 exits 0, and against another CA's exits 1.
+#[test]
+fn a_ca_copy_check_exits_0_for_the_pinned_ca_and_1_for_another() {
+    use std::sync::Arc;
+
+    use hostkeeper_enrollment::ca::{Ca, CaFiles, Signer as _};
+    use hostkeeper_enrollment::fs::RealFs;
+    use hostkeeper_enrollment::validity::SystemClock;
+
+    let dir = scratch("verbs-check-ca");
+    let make = |name: &str| {
+        let key = dir.path().join(format!("{name}.key"));
+        let certificate = dir.path().join(format!("{name}.key.cert"));
+        let files = CaFiles {
+            key: &key,
+            certificate: &certificate,
+        };
+        let ca = Ca::init(&RealFs, files, Arc::new(SystemClock)).expect("a CA");
+        (key, certificate, ca.bundle().sha256_hex())
+    };
+    let (key, certificate, pin) = make("ca");
+    let (_, _, other) = make("other");
+    let check = |pin: &str| {
+        main(args(&[
+            "check-ca",
+            "enrollment",
+            "--key-file",
+            text(&key),
+            "--certificate-file",
+            text(&certificate),
+            "--ca-sha256",
+            pin,
+        ]))
+    };
+    assert_eq!(check(&pin), ExitCode::SUCCESS);
+    assert_eq!(check(&other), ExitCode::from(1));
+}
+
+/// The `authorized_keys` line of the one key in the OpenSSH private key file at `path`: the
+/// public blob the file carries after its magic, cipher, kdf, kdf options and key count.
+fn public_line_of(path: &Path) -> String {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+
+    let text = std::fs::read_to_string(path).expect("the key file");
+    let body: String = text
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    let bytes = STANDARD.decode(body).expect("base64");
+    let mut at = b"openssh-key-v1\0".len();
+    for _ in ["cipher", "kdf", "kdf options"] {
+        let _ = take_string(&bytes, &mut at);
+    }
+    at += 4; // the key count
+    let blob = take_string(&bytes, &mut at);
+    format!("ssh-ed25519 {}", STANDARD.encode(blob))
+}
+
+/// The SSH wire string at `*at` in `bytes`, and `*at` moved past it.
+fn take_string<'a>(bytes: &'a [u8], at: &mut usize) -> &'a [u8] {
+    let len = u32::from_be_bytes(bytes[*at..*at + 4].try_into().expect("a length")) as usize;
+    let field = &bytes[*at + 4..*at + 4 + len];
+    *at += 4 + len;
+    field
+}
+
+/// Catches: `check-ca ssh` or its flags not wired to the binary, or an untrusted key that still
+/// exits 0: a key `ssh-ca init` made, checked against a hosts' file holding its line, exits 0,
+/// and against a file holding another CA's line only, exits 1.
+#[test]
+fn an_ssh_ca_copy_check_exits_0_for_a_trusted_key_and_1_for_another() {
+    let dir = scratch("verbs-check-ca-ssh");
+    let init = |name: &str| {
+        let out = dir.path().join(name);
+        assert_eq!(
+            main(args(&["ssh-ca", "init", "--out", text(&out)])),
+            ExitCode::SUCCESS
+        );
+        out.join("ssh_user_ca")
+    };
+    let fleet = init("fleet");
+    let other = init("other");
+    let public = dir.path().join("user_ca.pub");
+    let check = |line: String| {
+        std::fs::write(&public, format!("{line}\n")).expect("a public file");
+        main(args(&[
+            "check-ca",
+            "ssh",
+            "--key-file",
+            text(&fleet),
+            "--public-file",
+            text(&public),
+        ]))
+    };
+    assert_eq!(check(public_line_of(&fleet)), ExitCode::SUCCESS);
+    assert_eq!(check(public_line_of(&other)), ExitCode::from(1));
 }
