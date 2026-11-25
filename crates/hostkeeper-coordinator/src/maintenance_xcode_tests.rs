@@ -707,7 +707,8 @@ fn a_turn_with_xcode_on_a_linux_host_orders_no_xcode() {
 /// Xcode, the store holds 27.1, 27.2 and 27.3, and the Mac reports 27.1 installed in its own
 /// directory: the coordinator's installed set is exactly 27.1 (27A10), and a prune leaves exactly
 /// 27.3 and 27.1 in the store and audits the removal of 27.2 alone. A Mac that reports 27.2 in
-/// `Xcode.app` (foreign) keeps it too, as the design keeps any release a Mac reports.
+/// `Xcode.app` (foreign) keeps it too, as the design keeps any release a Mac reports; an Xcode
+/// whose version is not a version number names no release.
 ///
 /// Catches: a coordinator whose installed set stays empty though its Macs report their Xcodes, so
 /// the prune removes from the store the release a Mac is running once it falls out of the newest
@@ -757,7 +758,12 @@ fn the_store_keeps_each_release_a_mac_reports_installed() {
         mac_beat(&[
             installed("27.1", "27A10", false, false),
             installed("27.2", "27B52", true, true),
+            installed("Xcode-beta", "27D5", false, true),
         ]),
+    );
+    assert_eq!(
+        farm.world.coordinator().xcodes_installed(),
+        std::collections::BTreeSet::from([xcode_id("27.1", "27A10"), xcode_id("27.2", "27B52")])
     );
     farm.world.coordinator().prune_xcode_store();
     assert_eq!(held(&farm), vec![newest, again, oldest]);
