@@ -3,11 +3,13 @@
 //! orders each host's turn from its heartbeats, and on each host the real daemon runs the turn
 //! from its run record (stage, drain, apply with its reboot, check, put back) through the real
 //! maintenance hook over a fake Linux host, across the host's reboot, a daemon that stops in the
-//! middle of a turn and a coordinator that restarts (`support_linux`). The hook's `prepare` is the
+//! middle of a turn and a coordinator that restarts (`support_e2e`, over the fake Linux host of
+//! `support_linux`). The hook's `prepare` is the
 //! real hook's too, over the real `reboot` kind; the `linux` kind's stage is answered there. Each
 //! test ends with exact equality on what the fake host went through.
 
 mod support;
+mod support_e2e;
 mod support_linux;
 mod support_maintain;
 
