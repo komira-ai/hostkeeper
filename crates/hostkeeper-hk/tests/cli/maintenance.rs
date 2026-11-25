@@ -46,6 +46,22 @@ fn commands() -> Vec<(Vec<&'static str>, &'static str, &'static str)> {
             vec![
                 "maintenance",
                 "schedule",
+                "--kinds",
+                "probe",
+                "--host-ids",
+                "node-01",
+                "--reason",
+                "Mac proof: launchd probes",
+                "--confirm",
+                "true",
+            ],
+            "Maintenance/Schedule",
+            r#"{"kinds":["MAINTENANCE_KIND_PROBE"],"hostIds":["node-01"],"reason":"Mac proof: launchd probes","confirm":true}"#,
+        ),
+        (
+            vec![
+                "maintenance",
+                "schedule",
                 "--host-group",
                 "macs",
                 "--reason",
@@ -218,6 +234,7 @@ fn maintenance_commands_through_the_real_gateway_answer_what_an_empty_state_answ
         )
     };
     let wants = [
+        not_found("unknown_host"),
         not_found("unknown_host"),
         not_found("unknown_group"),
         (200, 0, String::new()),
