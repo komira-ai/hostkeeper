@@ -937,7 +937,8 @@ is `ssh_host_mac::MacHost`. Before any file is written, in this order:
    checked at each apply. The daemon never edits the file, which Apple owns; without it the state
    is `no_include` and the Mac stays untrusted.
 2. The login user: the one the coordinator names (`--ssh-login-user-macos`, which must be an
-   account), else the single local administrator (user id of 501 or more, member of `admin`, not
+   account; `hk ssh` to a Mac needs it, as the coordinator signs for a Mac only when it names one),
+   else the single local administrator (user id of 501 or more, member of `admin`, not
    hidden, the rule of the operator keys); with none or more than one, or a named user that does
    not exist, the state is `no_login_user`. A name that is not a plain account name (letters,
    digits, `.`, `_`, `-`) is `config_invalid`, since it becomes the name of a file.

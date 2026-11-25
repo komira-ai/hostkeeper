@@ -519,6 +519,97 @@ fn a_certificate_for_the_host_logs_the_login_user_in() {
     );
 }
 
+/// The runner's sshd under socket activation for one test, put back when the test ends: the
+/// service stopped, `ssh.socket` started in its place (its stock `Accept=no`, Debian's and
+/// Ubuntu's default), and at the end both stopped and each started again that was active before,
+/// the socket first, so the host listens as it did. Dropped before the rig, whose guard then puts
+/// `/etc/ssh` back and reloads the service.
+struct SocketActivation {
+    socket_was_active: bool,
+    service_was_active: bool,
+}
+
+impl SocketActivation {
+    fn take() -> SocketActivation {
+        assert_eq!(
+            systemctl(&["show", "-p", "LoadState", "--value", "ssh.socket"]),
+            "loaded",
+            "this test needs the ssh.socket unit of openssh-server"
+        );
+        let guard = SocketActivation {
+            socket_was_active: systemctl(&["is-active", "ssh.socket"]) == "active",
+            service_was_active: systemctl(&["is-active", "ssh.service"]) == "active",
+        };
+        must("/usr/bin/systemctl", &["stop", "ssh.service"]);
+        must("/usr/bin/systemctl", &["start", "ssh.socket"]);
+        guard
+    }
+}
+
+impl Drop for SocketActivation {
+    fn drop(&mut self) {
+        for args in [
+            ["stop", "ssh.socket"],
+            ["stop", "ssh.service"],
+            ["reset-failed", "ssh.socket"],
+            ["reset-failed", "ssh.service"],
+        ] {
+            let _ = Command::new("/usr/bin/systemctl").args(args).output();
+        }
+        let mut restored = Vec::new();
+        for (was, unit) in [
+            (self.socket_was_active, "ssh.socket"),
+            (self.service_was_active, "ssh.service"),
+        ] {
+            if was {
+                let _ = Command::new("/usr/bin/systemctl")
+                    .args(["start", unit])
+                    .output();
+                restored.push((unit, systemctl(&["is-active", unit])));
+            }
+        }
+        // A test that already failed keeps its own message; else a host left as it was not
+        // found fails the test that changed it.
+        if !std::thread::panicking() {
+            for (unit, state) in restored {
+                assert_eq!(state, "active", "{unit} was not started again");
+            }
+        }
+    }
+}
+
+/// Proves that where `ssh.socket` is the active unit and has already started the one sshd that
+/// listens for it (`Accept=no`: the first connection starts `ssh.service`, which then serves
+/// every connection with the configuration it read when it started), the setup has that sshd
+/// read the drop-in: a certificate for the host logs `root` in after the apply, and the
+/// listening sshd is the same process (a reload, not a restart).
+/// Catches: a setup that takes a socket-activated sshd to read its files at each connection and
+/// reloads nothing, so the files are written, `sshd -T` shows them, the state is `applied`, and
+/// the running sshd refuses every certificate with `Permission denied (publickey)`.
+#[test]
+fn under_socket_activation_the_running_listener_takes_the_certificate() {
+    let mut rig = Rig::new("ssh-root-socket");
+    let _socket = SocketActivation::take();
+    assert_eq!(
+        systemctl(&["show", "-p", "Accept", "--value", "ssh.socket"]),
+        "no"
+    );
+    let at = rig.host.effective("root").expect("sshd -T").listening();
+    rig.host.banner(&at).expect("the socket answers");
+    assert_eq!(systemctl(&["is-active", "ssh.service"]), "active");
+    let listener = systemctl(&["show", "-p", "MainPID", "--value", "ssh.service"]);
+    rig.applied(&[]);
+    let cert = rig.good_cert(1);
+    assert_eq!(
+        rig.login("root", &rig.user, Some(&cert)),
+        Ok("root".to_owned())
+    );
+    assert_eq!(
+        systemctl(&["show", "-p", "MainPID", "--value", "ssh.service"]),
+        listener
+    );
+}
+
 /// Proves that a certificate whose validity ended in the past is refused by sshd while a valid
 /// one of the same key and principal, in the same configuration, is accepted. Catches: a trust
 /// setup that skips the certificate's validity window.

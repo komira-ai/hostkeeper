@@ -7,8 +7,8 @@ use hostkeeper_hk::ssh::{Verb, known_host};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use crate::fake::{
-    Call, Closed, Double, EXE, HOST, NOW, PIN, PUBLIC, Rig, TOKEN, cert_type, invoke, invoke_as,
-    invoke_into, os,
+    Call, Closed, Double, EXE, HOST, NOW, PIN, PUBLIC, Rig, TOKEN, cert_type, certificate_reply,
+    invoke, invoke_as, invoke_into, os,
 };
 
 fn ssh(rig: &Rig, double: &Double, extra: &[&str]) -> crate::fake::Outcome {
@@ -144,6 +144,68 @@ fn ssh_needs_a_pin_and_says_when_the_keys_changed() {
             format!("the coordinator gave no usable pins for {HOST} (state {state:?})")
         );
     }
+}
+
+/// Proves: a certificate whose answer names no login user, or one that is not an account name
+/// (one that ssh would read as an option, one longer than 32), is refused with a message naming
+/// the host and the coordinator's flag, ssh is not run and nothing is kept; 32 characters is
+/// still an account; and a certificate held with an empty login user (kept by an earlier
+/// release) is asked for again rather than used.
+///
+/// Catches: `hk ssh` running `ssh @<host>`, which ssh answers with its usage text.
+#[test]
+fn ssh_refuses_a_login_user_that_is_not_an_account() {
+    let rig = Rig::start();
+    let double = Double::new();
+    let details = rig
+        .state_dir()
+        .join("hosts")
+        .join(format!("{HOST}.details"));
+    let answer = |login: &str| {
+        let mut reply = certificate_reply(41, NOW + 3600);
+        reply.login_user = login.to_owned();
+        *rig.script.sign.lock().expect("sign") = Ok(reply);
+    };
+    answer("");
+    let outcome = ssh(&rig, &double, &[]);
+    assert_eq!(outcome.code, 1);
+    assert_eq!(
+        outcome.error(),
+        format!(
+            "the coordinator named no login user for {HOST}; for a Mac it names one only when \
+             it is given --ssh-login-user-macos (docs/operations/ssh-ca.md)"
+        )
+    );
+    for bad in ["-oProxyCommand=x", &"a".repeat(33), "ad min"] {
+        answer(bad);
+        assert_eq!(
+            ssh(&rig, &double, &[]).error(),
+            format!(
+                "the coordinator named {bad:?} as the login user for {HOST}, which is not an \
+                 account name"
+            )
+        );
+    }
+    assert!(double.calls().is_empty());
+    assert!(!details.exists(), "an unusable answer is not kept");
+
+    let longest = "a".repeat(32);
+    answer(&longest);
+    assert_eq!(ssh(&rig, &double, &[]).ok(), 0);
+    assert_eq!(double.calls()[0].last(), Some(&format!("{longest}@{HOST}")));
+
+    // A record an earlier release kept: valid, the same key, and no login user.
+    let held = std::fs::read_to_string(&details).expect("the record");
+    std::fs::write(
+        &details,
+        held.replace(&format!("login_user={longest}"), "login_user="),
+    )
+    .expect("the old record");
+    answer("root");
+    let signs = rig.seen(|s| s.signs.len());
+    assert_eq!(ssh(&rig, &double, &[]).ok(), 0);
+    assert_eq!(rig.seen(|s| s.signs.len()), signs + 1);
+    assert_eq!(double.calls()[1].last(), Some(&format!("root@{HOST}")));
 }
 
 /// Proves: the key is chosen as the design says: `--identity` first (its `.pub` is read and the

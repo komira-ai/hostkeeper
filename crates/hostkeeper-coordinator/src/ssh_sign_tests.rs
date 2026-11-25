@@ -91,6 +91,8 @@ pub(crate) struct Tune {
     /// The time the ledger reads, when it is not [`NOW`]: a test whose certificate a real SSH
     /// server checks against the system's time needs one that holds it.
     pub(crate) ledger_now: Option<u64>,
+    /// The Macs' login user when it is not `admin`.
+    pub(crate) login_macos: Option<&'static str>,
 }
 
 pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
@@ -138,7 +140,7 @@ pub(crate) fn world(name: &str, file: Option<&str>, tune: Tune) -> World {
         operators: operators.clone(),
         ttl_secs: 3600,
         login_linux: "root".to_owned(),
-        login_macos: "admin".to_owned(),
+        login_macos: tune.login_macos.unwrap_or("admin").to_owned(),
         ledger: Arc::new(Watched {
             inner: Arc::clone(&ledger),
             steps: Arc::clone(&steps),
@@ -613,6 +615,71 @@ fn the_login_user_follows_the_host_and_faults_of_the_store_and_the_key_are_store
         .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""));
     assert_eq!(refused.err(), Some(Refusal::StoreFailed));
     assert_eq!(silent.ledger.certs().len(), 1);
+}
+
+/// Proves: while the coordinator names no login user for Macs (`--ssh-login-user-macos` empty),
+/// `SignUserCert` for an enrolled Mac the operator is permitted is refused `not_configured`
+/// before the ledger is asked (no serial is spent and no certificate goes out), and a Linux host
+/// of the same coordinator is still signed for its own login user; with the flag set, the Mac's
+/// answer names that account.
+///
+/// Catches: a Mac's certificate answered with an empty login user, which `hk ssh` turned into
+/// the destination `@<host>` and ssh into its usage text.
+#[test]
+fn a_mac_with_no_login_user_named_is_refused_before_the_ledger() {
+    let unnamed = |name: &str, login: &'static str| {
+        let world = world(
+            name,
+            Some(OPERATORS),
+            Tune {
+                login_macos: Some(login),
+                ..Tune::default()
+            },
+        );
+        let key = crate::enrollment::tests::support::HostKey::new();
+        world
+            ._enrollment
+            .enrollment
+            .enroll(crate::enrollment::tests::support::mac_request(
+                &key,
+                "machine-mac-01",
+                "C02ABC",
+                &[],
+            ))
+            .expect("posted");
+        crate::enrollment::tests::support::approve(
+            &world._enrollment.enrollment,
+            &key,
+            "mac-01",
+            false,
+        );
+        world
+    };
+    let world = unnamed("ssh-sign-mac-unnamed", "");
+    let refused = world
+        .coordinator
+        .ssh_sign_user_cert(&operator(), &request("mac-01", ED25519_KEY, ""));
+    assert_eq!(refused.err(), Some(Refusal::NotConfigured));
+    assert!(world.ledger.certs().is_empty());
+    assert!(
+        world
+            .steps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+    let linux = world
+        .coordinator
+        .ssh_sign_user_cert(&operator(), &request("node-07", ED25519_KEY, ""))
+        .expect("a Linux host is signed");
+    assert_eq!(linux.login_user, "root");
+
+    let named = unnamed("ssh-sign-mac-named", "builder");
+    let answer = named
+        .coordinator
+        .ssh_sign_user_cert(&operator(), &request("mac-01", ED25519_KEY, ""))
+        .expect("signed");
+    assert_eq!(answer.login_user, "builder");
 }
 
 /// Proves: `Revoke` by an operator the file lists revokes by operator name or by serial and says

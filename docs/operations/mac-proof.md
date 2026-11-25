@@ -71,7 +71,7 @@ below are run in this order, not in the order of their ids; each row names the c
 | # | What | Who | Step | Check before the next row |
 |---|---|---|---|---|
 | R1 | Read every Mac; choose the proof Mac, the one that takes the fewest builds | an operator with `hk`, and with the job scheduler's `js` (both read only) | MP-E1 | the Mac announces `maintenance-v1`, its `maintenance` is there and `lookFailed` is empty |
-| R2 | Give the coordinator the SSH user CA and the SSH operators file, if `ssh host-keys` answers `not_configured` | the coordinator's deploy owner | MP-E2 (a), (b) | `ssh host-keys` for the Mac answers, `no_pin` or `pinned` |
+| R2 | Give the coordinator the SSH user CA, the SSH operators file and `--ssh-login-user-macos`, if `ssh host-keys` answers `not_configured` or the flag is empty | the coordinator's deploy owner | MP-E2 (a), (b) | `ssh host-keys` for the Mac answers, `no_pin` or `pinned`, and the coordinator's configuration names `ssh-login-user-macos` |
 | R3 | Name `mac-proof` in the operator-keys and host-prerequisites files | the coordinator's deploy owner | MP-E2 (c), (d) | one `--tls-reload-secs` has passed, or the coordinator restarted |
 | R4 | Cordon the Mac in the job scheduler and wait until it holds no job | an operator with the job service's operator token | MP-E6 | `js host list` shows the Mac's cordon end and no booking |
 | R5 | Make `mac-proof` with the same packages, versions and policy, and move the Mac into it | an operator with `hk` | MP-E3 | `hostGroup` is `mac-proof`, the services are unchanged, `operatorKeys.digest` is set |
@@ -108,14 +108,15 @@ Decides:
 - if `operatorKeys` is `{}` on every host, Linux ones too -> the coordinator was given no `--operator-keys-file` (`docs/operations/operator-keys.md`); MP-E2 (c) is its first one.
 
 ### MP-E2 Give the coordinator the SSH CA, and name the new group in its group-keyed files
-Settles: none; makes `hk ssh` possible and avoids a lockout. Runs: the coordinator's deploy owner, on the coordinator's configuration (each flag's deploy form: `docs/deploy/coordinator/package.md`). Needs: MP-E1. Do this before MP-E3. The files do different things: `hk ssh` needs (a) and (b) only (`docs/operations/ssh-ca.md`); (c) puts the operators' public keys in the Mac administrator's `authorized_keys` for a plain `ssh`, and a Mac in a group that file does not list is sent the empty key set (`crates/hostkeeper-coordinator/src/operator_keys.rs`, doc lines 28-40); (d) keeps the Command Line Tools check (`docs/operations/host-prerequisites.md`).
+Settles: none; makes `hk ssh` possible and avoids a lockout. Runs: the coordinator's deploy owner, on the coordinator's configuration (each flag's deploy form: `docs/deploy/coordinator/package.md`). Needs: MP-E1. Do this before MP-E3. The files do different things: `hk ssh` needs (a) and (b) only, with `--ssh-login-user-macos` naming the account it logs in as on a Mac (`docs/operations/ssh-ca.md`); (c) puts the operators' public keys in the Mac administrator's `authorized_keys` for a plain `ssh`, and a Mac in a group that file does not list is sent the empty key set (`crates/hostkeeper-coordinator/src/operator_keys.rs`, doc lines 28-40); (d) keeps the Command Line Tools check (`docs/operations/host-prerequisites.md`).
 ```sh
 # P set as in MP-E1; not_configured here means (a) is not in force
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh host-keys --host-id <node-id>
 # (a) only when not_configured: on the owner's machine, hostkeeper-coordinator ssh-ca init --out <ca-dir> (keep the offline copy as ca-backup.md says);
 #     the coordinator's ssh-ca-secret-file names that key as a secret file (its user's, mode 0600 or 0400), with ssh-operators-file and database-dsn-file; restart the coordinator once
 #     this reaches every host: each daemon that announces ssh-v1 then sets its sshd up for the CA (ssh-ca.md, "What hosts are sent"); read every host's ssh.state after it
-#     ssh-login-user-macos empty (the default) has a Mac's daemon log in its one visible administrator (docs/macos.md, the login user)
+#     ssh-login-user-macos names the account hk ssh logs in as on every Mac (each Mac's one visible administrator); empty (the default), a Mac's daemon still trusts the CA for its
+#     administrator, but the coordinator refuses to sign for a Mac (not_configured), since it does not know that account (docs/operations/ssh-ca.md, the certificate)
 # (b) ssh operators file: an [[operator]] entry for the proof operator with hosts = ["<node-id>"], which holds before and after the move; read again at every call
 # (c) operator-keys file: add [host-groups."mac-proof"] with keys = [the proof operator's public key line], keeping every other group's table;
 #     a coordinator given no operator-keys-file before needs it named and one restart, else the change is read within one tls-reload-secs

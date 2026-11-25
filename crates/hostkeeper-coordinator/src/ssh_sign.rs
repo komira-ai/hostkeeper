@@ -194,6 +194,18 @@ impl Coordinator {
             return Err(Refusal::NotPermitted);
         }
         let key = ssh.key_for(class).ok_or(Refusal::NotConfigured)?;
+        // A certificate is useless to `hk ssh` without the account to log in as: a Mac's daemon
+        // picks its own administrator when `--ssh-login-user-macos` is empty, and that pick never
+        // reaches the coordinator. Refused before the ledger, so no serial is spent on it.
+        let login_user = ssh.login_for(&host);
+        if login_user.is_empty() {
+            tracing::warn!(
+                host_id,
+                "no certificate is signed for a Mac while --ssh-login-user-macos is empty"
+            );
+            return Err(Refusal::NotConfigured);
+        }
+        let login_user = login_user.to_owned();
         if !reason_ok(&request.reason) {
             ssh.refused(operator, host_id, Refusal::BadReason);
             return Err(Refusal::BadReason);
@@ -238,7 +250,7 @@ impl Coordinator {
             })?;
         Ok(proto::SignUserCertResponse {
             certificate,
-            login_user: ssh.login_for(&host).to_owned(),
+            login_user,
             expires_unix: expires,
             key_id,
         })
