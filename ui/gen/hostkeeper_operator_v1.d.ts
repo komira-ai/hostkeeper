@@ -382,7 +382,14 @@ export namespace hostkeeper_operator_v1 {
   export interface ListUsersRequest {}
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export interface ListXcodeRequest {}
-  export interface ListXcodeResponse { configured?: boolean; archives?: hostkeeper_operator_v1.XcodeArchive[]; waiting?: hostkeeper_operator_v1.XcodeReleaseWaiting; keep?: number; maxBytes?: string; }
+  export interface ListXcodeResponse {
+    configured?: boolean;
+    archives?: hostkeeper_operator_v1.XcodeArchive[];
+    waiting?: hostkeeper_operator_v1.XcodeReleaseWaiting;
+    keep?: number;
+    maxBytes?: string;
+    uploads?: hostkeeper_operator_v1.XcodeUpload[];
+  }
   export type LiveReason = "LIVE_REASON_UNSPECIFIED" | "LIVE_REASON_UPDATING" | "LIVE_REASON_PROMOTION_PENDING" | "LIVE_REASON_ORDERED" | "LIVE_REASON_BAKING" | "LIVE_REASON_PLAN_UNDER_WAY" | "LIVE_REASON_QUEUED";
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
   export interface MaintenanceHost {
@@ -824,4 +831,5 @@ export namespace hostkeeper_operator_v1 {
   export interface WriteRecord { generation?: string; replaced?: hostkeeper_operator_v1.Replaced; writeId?: string; }
   export interface XcodeArchive { sha256?: string; version?: string; build?: string; sizeBytes?: string; uploadedBy?: string; uploadedAtUnix?: string; }
   export interface XcodeReleaseWaiting { version?: string; build?: string; requiresMacos?: string; }
+  export interface XcodeUpload { sha256?: string; version?: string; build?: string; receivedBytes?: string; sizeBytes?: string; startedBy?: string; lastWriteUnix?: string; }
 }

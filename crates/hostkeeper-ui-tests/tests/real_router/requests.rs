@@ -174,6 +174,12 @@ pub const REQUESTS: &[(&str, &str)] = &[
         r#"{"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "storage-1"},
             "reason": "retired"}"#,
     ),
+    ("hostkeeper.operator.v1.Xcode/List", "{}"),
+    (
+        "hostkeeper.operator.v1.Xcode/Remove",
+        r#"{"sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "reason": "superseded"}"#,
+    ),
     (
         "hostkeeper.operator.v1.Maintenance/Cancel",
         r#"{"runId": "no-such-run", "reason": "not needed"}"#,

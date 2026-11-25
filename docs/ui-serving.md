@@ -113,6 +113,31 @@ by their route and are not in the menu.
   the Schedule form's "Take the group's last host"), a host already in a run, a window that has ended, an unknown host, group or run, a host not in the run, a run that
   has ended, a host no longer halted, and an audit entry that could not be written; any other refusal is shown as its code
   and token. In the Schedule form, a window field left empty is said to be "not set".
+- **Xcode** (`ui/pages/xcode.js`, beside Maintenance in the Manage menu; design: [adding an Xcode in one
+  action](design/xcode-one-action.md) section 4): what the Xcode store holds and what each Mac has. It reads `Xcode.List`,
+  `Hosts.List` and `HostGroups.List` (every page of both) and `Maintenance.List` (the last 10 runs) when opened and again
+  every 60 seconds; a read again that fails keeps the last answer and says so, and a run list that fails is said while the
+  rest of the page stays. The sections are: the release that waits ("Xcode 27.3 (27C21) is out and not in the store; it
+  needs macOS 27.1", from `Xcode.List`'s `waiting`) with the **Add Xcode** button (with none waiting the page says the store
+  holds the newest release, and the button still opens the panel); the uploads in progress (`Xcode.List`'s `uploads`: who
+  started each, "7.31 of 11.92 GB, last write 2 minutes ago", by the page's clock); the store, each archive with its version,
+  build, size in decimal GB, who uploaded it, when and how many Macs have it installed in its own directory with its build,
+  and a Reason field and **Remove**, which says which Macs still have the archive due, asks once and calls `Xcode.Remove`
+  with the reason; and the Macs, one row each (a host whose heartbeat says Mac or whose report has a Mac's facts) in group
+  order, Unassigned last: its group, the group's `xcode_keep` and `xcode_default`, each Xcode installed (version, build,
+  selected, foreign), what is due, its device-management state ("nothing that blocks updates", or the `mdmConflicts` its
+  report lists) and, while a scheduled, running or halted run names the Mac or its group, a link to the Maintenance page
+  (saying so when the run's kinds do not include `xcode`). What is due is the coordinator's rule (`maintenance_xcode.rs`):
+  the newest `xcode_keep` releases of the store are kept; the kept releases a Mac lacks (not installed in
+  `Xcode-<version>.app` with the same build) are due, newest first ("due: 27.3, then 27.2"); when none is missing the
+  default (`latest`, or the named version if kept) is due to be selected when `xcode-select` does not name it; a group that
+  keeps 0, or a Mac in no group, is left out. **Add Xcode** opens a panel with the command to run on the operator's Mac
+  (`hk xcode add <waiting version>`, or `hk xcode add` with none waiting) and the first-time line (`hk settings init
+  --endpoint <this page's origin> --ca-file <ca.pem> --token-file <token-file>`), each with a **Copy** button that writes
+  the line to the clipboard (`ctx.copy`, which `main.js` gives the pages from `navigator.clipboard`); where the browser
+  refuses, the line is selected and the panel says to copy it by hand. While the panel is open the page reads `Xcode.List`
+  every 10 seconds, shows the upload's progress, then "Stored. Due on 3 Macs of mac-build." with a link to the Maintenance
+  page. The page starts no run: Update and Schedule stay on the Maintenance page.
 
 ## What the pages do for services
 

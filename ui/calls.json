@@ -18,7 +18,7 @@
     { "function": "enrollment.removeRecord", "method": "hostkeeper.operator.v1.Enrollment/RemoveRecord", "pages": ["inventory"] },
     { "function": "enrollment.updateRecord", "method": "hostkeeper.operator.v1.Enrollment/UpdateRecord", "pages": ["inventory"] },
     { "function": "hostGroups.get", "method": "hostkeeper.operator.v1.HostGroups/Get", "pages": ["hostgroups", "maintenance"] },
-    { "function": "hostGroups.list", "method": "hostkeeper.operator.v1.HostGroups/List", "pages": ["enrollment", "host", "hostgroups"] },
+    { "function": "hostGroups.list", "method": "hostkeeper.operator.v1.HostGroups/List", "pages": ["enrollment", "host", "hostgroups", "xcode"] },
     { "function": "hostGroups.move", "method": "hostkeeper.operator.v1.HostGroups/Move", "pages": ["host"] },
     { "function": "hostGroups.put", "method": "hostkeeper.operator.v1.HostGroups/Put", "pages": ["hostgroups"] },
     { "function": "hostGroups.remove", "method": "hostkeeper.operator.v1.HostGroups/Remove", "pages": ["hostgroups"] },
@@ -26,7 +26,7 @@
     { "function": "hosts.exclude", "method": "hostkeeper.operator.v1.Hosts/Exclude", "pages": ["host"] },
     { "function": "hosts.get", "method": "hostkeeper.operator.v1.Hosts/Get", "pages": ["host"] },
     { "function": "hosts.include", "method": "hostkeeper.operator.v1.Hosts/Include", "pages": ["host"] },
-    { "function": "hosts.list", "method": "hostkeeper.operator.v1.Hosts/List", "pages": ["home", "inventory", "maintenance", "package", "release", "rollout"] },
+    { "function": "hosts.list", "method": "hostkeeper.operator.v1.Hosts/List", "pages": ["home", "inventory", "maintenance", "package", "release", "rollout", "xcode"] },
     { "function": "hosts.retire", "method": "hostkeeper.operator.v1.Hosts/Retire", "pages": ["host"] },
     { "function": "hosts.retry", "method": "hostkeeper.operator.v1.Hosts/Retry", "pages": ["host"] },
     { "function": "hosts.setLabels", "method": "hostkeeper.operator.v1.Hosts/SetLabels", "pages": ["host"] },
@@ -44,7 +44,7 @@
     { "function": "layout.unplace", "method": "hostkeeper.operator.v1.Layout/Unplace", "pages": ["home", "host", "inventory"] },
     { "function": "maintenance.cancel", "method": "hostkeeper.operator.v1.Maintenance/Cancel", "pages": ["maintenance"] },
     { "function": "maintenance.get", "method": "hostkeeper.operator.v1.Maintenance/Get", "pages": ["maintenance"] },
-    { "function": "maintenance.list", "method": "hostkeeper.operator.v1.Maintenance/List", "pages": ["maintenance"] },
+    { "function": "maintenance.list", "method": "hostkeeper.operator.v1.Maintenance/List", "pages": ["maintenance", "xcode"] },
     { "function": "maintenance.putBack", "method": "hostkeeper.operator.v1.Maintenance/PutBack", "pages": ["maintenance"] },
     { "function": "maintenance.retryHost", "method": "hostkeeper.operator.v1.Maintenance/RetryHost", "pages": ["maintenance"] },
     { "function": "maintenance.schedule", "method": "hostkeeper.operator.v1.Maintenance/Schedule", "pages": ["home", "host", "maintenance"] },
@@ -83,6 +83,8 @@
     { "function": "users.disable", "method": "hostkeeper.operator.v1.Users/Disable", "pages": ["users"] },
     { "function": "users.enable", "method": "hostkeeper.operator.v1.Users/Enable", "pages": ["users"] },
     { "function": "users.list", "method": "hostkeeper.operator.v1.Users/List", "pages": ["users"] },
-    { "function": "users.resetPassword", "method": "hostkeeper.operator.v1.Users/ResetPassword", "pages": ["users"] }
+    { "function": "users.resetPassword", "method": "hostkeeper.operator.v1.Users/ResetPassword", "pages": ["users"] },
+    { "function": "xcode.list", "method": "hostkeeper.operator.v1.Xcode/List", "pages": ["xcode"] },
+    { "function": "xcode.remove", "method": "hostkeeper.operator.v1.Xcode/Remove", "pages": ["xcode"] }
   ]
 }

@@ -74,7 +74,7 @@ fn the_menu_has_the_wordmark_and_the_groups_and_no_fleet_release_rollout_or_hold
 const first = names();
 const home = text();
 await click("page-settings");
-const tabs = names().filter((n) => n.startsWith("page-") && n !== "page-settings" && !["page-hostgroups", "page-packages", "page-inventory", "page-enrollment", "page-maintenance"].includes(n));
+const tabs = names().filter((n) => n.startsWith("page-") && n !== "page-settings" && !["page-hostgroups", "page-packages", "page-inventory", "page-enrollment", "page-maintenance", "page-xcode"].includes(n));
 await click("page-audit");
 const current = elements(doc.root)
   .filter((e) => e.attributes["aria-current"] === "page")
@@ -97,6 +97,7 @@ return { first, home, tabs, current, crumb: domTexts(crumb).join("") };"#,
             &"page-inventory",
             &"page-enrollment",
             &"page-maintenance",
+            &"page-xcode",
             &"page-settings"
         ]
     );

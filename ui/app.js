@@ -25,6 +25,7 @@ import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
 import * as desktop from "./pages/desktop.js";
 import * as maintenance from "./pages/maintenance.js";
+import * as xcode from "./pages/xcode.js";
 
 // The side menu: groups of pages, each `[name, title, module, glyph]`. The page's `name` is the
 // name of its button (`page-<name>`); `glyph` names its icon (`view.js`), which is all the collapsed
@@ -36,6 +37,7 @@ const GROUPS = [
     ["inventory", "Inventory", inventory, "inventory"],
     ["enrollment", "Enrollment", enrollment, "enrollment"],
     ["maintenance", "Maintenance", maintenance, "maintenance"],
+    ["xcode", "Xcode", xcode, "xcode"],
   ]],
 ];
 // The pages of Settings, reached from the entry at the bottom of the menu and from the tabs above
@@ -106,9 +108,13 @@ export function redirected(name, params) {
 // `ctx.openSocket`, `ctx.openTerminal` or `ctx.viewScreen`, which is absent when none was given.
 // `localOffset(unixSeconds)` is the operator's offset from UTC at that instant, in seconds east of
 // UTC (`main.js` reads it from the browser); a page finds it as `ctx.localOffset`, which answers 0
-// (UTC) when none was given.
+// (UTC) when none was given. `origin` is the page's own origin (`main.js` reads it from the
+// browser), which a page finds as `ctx.origin`, "" when none was given; `copy(text)` (a promise
+// that rejects when the clipboard refuses the text) is `ctx.copy`, which rejects when none was given.
 // Returns the frame's controls, which the browser does not need.
-export function startApp({ doc, root, fetch, confirm, now, every, openSocket, openTerminal, viewScreen, localOffset, prefs = NO_PREFS }) {
+export function startApp({
+  doc, root, fetch, confirm, now, every, openSocket, openTerminal, viewScreen, localOffset, origin, copy, prefs = NO_PREFS,
+}) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -364,6 +370,8 @@ export function startApp({ doc, root, fetch, confirm, now, every, openSocket, op
       viewScreen: typeof viewScreen === "function" ? (element, opened, events) => viewScreen(element, opened, events) : undefined,
       now: () => now(),
       localOffset: (unix) => (typeof localOffset === "function" ? localOffset(unix) : 0),
+      origin: typeof origin === "string" ? origin : "",
+      copy: (text) => (typeof copy === "function" ? copy(text) : Promise.reject(new Error("no clipboard"))),
       navigate,
       // Runs `run` once when this rendering of the page stops being the latest: the operator
       // went to another page, signed out, or the page was drawn again; at once if it already has.
