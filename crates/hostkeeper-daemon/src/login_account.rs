@@ -188,13 +188,22 @@ fn run_checked(
     }
 }
 
-/// The value of `key` in what `dscl -read` wrote: the rest of its `Key:` line and the lines after
-/// it that start with white space, joined by a space; `None` when there is no such line (`dscl`
-/// writes `No such key: Key` for an absent key).
+/// The prefix `dscl -read` writes before an attribute with no standard name: macOS 27.2.1 writes a
+/// hidden account's `IsHidden` as `dsAttrTypeNative:IsHidden: 1` (the Mac proof,
+/// docs/design/maintenance-updates.md section 10.1.2).
+const NATIVE: &str = "dsAttrTypeNative:";
+
+/// The value of `key` in what `dscl -read` wrote: the rest of its `Key:` line, or of its
+/// `dsAttrTypeNative:Key:` line, and the lines after it that start with white space, joined by a
+/// space; `None` when there is no such line (`dscl` writes `No such key: Key` for an absent key).
 pub(crate) fn dscl_value(text: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     let mut lines = text.lines();
-    let first = lines.find_map(|line| line.strip_prefix(prefix.as_str()))?;
+    let first = lines.find_map(|line| {
+        line.strip_prefix(NATIVE)
+            .unwrap_or(line)
+            .strip_prefix(prefix.as_str())
+    })?;
     let mut value = first.trim().to_owned();
     for line in lines.take_while(|line| line.starts_with([' ', '\t'])) {
         if !value.is_empty() {
@@ -205,8 +214,8 @@ pub(crate) fn dscl_value(text: &str, key: &str) -> Option<String> {
     Some(value)
 }
 
-/// Whether the user record `dscl -read` wrote is hidden: its `IsHidden` is `1`, `yes` or `true`,
-/// in any case.
+/// Whether the user record `dscl -read` wrote is hidden: its `IsHidden` (or
+/// `dsAttrTypeNative:IsHidden`, as macOS 27 writes it) is `1`, `yes` or `true`, in any case.
 pub(crate) fn is_hidden(record: &str) -> bool {
     dscl_value(record, "IsHidden")
         .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "yes" | "true"))

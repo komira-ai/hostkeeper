@@ -822,9 +822,61 @@ and the pin. None of these installs, updates or removes a package. The SSH CA ha
 set its sshd up to trust it, the Linux hosts included, and the move has the proof Mac's daemon write the operators' keys
 (`mac-proof.md`, "The ready state, in order").
 
+### 10.1.2 The first root reads on a farm Mac, 2026-11-25
+
+Run by an operator with `hk` 0.1.408 against the coordinator at 0.1.462: `hk ssh` to one farm Mac (daemon 0.1.462) as its
+administrator, then `sudo -n /bin/bash -s` with each step's commands on standard input. The output was kept on the operator's side;
+nothing was written on the Mac. `sw_vers`: macOS 27.2.1, build 26B131, before and after every step. Nobody was logged in: the console
+owner was `root`, `who` empty, no `autoLoginUser` and no `/etc/kcpassword`, so MP-E7 had nothing to log out. The Mac took no job
+while the reads ran (no js-agent child, `xcodebuild`, `xctest` or `simctl`), but was not cordoned, so only reads were made: no
+launchd job, no account, no install. What each read showed, and what it decides:
+
+- **A root shell needs no password (MP-E4).** `sudo -n true` exits 0 for the administrator. The update path does not rely on it,
+  as the step says; it is reported to the owner. The administrator's password is still the owner's for the Secure Token grant
+  (MP-A3, `-adminPassword -`), not for the shell.
+- **The coordinator's reading matches the Mac (MP-E5).** Each pair agrees: `sw_vers` and `osVersion`/`osBuild`; `fdesetup status`
+  (`FileVault is Off.`, exit 0) and `filevault` off; `fdesetup supportsauthrestart` and `authrestartSupported`; no update account
+  and `updateAccount` empty; `softwareupdate --list` (`No new software available.`, exit 0) and nothing `due`; neither managed
+  file nor the DDM state file present, and no `mdmConflicts`. `fdesetup list -extended` and `diskutil apfs listUsers /` show two
+  volume owners: the administrator and the MDM Bootstrap Token. Decides: no collector change.
+- **`dscl` and `sysadminctl` answer as the collector reads them (MP-A1).** `dscl . -read` of a missing user exits 56 with
+  `<dscl_cmd> DS Error: -14136 (eDSRecordNotFound)` on standard error: `RECORD_NOT_FOUND` stays and its **[V]** is dropped.
+  `sysadminctl -secureTokenStatus` exits 0 and writes its one line to standard error only, after a time stamp and its process,
+  naming the account by its full name (`RealName`), not its short name: `Secure token is ENABLED for user <full name>`. For an
+  unknown user it also exits 0, with `Unknown user <name>`. Decides: `TOKEN_ENABLED` and `TOKEN_DISABLED` stay, and both streams
+  stay read (`maintenance_account.rs` says which one carries it). The administrator holds a token, so MP-A3's grant can work.
+- **Defect: macOS 27 writes a hidden account's flag with a prefix the daemon did not read.** For an account that is hidden,
+  `dscl . -read <user> RecordName IsHidden` writes `dsAttrTypeNative:IsHidden: 1` (the same with `IsHidden` alone, and the key is
+  `dsAttrTypeNative:IsHidden` in `-plist` output); for one that is not, `No such key: IsHidden` on standard error. The daemon read
+  only a line starting `IsHidden:` (`dscl_value` in `login_account.rs`), so it took every hidden account for a visible one. Once
+  the update account of 5.5 exists, hidden and an administrator, the login-account rule would have counted two visible
+  administrators: `ssh.state` `no_login_user` and the operator keys refused on that Mac, and the account-making start would have
+  hidden the account again at every start. Fixed in the same change: `dscl_value` reads a key with or without the
+  `dsAttrTypeNative:` prefix, shown by tests over the text read here (`login_account_tests.rs`, `maintenance_account_tests.rs`,
+  and the account-making start's fake Mac, which now writes it so).
+- **`fdesetup` as root from a shell (MP-A6, the shell half).** With FileVault off, `fdesetup status` writes `FileVault is Off.` and
+  `fdesetup supportsauthrestart` writes `true` and a newline, each exit 0 with nothing on standard error. Decides:
+  `maintenance_mac.rs` unchanged; `true` with FileVault off means the gate reads the FileVault state first, not this alone, as
+  the coordinator's gate does (`crates/hostkeeper-coordinator/src/maintenance_mac.rs`). The same from launchd, and both with
+  FileVault on, are still to run.
+- **The device-management baseline (MP-M1).** `/Library/Managed Preferences` holds neither `com.apple.applicationaccess.plist`
+  nor `com.apple.SoftwareUpdate.plist`, only hostkeeper's configuration file, a privacy (TCC) policy for js-agent and a per-user
+  directory; the DDM state file is absent; the Mac is enrolled through Automated Device Enrollment, user approved, and
+  `profiles show` works as root. Decides: no change (an absent file adds nothing). Seen beside it: the Mac's own
+  `/Library/Preferences/com.apple.SoftwareUpdate.plist`, which no device management wrote, has `AutomaticDownload` and
+  `AutomaticallyInstallMacOSUpdates` set to 1 (macOS's defaults), and records 26B131 installed minutes before the Mac's last boot;
+  whether macOS installed it by itself or a person started it is not shown. The daemon reads only the managed file (5.8), so a
+  Mac set to install macOS updates by itself reports no conflict. Open: whether 5.8 counts that local setting too, since such an
+  install restarts the Mac without a drain.
+- **The boot facts.** `sysctl -n kern.bootsessionuuid` gives a UUID and `kern.boottime` a `sec` that matches `last reboot`;
+  `uname -r` is 27.2.0. The report from 0.1.462 has no `bootId` or `bootUnix`: the boot collector (10.1.1, komira-ai/hostkeeper#556)
+  is not in that release. Their comparison waits for the next one.
+- **The minor update (MP-U1 to MP-U3) cannot be shown, because none is pending.** `softwareupdate --list` finds nothing, and
+  `--list-full-installers` lists 27.2.1 and older only.
+
 ### 10.2 Each [V]
 
-Status `not run` means: not yet run on a Mac. The common reasons: no root shell on any farm Mac (10.1); no Mac drained in a group
+Status `not run` means: not yet run on a Mac. The common reasons: no root shell on any farm Mac (10.1, until 10.1.2); no Mac drained in a group
 of its own; a step that needs the owner's own hands (an Xcode archive downloaded with the Apple Account, FileVault's password, a setting in
 Apple Business); a major upgrade, which cannot be undone, needs the owner's choice of Mac.
 
@@ -839,13 +891,13 @@ Apple Business); a major upgrade, which cannot be undone, needs the owner's choi
 | Simulator platforms by `xcodebuild -exportPlatform` and `-importPlatform`; `xcode-push` uploads them | 2.4 | MP-I4 | not run | a copy of `xcodebuild`'s manual page read (not checked on a Mac) lists neither `-exportPlatform` nor `-importPlatform`; the route other tools use is, as recalled and not checked, `-downloadPlatform <platform> -exportPath <dir>`, then `-importPlatform <file>`. If MP-I4 shows that, 2.4 names it, and the export needs one download from Apple on the pushing Mac |
 | An Xcode install, a swap and a removal, js-agent probing before and after | 2.4, MP | MP-I5 | not run: needs the drained Mac and its js-agent | js-agent's probe reads `/Applications/Xcode*.app/Contents/version.plist` and runs nothing (komira-ai/jobscheduler); what it reports after each step decides whether J2's re-read in `resume` is enough |
 | `sysadminctl -addUser` and `-secureTokenOn` take both passwords on standard input (`-`), or need a pseudo-terminal | 5.5 | MP-A2, MP-A3 | not run | on a pipe: the Built stdin runner is enough; only from a terminal: the daemon gives it a pseudo-terminal it owns; a password reaches no argument in either case |
-| The Secure Token grant, and the account hidden | 5.5 | MP-A4, MP-A5 | not run | read three ways (`sysadminctl -secureTokenStatus`, `diskutil apfs listCryptoUsers /`, `fdesetup list`); the built read uses the first (`maintenance_account.rs`) |
-| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8 | not run: needs FileVault turned on by the owner | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
-| A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: needs a pending minor update | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
+| The Secure Token grant, and the account hidden | 5.5 | MP-A1, MP-A4, MP-A5 | MP-A1 shown (10.1.2): the reads before the account, and a hidden account's `dsAttrTypeNative:IsHidden: 1`, fixed; MP-A4, MP-A5 not run | read three ways (`sysadminctl -secureTokenStatus`, `diskutil apfs listCryptoUsers /`, `fdesetup list`); the built read uses the first (`maintenance_account.rs`) |
+| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8 | MP-A6 from a root shell with FileVault off shown (10.1.2); from launchd, and with FileVault on, not run: needs a cordon, then FileVault turned on by the owner | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
+| A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: no minor update pending on 2026-11-25 (10.1.2) | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
 | A major upgrade by `startosinstall --nointeraction --user --stdinpass`, FileVault off and on | 5.5 | MP-U6 to MP-U8 | not run: cannot be undone; needs a Mac on an older major and the owner's choice | as for the minor; one Mac can show only one of the two FileVault cases |
 | `startosinstall` restarts authenticated with FileVault on | 5.5 | MP-U8 | not run (as above) | if it stops at the pre-boot login, major upgrades are ordered only on Macs with FileVault off |
 | An install on macOS 26 or later stops on a step that needs the screen | 5.5 | MP-U9 | not run | a pane after the restart that waits for a person: the host does not come back by itself, and `verify` must name it |
-| How each setting of 5.8 shows: `/Library/Managed Preferences`, the declarations the Mac reports, the undocumented DDM state file | 5.8 | MP-M1 to MP-M6 | not run: each setting is made in Apple Business by the owner, one at a time | each key seen corrects `maintenance_mdm.rs`'s keys; a nested `Deferrals` or `AutomaticActions` dictionary with nothing on in it is reported as on by `is_on`, which MP-M4 checks |
+| How each setting of 5.8 shows: `/Library/Managed Preferences`, the declarations the Mac reports, the undocumented DDM state file | 5.8 | MP-M1 to MP-M6 | MP-M1 baseline shown (10.1.2): none of the files, no conflict; MP-M2 to MP-M6 not run: each setting is made in Apple Business by the owner, one at a time | each key seen corrects `maintenance_mdm.rs`'s keys; a nested `Deferrals` or `AutomaticActions` dictionary with nothing on in it is reported as on by `is_on`, which MP-M4 checks |
 | Apple Business's `SOFTWARE_UPDATE` Configuration is the enforcement declaration | 5.5.1 | MP-M7 | not run (owner's console) | 5.5.1 stays "not chosen" either way; the answer only says whether the Blueprint route would work |
 
 ### 10.3 What the proof must allow for
