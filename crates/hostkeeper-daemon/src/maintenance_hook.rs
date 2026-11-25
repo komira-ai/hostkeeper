@@ -56,7 +56,7 @@
 
 mod kind;
 pub mod linux;
-mod macos;
+pub mod macos;
 mod params;
 mod ports;
 mod registry;

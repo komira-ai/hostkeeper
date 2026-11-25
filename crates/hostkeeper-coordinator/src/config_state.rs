@@ -51,7 +51,6 @@ use crate::tokens::OperatorTokens;
 use crate::verdict_file::verdicts_path;
 use crate::xcode_feed::KnownReleases;
 use crate::xcode_files::{FileReleases, xcode_releases_path};
-use crate::xcode_store::XcodeStore;
 
 /// The store a start opened: the backend under the three stores and CI's spent ids, what it
 /// loaded, the marker of changes not yet committed, what holds the store for this process, and
@@ -463,12 +462,7 @@ pub(super) fn with_xcode(
         .with_known_xcode_releases(known);
     match &flags.xcode.xcode_dir {
         None => Ok(coordinator),
-        Some(dir) => {
-            let now = std::time::UNIX_EPOCH + Duration::from_secs(coordinator.ops.unix_now());
-            let store = XcodeStore::open(dir, flags.xcode.xcode_max_bytes, now)
-                .map_err(|why| StartError::XcodeDir(why.to_string()))?;
-            Ok(coordinator.with_xcode_store(Arc::new(store)))
-        }
+        Some(dir) => coordinator.with_xcode_dir(dir, flags.xcode.xcode_max_bytes),
     }
 }
 
