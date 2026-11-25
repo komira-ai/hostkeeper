@@ -106,9 +106,11 @@ waits"); each step of the turn is in the run and the audit log, and a halted tur
 | MP-J2, MP-J3, MP-J5 | updates hostkeeper itself, restarts the Mac | MP-E6's cordon: a self-update is a package roll, not a maintenance run, and a run has no restart of its own on a Mac (its `reboot` kind is not written) |
 | MP-J4, MP-J6 | disables or stops the daemon that runs a maintenance run | MP-E6's cordon: a run cannot hold the Mac out while its own daemon is stopped |
 
-No other step changes the Mac: MP-E1 to MP-E5, MP-E10, MP-E12's check, MP-A1, MP-A4, MP-A5, MP-M1 to MP-M7 (the owner's settings are made
-in Apple Business, not on the Mac) and MP-X1 to MP-X7 read, and MP-E2 and MP-E3 change the coordinator. The steps above that name the
-owner stay as they are (MP-E9).
+No other step needs the Mac out of builds. MP-E1, MP-E5, MP-E10, MP-E12's check, MP-A4, MP-A5, MP-M1 to MP-M7 (the owner's settings are
+made in Apple Business, not on the Mac) and MP-X1 to MP-X7 read; MP-E4 and MP-A1 write only scratch files in root's 0700
+`/var/root/hk-proof` (MP-A1 the password files); MP-E2 and MP-E3 change the coordinator, and through it the Mac's sshd trust and its
+administrator's `authorized_keys` ("The ready state, in order"), which takes no build away. The steps above that name the owner stay as
+they are (MP-E9).
 
 ### MP-E1 Read what the coordinator holds for the Macs
 Settles: none; the baseline that MP-E5 and section 7 compare with (design 4.1). Runs: an operator on the coordinator side with hk. Needs: an operator token file (0600), the coordinator's private URL and CA file. Nothing on a Mac changes.
@@ -342,6 +344,8 @@ Decides:
 - `fdesetup_status` `FileVault is Off.` and `fdesetup_supportsauthrestart` `true`, each exit 0 -> MP-A6's decisions, from launchd as from
   the shell (`maintenance_mac.rs` unchanged when both agree with design 10.1.2's shell half).
 - the Mac not in the run (`nothing_due`) -> its report lists no `probe` on demand: the Mac's daemon or the coordinator predates it.
+- refused `last_host` -> the Mac is the only host of its group (after MP-E3, `mac-proof`): run the same command with
+  `--take-last-host true`.
 - the turn halts `probe_unwritten` or `probe_missing` -> the probe file beside the run record could not be written or read; the Mac stays
   cordoned until Put back.
 

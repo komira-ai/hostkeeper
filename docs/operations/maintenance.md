@@ -272,7 +272,8 @@ hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-
     --reason "Mac proof: launchd probes"
 ```
 
-It prints the run, one host waiting (the audit entry shortened here):
+For a Mac that is the only host of its group, add `--take-last-host true` (otherwise `last_host`). It
+prints the run, one host waiting (the audit entry shortened here):
 
 ```
 {"run":{"id":"run-1796000000-1","state":"MAINTENANCE_STATE_RUNNING","kinds":["MAINTENANCE_KIND_PROBE"],"hostIds":["mac-studio-01"],"reason":"Mac proof: launchd probes","byName":"<operator>","scheduledUnix":"1796000000","hostCount":1},"hosts":[{"hostId":"mac-studio-01","hostGroup":"mac-build","step":"MAINTENANCE_HOST_STEP_WAITING","kinds":["MAINTENANCE_KIND_PROBE"]}],"entry":{"action":"maintenance_schedule","reason":"Mac proof: launchd probes run run-1796000000-1",...}}
