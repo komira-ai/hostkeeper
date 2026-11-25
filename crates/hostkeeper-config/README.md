@@ -20,9 +20,11 @@ The crate depends on no crate of this workspace; `crates/xtask/tests/layering` k
 Format exactly as design 4.1: `coordinator` and `release_channel` (`https://` URLs),
 `ca_sha256` (64 hex digits), `[trusted_signers]` (`organisation`, `workflow`, `refs`,
 `hosted_runner`; `TrustedSigners::allows_ref` matches a ref against its globs, `*` within one
-`/`-separated part) and `[bounds]`. Every key is required except `release_channel`, `keep_awake` and those of `[bounds]`, which default
+`/`-separated part) and `[bounds]`. Every key is required except `release_channel`, `keep_awake`, `serial_console` and those of `[bounds]`, which default
 to the design's example (`Bounds::default`; `keep_awake`, a boolean read by a Mac's daemon alone, to `true`:
-the Mac's power settings are made so that it never sleeps). A missing `[trusted_signers]` is refused: there is
+the Mac's power settings are made so that it never sleeps; `serial_console`, a Linux server's serial
+port `ttyS<n>` or `ttyAMA<n>` whose baseline the daemon keeps, to none). The port's grammar and the
+baseline's two files are `serial_console`, which the network install's seed writes too. A missing `[trusted_signers]` is refused: there is
 no unsigned mode. There is no list of services and no per-service key. The daemon reads neither
 `release_channel` nor `[trusted_signers]` any more; the loader still requires `[trusted_signers]` and
 accepts `release_channel` present or absent, so a config written for an earlier release keeps loading.

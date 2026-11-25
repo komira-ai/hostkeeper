@@ -17,9 +17,10 @@
 //! 3. `update-grub` runs when the GRUB file was written, or when the generated menu
 //!    (`/boot/grub/grub.cfg`) does not hold the port's kernel argument; after it, the menu must
 //!    hold it.
-//! 4. A written drop-in is read by `systemctl daemon-reload`. The getty is enabled when it is not;
-//!    a running one is restarted when its drop-in was written (it runs its old command until
-//!    then), and a stopped one started.
+//! 4. A drop-in that was written, or that systemd has not read (`NeedDaemonReload`), is read by
+//!    `systemctl daemon-reload`. The getty is enabled when it is not; a stopped one is started,
+//!    and a running one is restarted when its drop-in was written or read since it last started
+//!    (it runs its old command until then; a restart that failed is owed to the next look).
 //! 5. The running kernel's command line (`/proc/cmdline`) says the rest: `applied` when it holds
 //!    the port's kernel argument, `reboot_pending` when it does not (the argument takes effect at
 //!    the next boot). The daemon never reboots the host.
@@ -33,6 +34,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -53,7 +55,10 @@ pub const RECHECK_SECS: u64 = 600;
 pub const SYSTEMCTL_DEADLINE: Duration = Duration::from_secs(20);
 
 /// The longest `update-grub` is given: it runs on the heartbeat loop, whose watchdog is 60
-/// seconds, and only when the GRUB file was written or the menu lacks the argument.
+/// seconds, and only when the GRUB file was written or the menu lacks the argument. The deadlines
+/// of one look's commands are each their own, so a look whose every command runs to its deadline
+/// is longer than the watchdog; a look on a host whose baseline is in place runs one `systemctl
+/// show`.
 pub const UPDATE_GRUB_DEADLINE: Duration = Duration::from_secs(40);
 
 /// The name the temporary file of a written file starts with.
@@ -155,6 +160,9 @@ pub struct SerialBaseline {
     clock: Arc<dyn UnixClock>,
     log: Arc<dyn Log>,
     last: Mutex<Option<Look>>,
+    /// Whether the getty may run a command older than its drop-in: set when the drop-in was
+    /// written or systemd had not read it, cleared when the getty is started or restarted.
+    owed: AtomicBool,
 }
 
 impl SerialBaseline {
@@ -180,6 +188,7 @@ impl SerialBaseline {
             clock,
             log,
             last: Mutex::new(None),
+            owed: AtomicBool::new(false),
         }
     }
 
@@ -262,11 +271,16 @@ impl SerialBaseline {
             GETTY_DROP_IN.as_bytes(),
             "getty_drop_in",
         )?;
-        if written {
-            self.systemctl(&["daemon-reload"], "daemon_reload")?;
-        }
         let unit = self.port.getty_unit();
-        let shown = self.systemctl(&["show", "-p", "ActiveState,UnitFileState", &unit], "getty")?;
+        let shown = self.systemctl(
+            &[
+                "show",
+                "-p",
+                "ActiveState,UnitFileState,NeedDaemonReload",
+                &unit,
+            ],
+            "getty",
+        )?;
         let value = |key: &str| {
             shown
                 .lines()
@@ -274,23 +288,29 @@ impl SerialBaseline {
                 .find(|(name, _)| *name == key)
                 .map_or("", |(_, value)| value)
         };
-        let (enabled, active) = (
-            value("UnitFileState") == "enabled",
-            value("ActiveState") == "active",
-        );
-        if !enabled {
+        if written || value("NeedDaemonReload") == "yes" {
+            // The getty runs the command it was started with until it is started again, so it
+            // owes a restart until one succeeds, in this look or a later one.
+            self.owed.store(true, Ordering::SeqCst);
+            self.systemctl(&["daemon-reload"], "daemon_reload")?;
+        }
+        if value("UnitFileState") != "enabled" {
             self.systemctl(&["enable", &unit], "getty_enable")?;
             self.log.line(&format!(
                 "serial_console {}: enabled {unit}",
                 self.port.as_str()
             ));
         }
-        let action = match (active, written) {
+        let action = match (
+            value("ActiveState") == "active",
+            self.owed.load(Ordering::SeqCst),
+        ) {
             (true, false) => return Ok(()),
             (true, true) => "restart",
             (false, _) => "start",
         };
         self.systemctl(&[action, &unit], "getty_start")?;
+        self.owed.store(false, Ordering::SeqCst);
         self.log.line(&format!(
             "serial_console {}: {action}ed {unit}",
             self.port.as_str()
@@ -388,3 +408,6 @@ pub fn at_host(
     }))
 }
 
+#[cfg(test)]
+#[path = "serial_baseline_tests.rs"]
+mod tests;

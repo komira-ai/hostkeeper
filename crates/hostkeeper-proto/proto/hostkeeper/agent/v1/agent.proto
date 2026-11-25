@@ -258,9 +258,10 @@ message HeartbeatRequest {
   FullDiskAccess full_disk_access = 19;
   // The serial console baseline the daemon keeps on the host's port: the GRUB file that puts
   // the kernel's console (and GRUB's terminal, on a `ttyS<n>`) on it, and its getty held at
-  // 115200 baud (docs/design/console-broker.md, section 5.2). Sent in every heartbeat by a Linux
-  // daemon whose config names a `serial_console`, read only over gRPC; absent from any other
-  // daemon and from one that predates it. The coordinator keeps the last report it read, in
+  // 115200 baud (docs/design/console-broker.md, section 5.2). Sent in every heartbeat by a
+  // daemon whose config names a `serial_console` (`unsupported` from one not under systemd, an
+  // OpenRC host or a Mac), read only over gRPC; absent from a daemon whose config names none and
+  // from one that predates it. The coordinator keeps the last report it read, in
   // memory, and shows it with the host; a report that breaks a rule of `SerialConsoleReport` is
   // dropped and the one kept stays, and a heartbeat without one leaves the one kept as it is.
   optional SerialConsoleReport serial_console = 20;

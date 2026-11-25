@@ -269,6 +269,9 @@ Place the config:
    The coordinator logs `ca_sha256` at its start, on the line `the enrollment CA`. It is also
    the `sha256sum` of `<ca-key-file>.cert`, the coordinator's CA certificate, which is DER. It is
    not the hash of `--server-cert-file`.
+   On a Linux server whose BMC carries its serial console, take the `#` off the template's
+   `serial_console = "ttyS1"` line: the daemon then keeps the serial console baseline
+   ([console.md](console.md#the-daemon-keeps-the-serial-baseline)).
 3. Check that no placeholder is left: `grep -n '@@' /etc/hostkeeper/hostkeeper.toml` prints
    nothing.
 4. Make it root's and closed to writes by others: `chown root:root /etc/hostkeeper/hostkeeper.toml`

@@ -816,10 +816,10 @@ async fn heartbeat_identity_comes_from_the_certificate_not_the_message() {
         ..proto::ServiceBeat::default()
     });
     let mut bytes = message.encode_to_vec();
-    // Strings in fields 20 and 21, which the message does not define.
-    bytes.extend_from_slice(&[0xA2, 0x01, 10]);
+    // Strings in fields 40 and 41, which the message does not define.
+    bytes.extend_from_slice(&[0xC2, 0x02, 10]);
     bytes.extend_from_slice(b"frontend-1");
-    bytes.extend_from_slice(&[0xAA, 0x01, 8]);
+    bytes.extend_from_slice(&[0xCA, 0x02, 8]);
     bytes.extend_from_slice(b"frontend");
     for (name, role) in [("real-host", "storage"), ("other-host", "daemon")] {
         let reply = grpc_call(
