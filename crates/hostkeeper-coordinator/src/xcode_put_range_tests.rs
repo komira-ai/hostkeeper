@@ -15,10 +15,10 @@ use serde_json::{Value, json};
 
 use super::support::{
     ARCHIVE, Chunks, Farm, OTHER, Piece, ROOMY, bearer, builder, data, digest_of, farm, farm_with,
-    feed, files_of, good_uri, listing, lock_clock, push, refusing, release, request, updater, uri,
+    feed, files_of, good_uri, listing, lock_clock, push, release, request, updater, uri,
 };
 use crate::audit_actions::XCODE_PUT;
-use crate::testutil::{OPERATOR, ci_token, ops_of};
+use crate::testutil::{OPERATOR, ci_token};
 use crate::xcode_feed::Channel;
 use crate::xcode_store::{LOCK_STALE, XcodeStore};
 
@@ -561,32 +561,6 @@ async fn a_whole_file_that_is_not_the_named_digest_is_refused_and_removed() {
         farm.send(part(0, 10)).await,
         (StatusCode::ACCEPTED, json!({"received": 10}))
     );
-}
-
-/// Proves: when the last part completes the file and the commit is refused (here the audit line
-/// cannot be appended), the answer is the commit's (503 `audit_unavailable`), nothing is stored
-/// and the partial upload is removed.
-///
-/// Catches: a complete partial upload left that nothing can continue (a part must start at the
-/// bytes held, which are all of them), and an archive stored that the audit does not say.
-#[tokio::test]
-async fn a_refused_commit_of_the_last_part_leaves_no_partial_upload() {
-    let farm = farm_with("xcode-range-audit", ROOMY, |coordinator, dir| {
-        coordinator.with_ops(ops_of(dir).with_append(refusing()))
-    });
-    assert_eq!(farm.send(part(0, 10)).await.0, StatusCode::ACCEPTED);
-
-    let answered = farm.send(part(10, SIZE)).await;
-
-    assert_eq!(
-        answered,
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error": "audit_unavailable"})
-        )
-    );
-    farm.assert_untouched("a refused commit");
-    assert_eq!(farm.store.archives().expect("the archives"), Vec::new());
 }
 
 /// Proves: a request that is cut off keeps what it wrote, synced: a body that fails after 4 bytes,

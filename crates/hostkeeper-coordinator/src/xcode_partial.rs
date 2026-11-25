@@ -20,10 +20,12 @@
 //! It holds its writer's name and the second, by the store's clock, of its last refresh
 //! ([`UploadLock::refresh`], once for each second in which a block is written). A lock not
 //! refreshed for [`LOCK_STALE`] seconds, or whose text is not a lock's, is stale: the next writer
-//! removes it and makes its own. Two writers that both found one stale can both go on for a
-//! moment; the first to refresh finds the lock is not its own and stops, and what would have
-//! been written wrong cannot be stored, since the whole file's SHA-256 is checked before the
-//! archive is.
+//! removes it and makes its own. Of two writers that both found one stale only the one that
+//! moves that very text out of the lock's name takes it: a writer that finds the name holds a
+//! text it did not judge puts it back and is refused, so a lock made since is never removed. A
+//! writer whose lock was taken as stale (it was not refreshed for [`LOCK_STALE`] seconds) finds
+//! so at its next refresh and stops; what it wrote before cannot be stored wrong, since the whole
+//! file's SHA-256 is checked before the archive is.
 //!
 //! An upload whose last write is older than [`STALE_UPLOAD`] is removed, with its record and its lock, by
 //! [`XcodeStore::lapse`]: the sweep of the store's start and of the daily job `xcode-feed`
@@ -340,7 +342,7 @@ pub(crate) struct UploadLock<'a> {
 
 impl UploadLock<'_> {
     /// Makes the lock file, or finds who has it: a lock that is fresh is [`LockError::Held`], one
-    /// that is stale or not a lock's is removed and made again. The text is written to a file of
+    /// that is stale or not a lock's is removed and made again ([`Self::displace`]). The text is written to a file of
     /// its own (made with `O_CREAT|O_EXCL`) that is then linked to the lock's name, which fails
     /// if the name is taken, so that no other writer ever reads a lock that is made and not yet
     /// written.
@@ -377,20 +379,39 @@ impl UploadLock<'_> {
                     if fresh {
                         return Err(LockError::Held);
                     }
-                    tracing::info!(sha256 = %self.sha256, "a stale lock of a partial Xcode upload was taken over");
-                    fs::remove_file(path).or_else(|why| {
-                        if why.kind() == io::ErrorKind::NotFound {
-                            Ok(())
-                        } else {
-                            Err(XcodeStore::io(path, why))
-                        }
-                    })?;
+                    self.displace(path, &held)?;
                 }
                 // Removed since: make it.
                 Err(why) if why.kind() == io::ErrorKind::NotFound => {}
                 Err(why) => return Err(XcodeStore::io(path, why).into()),
             }
         }
+    }
+
+    /// Removes the stale lock `path`, whose text `held` was read, and nothing else: the lock is
+    /// moved out of its name and read again, and when it is not the text that was judged stale (a
+    /// writer replaced it since) it is put back and this writer is [`LockError::Held`]. A name
+    /// taken meanwhile is another writer's lock, and the writer put back finds so at its next
+    /// refresh.
+    fn displace(&self, path: &Path, held: &[u8]) -> Result<(), LockError> {
+        let mut grave = path.to_path_buf().into_os_string();
+        grave.push(format!(".{}.stale", self.owner));
+        let grave = PathBuf::from(grave);
+        match fs::rename(path, &grave) {
+            Ok(()) => {}
+            // Removed since: make it.
+            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(why) => return Err(XcodeStore::io(path, why).into()),
+        }
+        let moved = read_small(&grave);
+        if moved.is_ok_and(|moved| moved == held) {
+            remove_quietly(&grave);
+            tracing::info!(sha256 = %self.sha256, "a stale lock of a partial Xcode upload was taken over");
+            return Ok(());
+        }
+        let _ = fs::hard_link(&grave, path);
+        remove_quietly(&grave);
+        Err(LockError::Held)
     }
 
     /// Writes the second of now into the lock, once for each second: the writer is alive. It is

@@ -30,10 +30,15 @@
 //!    or fails, or has more bytes than the range, is 400 `bad_request`, and the bytes it did write
 //!    stay, synced; a request that is cut off has nobody to answer, and keeps them the same way;
 //! 4. while bytes are still due, 202 `{"received":<bytes held>}`;
-//! 5. when the last byte is in, the whole file is read once and hashed. A SHA-256 other than the
-//!    path's is 400 `digest_mismatch`. Then the commit is the one of the `PUT` without
-//!    `Content-Range` ([`super::commit`]), and 201. Whatever the end, the partial upload is gone
-//!    after it: stored, or refused by a check of the commit.
+//! 5. when the last byte is in, the whole file is read once and hashed, the lock refreshed before
+//!    each block. A SHA-256 other than the path's is 400 `digest_mismatch`, and the partial upload
+//!    is removed. Then the commit is the one of the `PUT` without `Content-Range`
+//!    ([`super::commit`]), and 201, and the partial upload is removed. A commit that is refused
+//!    or fails (503 `audit_unavailable`, 500 `store_failed`, a check of the commit), or a file
+//!    that cannot be read, leaves the partial upload, whose bytes are all there;
+//! 6. a partial upload that holds all `<size>` bytes (a request cut off after the last block, or a
+//!    commit that failed) takes no body: whatever part of it a request names (hk sends the last
+//!    byte again), step 2 is not asked and the file is hashed and committed as in 5.
 
 use std::path::Path;
 use std::time::Duration;
@@ -155,13 +160,15 @@ where
     Ok(written)
 }
 
-/// The SHA-256 and size of the file at `path`, read once.
-async fn hash_file(path: &Path) -> std::io::Result<Digesting> {
-    let mut file = tokio::fs::File::open(path).await?;
+/// The SHA-256 and size of the file at `path`, read once, the lock refreshed before each block
+/// is read: a file of 11 GB takes longer to read than a lock is fresh for.
+async fn hash_file(path: &Path, lock: &mut UploadLock<'_>) -> Result<Digesting, Refusal> {
+    let mut file = tokio::fs::File::open(path).await.map_err(store_failed)?;
     let mut digest = Digesting::default();
     let mut block = vec![0u8; 1 << 20];
     loop {
-        let read = file.read(&mut block).await?;
+        lock.refresh().map_err(locked)?;
+        let read = file.read(&mut block).await.map_err(store_failed)?;
         if read == 0 {
             return Ok(digest);
         }
@@ -169,18 +176,10 @@ async fn hash_file(path: &Path) -> std::io::Result<Digesting> {
     }
 }
 
-/// Removes the partial upload of its SHA-256 when it is dropped: a part that completes it ends
-/// either stored (its file renamed away) or refused, and in neither is there a partial upload.
-struct Complete<'a> {
-    store: &'a XcodeStore,
-    sha256: &'a str,
-}
-
-impl Drop for Complete<'_> {
-    fn drop(&mut self) {
-        if let Err(why) = self.store.remove_upload(self.sha256) {
-            tracing::warn!(%why, sha256 = %self.sha256, "a completed partial Xcode upload could not be removed");
-        }
+/// Removes the partial upload of `sha256`: its bytes are stored, or are not the archive's.
+fn forget(store: &XcodeStore, sha256: &str) {
+    if let Err(why) = store.remove_upload(sha256) {
+        tracing::warn!(%why, %sha256, "a completed partial Xcode upload could not be removed");
     }
 }
 
@@ -216,35 +215,42 @@ where
         return Err(PARTIAL_DIFFERS.into());
     }
     let received = held.as_ref().map_or(0, |held| held.received);
-    if range.first != received {
-        return Err(Stop::OffsetMismatch(received));
-    }
-    if held.is_none() {
-        store.begin_upload(sha256, &record).map_err(store_failed)?;
-    }
-    let mut out = tokio::fs::File::from_std(store.append_upload(sha256).map_err(store_failed)?);
-    let written = receive_part(body, &mut out, &mut lock, range.len(), patience).await;
-    // What was written stays, whatever ended the request.
-    let synced = out.sync_all().await;
-    let written = written?;
-    synced.map_err(store_failed)?;
-    if written != range.len() {
-        return Err(BAD_REQUEST.into());
-    }
-    let received = received + written;
+    // A partial that holds every byte (a request cut off after the last block, or a commit that
+    // failed) takes no more: whatever part is sent, it is hashed and committed as it is.
     if received < range.size {
-        return Ok(Done::Due(received));
+        if range.first != received {
+            return Err(Stop::OffsetMismatch(received));
+        }
+        if held.is_none() {
+            store.begin_upload(sha256, &record).map_err(store_failed)?;
+        }
+        let mut out = tokio::fs::File::from_std(store.append_upload(sha256).map_err(store_failed)?);
+        let written = receive_part(body, &mut out, &mut lock, range.len(), patience).await;
+        // What was written stays, whatever ended the request.
+        let synced = out.sync_all().await;
+        let written = written?;
+        synced.map_err(store_failed)?;
+        if written != range.len() {
+            return Err(BAD_REQUEST.into());
+        }
+        let received = received + written;
+        if received < range.size {
+            return Ok(Done::Due(received));
+        }
     }
-    let _complete = Complete { store, sha256 };
     let path = store.upload_file_of(sha256);
-    let digest = hash_file(&path).await.map_err(store_failed)?;
+    // A failure to read the file or to keep the lock leaves the bytes where they are.
+    let digest = hash_file(&path, &mut lock).await?;
     let size = digest.bytes();
     if digest.finish() != sha256 {
+        forget(store, sha256);
         return Err(super::DIGEST_MISMATCH.into());
     }
-    commit(coordinator, store, operator, wanted, size, &path)
-        .map(Done::Stored)
-        .map_err(Stop::from)
+    // A refused or failed commit leaves the bytes, which hash as the archive: the next request
+    // commits them without being sent again.
+    let stored = commit(coordinator, store, operator, wanted, size, &path)?;
+    forget(store, sha256);
+    Ok(Done::Stored(stored))
 }
 
 /// The answer to the request `request` for `GET /v1/xcode/<sha256>/upload` of `store`.

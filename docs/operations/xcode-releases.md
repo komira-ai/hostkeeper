@@ -219,11 +219,16 @@ that is not, or that comes twice, is `bad_request`; and `Content-Length` must be
    connection's patience or has more bytes than its range is `400 bad_request`; a request that is cut off
    has nobody to answer. Either way the bytes it wrote stay, synced, and the next part continues after
    them.
-4. When the last byte is in, the whole file is read once and hashed. A SHA-256 other than the path's is
-   `400 digest_mismatch`, and the partial upload is removed, so the next try starts from byte 0. Else the
-   archive is committed as a whole upload is: the checks again under the store's lock, the `xcode_put`
-   audit entry first, the record, the rename, the prune, and `201` with the same body. If a check of that
-   commit refuses it, the answer is that refusal and the partial upload is removed.
+4. When the last byte is in, the whole file is read once and hashed, the lock refreshed before each
+   block (a writer that finds its lock taken stops with `409 partial_locked` and commits nothing). A
+   SHA-256 other than the path's is `400 digest_mismatch`, and the partial upload is removed, so the next
+   try starts from byte 0. Else the archive is committed as a whole upload is: the checks again under the
+   store's lock, the `xcode_put` audit entry first, the record, the rename, the prune, and `201` with the
+   same body, and the partial upload is removed. If the commit is refused or fails (`503
+   audit_unavailable`, `500 store_failed`, a check of the commit), the answer is that refusal and the
+   partial upload stays, with all its bytes.
+5. A partial upload that holds all `<size>` bytes takes no body: a request that names any part of it
+   (`hk` sends the last byte again) skips step 2, and the file is hashed and committed as in step 4.
 
 Any operator may continue a partial upload: the bytes are named by their SHA-256 and checked whole before
 anything is stored, so a partial upload written by someone else cannot make the store hold other bytes
@@ -235,13 +240,16 @@ started it, and the `xcode_put` entry names the operator whose request completed
 refresh, and refreshes it once for each second in which it writes a block. A lock is made so that of
 two writers one makes it and the other is refused `409 partial_locked` (a second request of the same
 coordinator for the same archive is refused the same way). A lock not refreshed for 30 seconds, or
-whose text is not a lock's, is stale: the next writer removes it and makes its own, and a writer whose
-lock was taken that way finds it at its next refresh and stops with `partial_locked`. The lock's file is
+whose text is not a lock's, is stale: the next writer moves it out of the lock's name, and when it is
+the text it judged stale removes it and makes its own (a lock made since is put back and that writer is
+refused `partial_locked`), and a writer whose lock was taken that way finds it at its next refresh and
+stops with `partial_locked`. The lock's file is
 made by writing its text to `.partial-<sha256>.lock.<writer>` (created exclusively) and linking that
 to the lock's name, which fails when the name is taken; so the directory every coordinator mounts must
 have an atomic exclusive create and `link(2)`, as a local file system and NFS do.
-Two writers that both found a lock stale can both go on for a moment: that cannot store wrong bytes,
-because the whole file's SHA-256 is checked before the archive is stored. The coordinators judge a lock
+Of two writers that both found a lock stale only one takes it. What a writer wrote under a lock it
+lost cannot store wrong bytes, because the whole file's SHA-256 is checked before the archive is
+stored. The coordinators judge a lock
 by their own clocks, so those clocks must agree to within a few seconds.
 
 ## Asking what the store holds: `GET /v1/xcode/<sha256>/upload`

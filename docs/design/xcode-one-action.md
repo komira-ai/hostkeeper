@@ -283,8 +283,11 @@ today's tests of the route stay as they are.
     off keeps what it wrote, synced, and has nobody to answer;
   - when the last byte is in, the whole file is hashed again in one read (the hash of a prefix written by an earlier request is
     not kept across requests, so nothing trusts a state it did not compute). It must equal the path's SHA-256, else
-    `400 digest_mismatch` and the partial is removed. Then the Built commit runs as today: the checks again under the store's
-    lock, the `xcode_put` audit entry first, the record, the rename, the prune, and `201` as today.
+    `400 digest_mismatch` and the partial is removed. The lock is refreshed while the file is hashed. Then the Built commit runs
+    as today: the checks again under the store's lock, the `xcode_put` audit entry first, the record, the rename, the prune,
+    and `201` as today, and the partial is removed. A commit that is refused or fails leaves the partial with all its bytes;
+  - a partial that holds all `<size>` bytes takes no body: whatever part a request names (`hk` sends the last byte again),
+    the file is hashed and committed as above.
 - **Who may continue a partial.** Any operator: the bytes are named by their SHA-256 and checked whole before anything is
   stored, so a partial written by someone else cannot make the store hold other bytes than the path names. The worst a
   wrong partial does is fail the final hash, which removes it. The audit entry names the operator whose request completed it,

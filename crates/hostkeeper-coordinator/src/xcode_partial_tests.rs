@@ -7,7 +7,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Barrier;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -196,6 +196,98 @@ fn a_stale_lock_and_a_lock_that_is_not_one_are_taken_over() {
         let taken = store.lock_upload(&sha('a')).expect(junk);
         drop(taken);
     }
+}
+
+/// A store over `dir` whose clock runs `between` once, the second time it is read after `armed` is
+/// set: the first read writes the writer's own lock's text, the second is the moment after it has
+/// read a lock that is there and before it judges it by the clock.
+fn store_with_hook(
+    dir: &Path,
+    clock: &Arc<AtomicU64>,
+    armed: &Arc<AtomicBool>,
+    between: impl Fn() + Send + Sync + 'static,
+) -> XcodeStore {
+    let (clock, armed) = (Arc::clone(clock), Arc::clone(armed));
+    let reads = AtomicU64::new(0);
+    XcodeStore::open(dir, 1024, SystemTime::UNIX_EPOCH)
+        .expect("a store")
+        .with_clock(Arc::new(move || {
+            if armed.load(Ordering::SeqCst) && reads.fetch_add(1, Ordering::SeqCst) == 1 {
+                between();
+            }
+            START + clock.load(Ordering::SeqCst)
+        }))
+}
+
+/// Proves: a writer that read a lock as stale and finds, when it comes to take it, that another
+/// writer has made a fresh lock since, does not remove it: it is refused (`Held`), the fresh
+/// lock's text is as it was, no file of the takeover is left, and the writer that made it
+/// refreshes and goes on.
+///
+/// Catches: a takeover that removes whatever is at the lock's name, which takes a live writer's
+/// lock and lets two writers append to one partial upload.
+#[test]
+fn a_takeover_never_removes_a_lock_made_since_it_was_judged_stale() {
+    let dir = scratch("partial-takeover-race");
+    let clock = Arc::new(AtomicU64::new(0));
+    let armed = Arc::new(AtomicBool::new(false));
+    let lock = dir.path().join(format!(".partial-{}.lock", sha('a')));
+    let fresh = lock_text("live-writer", START + LOCK_STALE + 5);
+    let replace = {
+        let (lock, fresh) = (lock.clone(), fresh.clone());
+        move || {
+            fs::remove_file(&lock).expect("the stale lock goes");
+            fs::write(&lock, &fresh).expect("a fresh lock is made");
+        }
+    };
+    let late = store_with_hook(dir.path(), &clock, &armed, replace);
+    let first = store_over(dir.path(), &clock);
+    let dead = first
+        .lock_upload(&sha('a'))
+        .expect("the first writer's lock");
+    clock.store(LOCK_STALE + 5, Ordering::SeqCst);
+    armed.store(true, Ordering::SeqCst);
+
+    assert!(matches!(late.lock_upload(&sha('a')), Err(LockError::Held)));
+
+    assert_eq!(fs::read_to_string(&lock).expect("the lock"), fresh);
+    assert_eq!(
+        names(&dir),
+        vec![format!(".partial-{}.lock", sha('a'))],
+        "nothing of the takeover is left"
+    );
+    assert!(!late.is_writing(&sha('a')));
+    drop(dead);
+}
+
+/// Proves: a stale lock that is removed by another writer after this one read it is not an error:
+/// the takeover finds nothing to move and the lock is made.
+///
+/// Catches: a takeover that fails the upload with a store failure because the stale lock was
+/// taken away first.
+#[test]
+fn a_stale_lock_removed_meanwhile_is_made_again() {
+    let dir = scratch("partial-takeover-gone");
+    let clock = Arc::new(AtomicU64::new(0));
+    let armed = Arc::new(AtomicBool::new(false));
+    let lock = dir.path().join(format!(".partial-{}.lock", sha('a')));
+    let gone = {
+        let lock = lock.clone();
+        move || fs::remove_file(&lock).expect("the stale lock goes")
+    };
+    let late = store_with_hook(dir.path(), &clock, &armed, gone);
+    let first = store_over(dir.path(), &clock);
+    let _dead = first
+        .lock_upload(&sha('a'))
+        .expect("the first writer's lock");
+    clock.store(LOCK_STALE, Ordering::SeqCst);
+    armed.store(true, Ordering::SeqCst);
+
+    let mine = late.lock_upload(&sha('a')).expect("made again");
+
+    assert!(lock.exists());
+    drop(mine);
+    assert!(!lock.exists());
 }
 
 /// Proves: a lock that cannot be examined is [`LockError::Store`], not a refusal: the lock path

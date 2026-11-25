@@ -45,6 +45,9 @@ mod range;
 #[path = "xcode_put_range_remove_tests.rs"]
 mod range_remove;
 
+#[path = "xcode_put_range_finish_tests.rs"]
+mod range_finish;
+
 use support::{
     ARCHIVE, Chunks, Farm, OTHER, PATIENCE, Piece, ROOMY, SIXTEEN, Unreadable, bearer, builder,
     data, digest_of, farm, farm_with, feed, files_of, good_uri, id, lines, listing, polled, push,
