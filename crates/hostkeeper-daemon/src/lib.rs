@@ -103,7 +103,8 @@
 //!   package managers [`maintenance_apt`], [`maintenance_dnf`] and [`maintenance_apk`], with
 //!   [`maintenance_own`] naming the packages hostkeeper itself installs, which are never due; on a
 //!   Mac, [`maintenance_macos`] (`sw_vers`, the hardware serial, and the macOS updates
-//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]), [`maintenance_mac`]
+//!   `softwareupdate` lists, read by [`maintenance_softwareupdate`]), [`maintenance_boot`] (the
+//!   boot id and the boot time), [`maintenance_mac`]
 //!   (FileVault, the data volume's free space, the Command Line Tools), [`maintenance_xcode`] (the
 //!   Xcodes installed and the one selected), [`maintenance_account`] (the update account's state)
 //!   and [`maintenance_mdm`] (the device-management settings that conflict with a run), reading
@@ -190,6 +191,7 @@ pub mod macos_pkg;
 pub mod maintenance_account;
 pub mod maintenance_apk;
 pub mod maintenance_apt;
+pub mod maintenance_boot;
 pub mod maintenance_collect;
 pub mod maintenance_collectors;
 pub mod maintenance_dnf;
