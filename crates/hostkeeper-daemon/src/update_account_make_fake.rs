@@ -220,7 +220,8 @@ impl Mac {
                     .iter()
                     .map(|key| match *key {
                         "RecordName" => format!("RecordName: {name}\n"),
-                        "IsHidden" if found.hidden => "IsHidden: 1\n".to_owned(),
+                        // as macOS 27.2.1 writes it (the Mac proof)
+                        "IsHidden" if found.hidden => "dsAttrTypeNative:IsHidden: 1\n".to_owned(),
                         "UserShell" => format!("UserShell: {}\n", found.shell),
                         "NFSHomeDirectory" => format!("NFSHomeDirectory: {USERS}/{name}\n"),
                         "PrimaryGroupID" => "PrimaryGroupID: 20\n".to_owned(),

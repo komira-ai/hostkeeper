@@ -780,7 +780,7 @@ Settles section 5.5 line 470-471 (hidden, no login shell, not in `com.apple.acce
 
 Record: the `IsHidden` line and exit; the home path; the ssh-group text and exit; whether the account is still an administrator and still holds the token after the hide and the shell change; at the console (owner at the Mac), whether the login window or Users & Groups shows it.
 Decides:
-- `IsHidden: 1` -> `is_hidden()` stays; the creating step runs `dscl . -create "$U/hkproof" IsHidden 1` as in A2 (with the production name).
+- `IsHidden: 1`, or `dsAttrTypeNative:IsHidden: 1` as macOS 27.2.1 writes it (design 10.1.2) -> `is_hidden()` stays; the creating step runs `dscl . -create "$U/hkproof" IsHidden 1` as in A2 (with the production name).
 - The login window still lists it -> add `HiddenUsersList` (`defaults write`) to the creating step.
 - In `com.apple.access_ssh` -> add `dseditgroup -o edit -d <name> -t user com.apple.access_ssh` to the creating code.
 
