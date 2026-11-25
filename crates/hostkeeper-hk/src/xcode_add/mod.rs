@@ -14,8 +14,8 @@
 //! 2. its kind, from its first four bytes: `xar!` goes on, `AA01` and `AEA1` are
 //!    `archive_kind_unsupported`, anything else is `not_an_xip` (exit 2);
 //! 3. its SHA-256 and size, read once in 8 MiB blocks, with progress on a terminal ([`progress`]);
-//! 4. `Xcode.List`: an archive of these bytes already held ends the run with exit 0 (a given
-//!    version the held archive is not is `version_mismatch`);
+//! 4. `Xcode.List`: an archive of these bytes already held ends the run with exit 0 after the Macs
+//!    summary (a given version the held archive is not is `version_mismatch`);
 //! 5. Apple's signature (`pkgutil`, [`crate::xcode_push::signature`]);
 //! 6. the version and the build: from the record of an earlier run ([`reuse`]), else from the
 //!    expansion, after the free space check (`free_space_short`), with `codesign` on the app,
@@ -23,7 +23,7 @@
 //! 7. `Xcode.List` again: the same release from other bytes, or another build of the version, stops
 //!    the run naming the `hk xcode remove` line;
 //! 8. the upload with progress ([`crate::xcode_push::upload`]), each refusal said in words, then
-//!    `stored: ...` on stdout and the Macs summary ([`summary`]).
+//!    `stored: ...` on stdout and the Macs summary ([`summary`]), whose failure leaves the exit 0.
 //!
 //! Progress and what the run is doing go to stderr; stdout holds the answer lines only.
 
@@ -254,7 +254,7 @@ fn add(
             "already in the store: {}",
             stored(&held.version, &held.build)
         );
-        summary::macs(w, globals, &held.version, &held.build);
+        summary::macs(w, globals, &listing, held);
         if newest && let Some(waiting) = &listing.waiting {
             let _ = writeln!(
                 w.stdout,
@@ -300,7 +300,8 @@ fn add(
             stored(&version, &build)
         )));
     }
-    other_bytes(&store::list(w, globals)?, &sha256, &version, &build)?;
+    let latest = store::list(w, globals)?;
+    other_bytes(&latest, &sha256, &version, &build)?;
     upload::put(
         w,
         target,
@@ -317,7 +318,12 @@ fn add(
         "stored: {}, sha256 {sha256}, {size} bytes",
         stored(&version, &build)
     );
-    summary::macs(w, globals, &version, &build);
+    let release = store::Held {
+        sha256,
+        version,
+        build,
+    };
+    summary::macs(w, globals, &latest, &release);
     Ok(())
 }
 

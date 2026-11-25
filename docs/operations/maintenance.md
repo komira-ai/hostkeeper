@@ -519,7 +519,9 @@ release still waiting, if any.
 `xcode_keep` is at least 1 and that lacks it: the Mac counts toward its group's `updates_due`, and
 its host page lists it. **Update** the group, or **Schedule** it in a window with only "Xcode"
 ticked (`--kinds xcode`); a Mac that is also due macOS installs that first. While the store's
-directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
+directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits. `hk xcode add`
+ends with this list for the release it stored, and the `hk maintenance schedule` line that stores
+the run for each group no run takes yet ([xcode-releases.md](xcode-releases.md)).
 
 ### The private store, `xcode_keep` and `xcode_default`
 

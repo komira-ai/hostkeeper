@@ -315,8 +315,8 @@ fn a_lock_whose_process_is_gone_is_taken_over() {
         let ran = add.add(&server, &[]);
         assert_eq!(ran.code, 0, "{stale:?}: {ran:?}");
         let watched = watched.lock().expect("the record").clone();
-        // Two `Xcode.List` and the upload.
-        assert_eq!(watched.len(), 3, "{stale:?}");
+        // Two `Xcode.List`, the upload and the `Hosts.List` of the summary.
+        assert_eq!(watched.len(), 4, "{stale:?}");
         for held in watched {
             assert_eq!(
                 held,

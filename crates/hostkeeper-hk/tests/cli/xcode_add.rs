@@ -21,7 +21,7 @@ fn stored() -> String {
 /// Proves: a good run uploads one `PUT /v1/xcode/<sha256>?version=27.2&build=27B52` of exactly the
 /// archive's bytes with `Content-Length`, `Content-Type: application/octet-stream`,
 /// `Expect: 100-continue` and the token as the bearer, asks `Xcode.List` (with `{}`) before it
-/// and again before the upload, prints only `stored: ...` on stdout and the steps on stderr, in
+/// and again before the upload, then `Hosts.List` for the summary of the Macs, prints only `stored: ...` on stdout and the steps on stderr, in
 /// order, and leaves nothing beside the archive.
 #[test]
 fn a_good_run_uploads_the_archive_and_says_stored() {
@@ -32,11 +32,12 @@ fn a_good_run_uploads_the_archive_and_says_stored() {
     assert_eq!((ran.code, ran.stdout), (0, stored()), "{:?}", ran.stderr);
     let seen = server.seen();
     let order: Vec<&str> = seen.iter().map(|s| s.method.as_str()).collect();
-    assert_eq!(order, ["POST", "POST", "PUT"]);
+    assert_eq!(order, ["POST", "POST", "PUT", "POST"]);
     for list in &seen[..2] {
         assert_eq!(list.target, crate::add_rig::LIST);
         assert_eq!(list.text(), "{}");
     }
+    assert_eq!(seen[3].target, crate::add_rig::FLEET[0]);
     let put = &seen[2];
     assert_eq!(
         put.target,
@@ -269,7 +270,8 @@ fn each_refusal_of_the_store_is_said_in_words_and_exits_as_listed() {
 
 /// Proves: the token is in no argument and no environment variable of any program the run starts
 /// (`pkgutil`, `xip`, `plutil`, `codesign`, `df`), in no line on stdout or stderr, and is the
-/// bearer of every request to the store: both `Xcode.List` calls and the upload.
+/// bearer of every request to the coordinator: both `Xcode.List` calls, the upload and the
+/// `Hosts.List` of the summary.
 #[test]
 fn the_token_is_in_no_argument_environment_or_output_line() {
     let add = Add::new("token");
@@ -287,7 +289,7 @@ fn the_token_is_in_no_argument_environment_or_output_line() {
     assert!(!ran.stdout.contains(TOKEN));
     assert!(!ran.stderr.contains(TOKEN));
     let seen = server.seen();
-    assert_eq!(seen.len(), 3);
+    assert_eq!(seen.len(), 4);
     for request in seen {
         assert_eq!(
             request.header("authorization"),
@@ -433,7 +435,7 @@ fn under_a_umask_of_000_what_it_makes_is_private() {
         .iter()
         .map(|held| held.as_ref().map(|(_, mode)| *mode))
         .collect();
-    assert_eq!(modes, [Some(0o600), Some(0o600), Some(0o600)]);
+    assert_eq!(modes, [Some(0o600); 4]);
     assert!(!add.kept(".lock").exists());
 }
 

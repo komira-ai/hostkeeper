@@ -1608,7 +1608,7 @@ free for an upload of another build afterwards.
 
 #### `hk xcode add`
 
-Brings an Xcode release into the coordinator's store from the operator's own Mac, macOS only: `hk xcode add` takes the newest Xcode_<version>.xip in ~/Downloads (or the release waiting, downloaded with xcodes), `hk xcode add 27.2` the archive of that version (downloaded with xcodes when ~/Downloads has none), `hk xcode add <path>` that file. It checks the archive's kind and Apple's signature, reads its version and build from the expanded app (keeping a record that saves the next expansion), asks the store first (an archive it holds ends the run with exit 0), and uploads with progress. One run at a time per Mac. Not a gateway call. `hk xcode add --help` says each step; `hk xcode-push` is a second name for one release.
+Brings an Xcode release into the coordinator's store from the operator's own Mac, macOS only: `hk xcode add` takes the newest Xcode_<version>.xip in ~/Downloads (or the release waiting, downloaded with xcodes), `hk xcode add 27.2` the archive of that version (downloaded with xcodes when ~/Downloads has none), `hk xcode add <path>` that file. It checks the archive's kind and Apple's signature, reads its version and build from the expanded app (keeping a record that saves the next expansion), asks the store first (an archive it holds ends the run with exit 0), uploads with progress and ends with the Macs that are due the release and when, as the coordinator's Schedule preview answers it. One run at a time per Mac. Not a gateway call. `hk xcode add --help` says each step; `hk xcode-push` is a second name for one release.
 
 #### `hk xcode verify`
 

@@ -41,8 +41,9 @@ pub(crate) const METHODS: &[Method] = &[
               version (downloaded with xcodes when ~/Downloads has none), `hk xcode add <path>` \
               that file. It checks the archive's kind and Apple's signature, reads its version and \
               build from the expanded app (keeping a record that saves the next expansion), asks \
-              the store first (an archive it holds ends the run with exit 0), and uploads with \
-              progress. One run at a time per Mac. Not a gateway call. `hk xcode add --help` says \
+              the store first (an archive it holds ends the run with exit 0), uploads with progress \
+              and ends with the Macs that are due the release and when, as the coordinator's \
+              Schedule preview answers it. One run at a time per Mac. Not a gateway call. `hk xcode add --help` says \
               each step; `hk xcode-push` is a second name for one release.",
         flags: &[],
         run: crate::xcode_add::xcode_add,

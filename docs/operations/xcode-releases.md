@@ -97,6 +97,28 @@ nothing:
    archive is sent. The progress goes to stderr (one line rewritten in place on a terminal, otherwise
    one line per tenth of the archive); `stored: Xcode 27.2 (27B52), sha256 <sha256>, <n> bytes` goes to
    stdout.
+9. **The Macs.** After `stored:` and after `already in the store:`, `hk` reads every page of `Hosts.List`
+   and `HostGroups.List`, the runs that have not ended (`Maintenance.List`, then `Maintenance.Get` of
+   each) and says on stdout which Macs (hosts of the platform `darwin-arm64`) are due the release, by
+   group with its `xcode_keep` and batch, by the rule the coordinator decides `xcode` by: the group
+   keeps the release (it is among the newest `xcode_keep` releases the store holds) and the Mac lacks it
+   in `Xcode-<version>.app` with that build, or has it while `xcode-select` names another and it is the
+   group's default (`installed, not selected: due to be selected`). A Mac that lacks a newer release
+   too is `due: 27.3, then 27.2 in the same turn`. A Mac of a group that keeps no Xcode or only newer
+   releases is `left out` with that reason, and a Mac that has the release as the group wants is
+   `installed`. A Mac in an open run that takes `xcode` and has not started its turn is `in run <id>,
+   window <start> to <end>` (UTC) or `in run <id>, now`: the coordinator reads the store when the turn
+   starts. A Mac in a run that does not take `xcode` is `in run <id>, which does not take Xcode:
+   schedule after it ends`, because a run's kinds are fixed when it is scheduled. For each group with a
+   due Mac that no run takes, `Maintenance.Schedule` is asked with the kind `xcode`, the reason `Xcode
+   <version>` and no `confirm`, which stores nothing: `hk` prints the hosts a run would take and its
+   batch, the hosts it would skip with the coordinator's reason, a refusal of the whole run with its
+   reason (for `last_host`, the line with `--take-last-host true`), and the line that stores the run,
+   `hk maintenance schedule --host-group <group> --kinds xcode --reason "Xcode <version>" --confirm
+   true`. `hk xcode add` never stores the run: an install drains a build Mac. A call of the summary that
+   fails does not undo the upload: stderr says `summary unavailable: <why>; the archive is stored` and
+   names `hk hosts list` and `hk maintenance list`, and the exit is 0. With no Mac known, stdout has
+   nothing more and stderr says so.
 
 `--timeout-secs` bounds the connection and the wait for the coordinator's `100 Continue`; once the
 archive is sent, its answer is waited for 30 minutes at least, as long as the coordinator may take to

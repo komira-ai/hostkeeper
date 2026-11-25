@@ -36,6 +36,14 @@ pub fn sha256(bytes: &[u8]) -> String {
 /// The path `Xcode.List` is called on.
 pub const LIST: &str = "/hostkeeper.operator.v1.Xcode/List";
 
+/// The paths the summary of `hk xcode add` reads the Macs from: a store of this file answers each
+/// with an empty list, a coordinator that knows no host, group or run.
+pub const FLEET: [&str; 3] = [
+    "/hostkeeper.operator.v1.Hosts/List",
+    "/hostkeeper.operator.v1.HostGroups/List",
+    "/hostkeeper.operator.v1.Maintenance/List",
+];
+
 /// What the fake store holds and how it answers an upload.
 #[derive(Clone, Default)]
 pub struct Store {
@@ -103,6 +111,9 @@ impl Store {
         if request.target == LIST {
             return Reply::new(200, self.list());
         }
+        if FLEET.contains(&request.target.as_str()) {
+            return Reply::new(200, "{}");
+        }
         if let Some((status, body)) = &self.upload {
             return Reply::new(*status, body.clone());
         }
@@ -126,6 +137,20 @@ impl Store {
     /// The server.
     pub fn serve(self, rig: &Rig) -> Server {
         Server::serve(&rig.pki, || (), move |(), request| self.answer(request))
+    }
+
+    /// The server, where `other` answers first: the requests it has an answer to are not the
+    /// store's.
+    pub fn serve_with(
+        self,
+        rig: &Rig,
+        other: impl Fn(&Request) -> Option<Reply> + Send + 'static,
+    ) -> Server {
+        Server::serve(
+            &rig.pki,
+            || (),
+            move |(), request| other(request).unwrap_or_else(|| self.answer(request)),
+        )
     }
 
     /// The server, and what the file `lock` held at each request it answered: its text and its

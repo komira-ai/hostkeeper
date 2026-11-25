@@ -16,9 +16,9 @@ hk xcode add [<version> | <archive.xip>]
        archive_kind_unsupported (exit 1); anything else is not_an_xip (exit 2).
     3. The SHA-256 and size, read once in 8 MiB blocks (progress on a terminal).
     4. Xcode.List: an archive of these bytes held prints `already in the store: Xcode 27.2
-       (27B52)` and exits 0, running nothing else; when a version was given and the held archive
-       is another, version_mismatch (exit 1). With nothing given, a newer release waiting is
-       named with the line that adds it.
+       (27B52)` and the Macs of step 9, and exits 0, running nothing else; when a version was
+       given and the held archive is another, version_mismatch (exit 1). With nothing given, a
+       newer release waiting is named with the line that adds it.
     5. pkgutil --check-signature <archive> must exit 0, with the status signed Apple Software
        and a chain ending at Apple Root CA (by its SHA-256 fingerprint).
     6. The version and build. $HOME/.hostkeeper/xcode/<sha256>.json is used, and the expansion
@@ -37,6 +37,26 @@ hk xcode add [<version> | <archive.xip>]
        a terminal, otherwise one line per tenth). stored: Xcode 27.2 (27B52), sha256 ..., N bytes
        goes on stdout. A refusal is said in words, then refused: <code>, and exits 3 (401, 403),
        2 (other 4xx) or 1. The answer is waited for 30 minutes at least once the archive is sent.
+    9. The Macs. After stored: and after already in the store: the Macs of platform darwin-arm64
+       are read (Hosts.List, HostGroups.List, Maintenance.List and Maintenance.Get of each open
+       run) and stdout says which are due the release, by group with the group's xcode_keep and
+       batch, by the coordinator's own rule: the group keeps it (it is among the newest
+       xcode_keep releases the store holds) and the Mac lacks it in Xcode-<version>.app with its
+       build, or has it and xcode-select names another while it is the group's default
+       (installed, not selected: due to be selected). A Mac that lacks a newer release too is
+       due: 27.3, then 27.2 in the same turn. A Mac of a group that keeps no Xcode or only newer
+       releases is left out with the reason; one that has it as the group wants is installed.
+       A Mac in an open run that takes xcode and has not started its turn is in run <id>, window
+       <start> to <end> (UTC) or in run <id>, now; in a run that does not take xcode, schedule
+       after it ends. For each group with a due Mac that no run takes, Maintenance.Schedule is
+       asked with the kind xcode, the reason Xcode <version> and no confirm (it stores nothing):
+       the hosts a run would take with the batch, those it would skip with the coordinator's
+       reason, a refusal with its reason (for last_host, with --take-last-host true), and the
+       line hk maintenance schedule --host-group <group> --kinds xcode --reason "Xcode
+       <version>" --confirm true that stores the run. Nothing is stored by hk xcode add. A
+       call that fails leaves the archive stored: stderr says summary unavailable: <why>; the
+       archive is stored and the commands hk hosts list and hk maintenance list, and the exit
+       is 0. With no Mac known stdout has nothing more and stderr says so.
 
 Exit codes: 0 stored, already held, or nothing to add; 1 a check failed, a program could not run,
 another run holds the lock, the upload failed, the coordinator has no store; 2 usage, not_an_xip

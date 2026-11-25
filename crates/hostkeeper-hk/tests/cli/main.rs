@@ -27,6 +27,8 @@
 //! - `xcode_add_find`: which archive `hk xcode add` takes, and the lock;
 //! - `xcode_add`: the run: store first, the record, progress, the refusals of the store, the token;
 //! - `xcode_add_checks`: the checks before the upload, one by one;
+//! - `xcode_add_summary`: the Macs summary that ends it, from a fake gateway's `Hosts.List`,
+//!   `HostGroups.List`, `Maintenance.List`, `Maintenance.Get` and `Maintenance.Schedule`;
 //! - `verify_rig`: what the next two share, the stand-ins of the Mac's programs for `hk xcode verify`, a
 //!   clock of the tests' own and a root certificate of their own making;
 //! - `xcode_verify`: `hk xcode verify`'s record, arguments, refusals and help;
@@ -56,6 +58,7 @@ mod xcode;
 mod xcode_add;
 mod xcode_add_checks;
 mod xcode_add_find;
+mod xcode_add_summary;
 mod xcode_push;
 mod xcode_verify;
 mod xcode_verify_checks;

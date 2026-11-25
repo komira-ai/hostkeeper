@@ -323,15 +323,16 @@ pub(crate) fn call(
     deliver(w, &answer, globals.response_file.as_deref())
 }
 
-/// The body of the gateway's `200` to the call of `command`: checks the flags, builds the body,
-/// gets the credential and posts. A refusal is said on stderr and ends with its exit code.
-pub(crate) fn exchange(
-    w: &mut World<'_>,
-    globals: &Globals,
-    command: &Command,
-    given: &Given<'_>,
-    request: Option<&[u8]>,
-) -> Flow<Vec<u8>> {
+/// What the gateway refused a call with: its code and reason as it wrote them, and the exit code
+/// the code maps to.
+pub(crate) struct Refused {
+    pub(crate) code: Vec<u8>,
+    pub(crate) reason: Vec<u8>,
+    status: u8,
+}
+
+/// `--endpoint` as `https://<host>[:<port>]` with no `/` at the end, and the bytes of `--ca-file`.
+fn target_of(globals: &Globals) -> Flow<(String, Vec<u8>)> {
     let Some(endpoint) = &globals.endpoint else {
         return Err(Stop::usage("a call needs --endpoint"));
     };
@@ -348,6 +349,73 @@ pub(crate) fn exchange(
             [b"cannot read --ca-file ".as_slice(), ca_file].concat(),
         ));
     };
+    Ok((endpoint, ca))
+}
+
+/// The one POST of `body` to `path` of the gateway at `endpoint`: the body of its `200`, or what
+/// it refused the call with. An answer that is neither is a failure.
+fn post(
+    endpoint: &str,
+    path: &str,
+    body: &[u8],
+    token: &str,
+    roots: &[Certificate<'static>],
+    limits: Limits,
+) -> Flow<Result<Vec<u8>, Refused>> {
+    let url = format!("{endpoint}{path}");
+    let method = Method::Post {
+        body,
+        bearer: token,
+    };
+    let answer = send(&url, &method, roots, limits)
+        .map_err(|error| Stop::fail(format!("no answer from {endpoint} ({error})")))?;
+    if answer.status == 200 {
+        return Ok(Ok(answer.body));
+    }
+    let not_gateway = || {
+        Stop::fail(format!(
+            "the answer (HTTP {}) is not the gateway's",
+            answer.status
+        ))
+    };
+    let (code, reason) = refusal(&answer.body).ok_or_else(not_gateway)?;
+    let status = exit_of(code).ok_or_else(not_gateway)?;
+    Ok(Err(Refused {
+        code: code.to_vec(),
+        reason: reason.to_vec(),
+        status,
+    }))
+}
+
+/// The call of `path` with the JSON `body`, as the summary of `hk xcode add` makes its calls: the
+/// body of the answer, or what the gateway refused it with, which is not said on stderr. A call
+/// that got no answer, or one that is not the gateway's, is a failure.
+pub(crate) fn ask(
+    w: &mut World<'_>,
+    globals: &Globals,
+    path: &str,
+    body: &[u8],
+) -> Flow<Result<Vec<u8>, Refused>> {
+    let (endpoint, ca) = target_of(globals)?;
+    let token = credential(w, globals)?;
+    let timeout = Duration::from_secs(u64::from(globals.timeout_secs()));
+    let limits = Limits {
+        connect: timeout,
+        total: timeout,
+    };
+    post(&endpoint, path, body, &token, &certificates(&ca), limits)
+}
+
+/// The body of the gateway's `200` to the call of `command`: checks the flags, builds the body,
+/// gets the credential and posts. A refusal is said on stderr and ends with its exit code.
+pub(crate) fn exchange(
+    w: &mut World<'_>,
+    globals: &Globals,
+    command: &Command,
+    given: &Given<'_>,
+    request: Option<&[u8]>,
+) -> Flow<Vec<u8>> {
+    let (endpoint, ca) = target_of(globals)?;
     if globals.response_file.as_ref().is_some_and(Vec::is_empty) {
         return Err(Stop::usage("--response-file needs a path"));
     }
@@ -360,40 +428,22 @@ pub(crate) fn exchange(
         total: Duration::from_secs(total_secs(timeout, &hold_text)),
     };
     let roots = certificates(&ca);
-    let url = format!("{endpoint}{}", command.path);
-    let answer = send(
-        &url,
-        &Method::Post {
-            body: &bytes,
-            bearer: &token,
-        },
-        &roots,
-        limits,
-    )
-    .map_err(|error| Stop::fail(format!("no answer from {endpoint} ({error})")))?;
-    if answer.status == 200 {
-        return Ok(answer.body);
-    }
-    let not_gateway = || {
-        Stop::fail(format!(
-            "the answer (HTTP {}) is not the gateway's",
-            answer.status
-        ))
+    let refused = match post(&endpoint, command.path, &bytes, &token, &roots, limits)? {
+        Ok(body) => return Ok(body),
+        Err(refused) => refused,
     };
-    let (code, reason) = refusal(&answer.body).ok_or_else(not_gateway)?;
-    let status = exit_of(code).ok_or_else(not_gateway)?;
     let name = crate::PROGRAM;
     let _ = writeln!(
         w.stderr,
         "{name}: the coordinator answered {}",
-        String::from_utf8_lossy(code)
+        String::from_utf8_lossy(&refused.code)
     );
-    let mut reason = reason.to_vec();
+    let mut reason = refused.reason;
     if reason == b"invalid_request" && older(w, &endpoint, &roots, timeout) {
         reason = b"coordinator_older".to_vec();
     }
     if is_reason(&reason) {
         let _ = writeln!(w.stderr, "refused: {}", String::from_utf8_lossy(&reason));
     }
-    Err(Stop::Exit(status))
+    Err(Stop::Exit(refused.status))
 }
