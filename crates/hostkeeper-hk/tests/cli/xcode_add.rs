@@ -32,13 +32,17 @@ fn a_good_run_uploads_the_archive_and_says_stored() {
     assert_eq!((ran.code, ran.stdout), (0, stored()), "{:?}", ran.stderr);
     let seen = server.seen();
     let order: Vec<&str> = seen.iter().map(|s| s.method.as_str()).collect();
-    assert_eq!(order, ["POST", "POST", "PUT", "POST"]);
+    assert_eq!(order, ["POST", "POST", "GET", "PUT", "POST"]);
     for list in &seen[..2] {
         assert_eq!(list.target, crate::add_rig::LIST);
         assert_eq!(list.text(), "{}");
     }
-    assert_eq!(seen[3].target, crate::add_rig::FLEET[0]);
-    let put = &seen[2];
+    assert_eq!(seen[4].target, crate::add_rig::FLEET[0]);
+    let put = &seen[3];
+    assert_eq!(
+        seen[2].target,
+        format!("/v1/xcode/{}/upload", sha256(&archive_bytes()))
+    );
     assert_eq!(
         put.target,
         format!(
@@ -270,7 +274,7 @@ fn each_refusal_of_the_store_is_said_in_words_and_exits_as_listed() {
 
 /// Proves: the token is in no argument and no environment variable of any program the run starts
 /// (`pkgutil`, `xip`, `plutil`, `codesign`, `df`), in no line on stdout or stderr, and is the
-/// bearer of every request to the coordinator: both `Xcode.List` calls, the upload and the
+/// bearer of every request to the coordinator: both `Xcode.List` calls, the query of the upload, the upload and the
 /// `Hosts.List` of the summary.
 #[test]
 fn the_token_is_in_no_argument_environment_or_output_line() {
@@ -289,7 +293,7 @@ fn the_token_is_in_no_argument_environment_or_output_line() {
     assert!(!ran.stdout.contains(TOKEN));
     assert!(!ran.stderr.contains(TOKEN));
     let seen = server.seen();
-    assert_eq!(seen.len(), 4);
+    assert_eq!(seen.len(), 5);
     for request in seen {
         assert_eq!(
             request.header("authorization"),
@@ -435,7 +439,7 @@ fn under_a_umask_of_000_what_it_makes_is_private() {
         .iter()
         .map(|held| held.as_ref().map(|(_, mode)| *mode))
         .collect();
-    assert_eq!(modes, [Some(0o600); 4]);
+    assert_eq!(modes, [Some(0o600); 5]);
     assert!(!add.kept(".lock").exists());
 }
 

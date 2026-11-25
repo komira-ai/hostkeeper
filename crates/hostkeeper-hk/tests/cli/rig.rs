@@ -292,7 +292,7 @@ impl Server {
 }
 
 /// The TLS configuration of a test server with the certificate of `pki`.
-fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
+pub fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
     let chain = vec![CertificateDer::from_pem_slice(pki.cert_pem.as_bytes()).expect("a cert")];
     let key = PrivateKeyDer::from_pem_slice(pki.key_pem.as_bytes()).expect("a key");
     Arc::new(
@@ -322,7 +322,8 @@ pub struct Early {
 impl Early {
     /// A server that refuses its one request with `status` and `body` from its head alone, after
     /// `lists` requests that are read whole and answered `200` with `first` (what `Xcode.List` is
-    /// asked before an upload).
+    /// asked before an upload), and the one query of what the store holds (`GET .../upload`),
+    /// which the upload makes next and is answered `200` with the state `none`.
     pub fn refusing_after(pki: &Pki, lists: usize, first: &str, status: u16, body: &str) -> Early {
         let first = first.to_owned();
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
@@ -338,11 +339,16 @@ impl Early {
         let config_first = Arc::clone(&config);
         std::thread::spawn(move || {
             let serve = || -> Option<Heard> {
-                for _ in 0..lists {
+                for _ in 0..=lists {
                     let (stream, _) = listener.accept().ok()?;
                     let conn = rustls::ServerConnection::new(Arc::clone(&config_first)).ok()?;
                     let mut tls = rustls::StreamOwned::new(conn, stream);
-                    read_request(&mut tls)?;
+                    let asked = read_request(&mut tls)?;
+                    let first = if asked.target.ends_with("/upload") {
+                        "{\"state\":\"none\",\"received\":0,\"size\":0}"
+                    } else {
+                        first.as_str()
+                    };
                     let reply = format!(
                         "HTTP/1.1 200 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
                          Connection: close\r\n\r\n{first}",

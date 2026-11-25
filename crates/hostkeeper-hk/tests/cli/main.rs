@@ -26,6 +26,8 @@
 //!   answers `Xcode.List`;
 //! - `xcode_add_find`: which archive `hk xcode add` takes, and the lock;
 //! - `xcode_add`: the run: store first, the record, progress, the refusals of the store, the token;
+//! - `xcode_add_resume`: the upload that resumes, against a fake store that answers the query and
+//!   takes `Content-Range` parts, with the waits recorded by the world's wait;
 //! - `xcode_add_checks`: the checks before the upload, one by one;
 //! - `xcode_add_summary`: the Macs summary that ends it, from a fake gateway's `Hosts.List`,
 //!   `HostGroups.List`, `Maintenance.List`, `Maintenance.Get` and `Maintenance.Schedule`;
@@ -58,6 +60,7 @@ mod xcode;
 mod xcode_add;
 mod xcode_add_checks;
 mod xcode_add_find;
+mod xcode_add_resume;
 mod xcode_add_summary;
 mod xcode_push;
 mod xcode_verify;

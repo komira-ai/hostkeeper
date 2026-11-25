@@ -22,8 +22,10 @@
 //!    which is then recorded as `hk-xcode-add-v1`;
 //! 7. `Xcode.List` again: the same release from other bytes, or another build of the version, stops
 //!    the run naming the `hk xcode remove` line;
-//! 8. the upload with progress ([`crate::xcode_push::upload`]), each refusal said in words, then
-//!    `stored: ...` on stdout and the Macs summary ([`summary`]), whose failure leaves the exit 0.
+//! 8. the upload with progress, which asks the store what it holds and sends the rest, trying
+//!    again from the offset the store reports after a cut ([`crate::xcode_push::upload`]), each
+//!    refusal said in words, then `stored: ...` on stdout and the Macs summary ([`summary`]), whose
+//!    failure leaves the exit 0.
 //!
 //! Progress and what the run is doing go to stderr; stdout holds the answer lines only.
 

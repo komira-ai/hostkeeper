@@ -60,6 +60,8 @@ fn refusing_store(rig: &Rig, status: u16, body: &str) -> Server {
         move |(), request| {
             if request.target == LIST {
                 Reply::new(200, EMPTY_STORE)
+            } else if request.target.ends_with("/upload") {
+                Reply::new(200, NOTHING_HELD)
             } else {
                 Reply::new(status, body.clone())
             }
@@ -75,6 +77,9 @@ fn sha256(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// What the query of an upload answers: the store holds nothing of these bytes.
+const NOTHING_HELD: &str = "{\"state\":\"none\",\"received\":0,\"size\":0}";
+
 /// What `Xcode.List` answers: a store with nothing in it.
 const EMPTY_STORE: &str = "{\"configured\":true}";
 
@@ -88,6 +93,9 @@ fn store(rig: &Rig) -> Server {
         |(), request| {
             if request.target == LIST {
                 return Reply::new(200, EMPTY_STORE);
+            }
+            if request.target.ends_with("/upload") {
+                return Reply::new(200, NOTHING_HELD);
             }
             let named = request
                 .target
@@ -726,6 +734,9 @@ fn the_stores_refusals_end_the_push_by_their_status() {
         |(), request| {
             if request.target == LIST {
                 Reply::new(200, EMPTY_STORE)
+            } else if request.target.ends_with("/upload") {
+                // An older coordinator: the whole archive in one request, which it cuts.
+                Reply::new(405, "{\"error\":\"method_not_allowed\"}")
             } else {
                 Reply::hang_up()
             }

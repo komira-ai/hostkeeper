@@ -46,6 +46,17 @@ pub(crate) fn size_text(bytes: u64) -> String {
     )
 }
 
+/// `done` of `total` in the unit of `total`: `7.31 of 11.92 GB`.
+pub(crate) fn of_text(done: u64, total: u64) -> String {
+    let unit = unit_of(total);
+    format!(
+        "{} of {} {}",
+        scaled(done.min(total), unit),
+        scaled(total, unit),
+        UNITS.get(unit).unwrap_or(&"B")
+    )
+}
+
 /// A running progress line.
 pub(crate) struct Progress {
     what: &'static str,
@@ -53,6 +64,9 @@ pub(crate) struct Progress {
     terminal: bool,
     clock: fn() -> Duration,
     start: Duration,
+    /// The bytes already sent before this progress began (a resumed upload): the rate counts the
+    /// bytes since.
+    from: u64,
     /// The last whole percent drawn on a terminal, or the last whole tenth written otherwise.
     last: u64,
     /// Whether a line is drawn on the terminal and not yet ended.
@@ -73,9 +87,18 @@ impl Progress {
             terminal,
             clock,
             start: clock(),
+            from: 0,
             last: 0,
             drawn: false,
         }
+    }
+
+    /// The progress of a run that begins at `from` bytes: no line for the tenths already passed,
+    /// and a rate of the bytes sent since.
+    pub(crate) fn from(mut self, from: u64) -> Progress {
+        self.from = from;
+        self.last = self.percent(from) / 10;
+        self
     }
 
     /// The whole percent of `done` bytes: 100 for an empty archive.
@@ -101,7 +124,7 @@ impl Progress {
         );
         let elapsed = (self.clock)().saturating_sub(self.start).as_secs_f64();
         if elapsed > 0.0 {
-            let per_second = done as f64 / elapsed;
+            let per_second = done.saturating_sub(self.from) as f64 / elapsed;
             // Whole bytes a second: the unit is that of the rate, not of the total.
             let rate = size_text(per_second as u64);
             text.push_str(&format!(", {rate}/s"));

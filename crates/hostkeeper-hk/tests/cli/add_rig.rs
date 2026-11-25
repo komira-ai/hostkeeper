@@ -114,6 +114,9 @@ impl Store {
         if FLEET.contains(&request.target.as_str()) {
             return Reply::new(200, "{}");
         }
+        if request.method == "GET" && request.target.ends_with("/upload") {
+            return Reply::new(200, "{\"state\":\"none\",\"received\":0,\"size\":0}");
+        }
         if let Some((status, body)) = &self.upload {
             return Reply::new(*status, body.clone());
         }

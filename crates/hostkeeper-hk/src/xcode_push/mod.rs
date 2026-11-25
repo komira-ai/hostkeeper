@@ -8,13 +8,14 @@
 //! - [`signature`]: Apple's signature, `pkgutil --check-signature` must exit 0, say the status
 //!   `signed Apple Software` and name a chain that ends at Apple Root CA, by its SHA-256;
 //! - [`upload`]: the archive, unmodified and streamed, with the operator's token in the request's
-//!   header and nowhere else.
+//!   header and nowhere else; it resumes after a cut ([`upload::put`]).
 //!
 //! The programs are the [`Mac`]'s. [`target`] reads the coordinator's address, the CA and the token
 //! before anything else, so that a mistake in any ends the run at once. The token is never an
 //! argument, an environment variable or an output line of a program `hk` runs.
 
 pub(crate) mod archive;
+mod resume;
 pub(crate) mod signature;
 #[cfg(test)]
 mod tests;

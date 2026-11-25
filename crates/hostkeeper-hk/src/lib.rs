@@ -97,7 +97,8 @@ pub struct World<'a> {
     pub ssh: &'a dyn ssh::Launch,
     /// The system, the programs and the clock `hk xcode add` and `hk xcode verify` run on.
     pub mac: &'a xcode_push::Mac,
-    /// The `tailscale` program and the wait of `hk tailnet-wait`.
+    /// The `tailscale` program and the wait of `hk tailnet-wait`, whose `wait` also makes the waits
+    /// between the tries of `hk xcode add`'s upload.
     pub tailnet: &'a tailnet_wait::Tailnet<'a>,
 }
 

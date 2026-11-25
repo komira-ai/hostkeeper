@@ -51,7 +51,7 @@ fn put(path: PathBuf, text: &str, mode: u32) -> String {
 
 /// The coordinator's state in a scratch directory, and the arguments of its `serve`: the tokens
 /// file holds [`TOKEN`]'s SHA-256.
-fn serve_args(dir: &Path) -> Vec<OsString> {
+fn serve_args(dir: &Path, store: Option<&Path>) -> Vec<OsString> {
     let (server_pem, server_key, _) = issue(false);
     let (clients_pem, _, _) = issue(true);
     let digest: String = Sha256::digest(TOKEN.as_bytes())
@@ -79,6 +79,9 @@ fn serve_args(dir: &Path) -> Vec<OsString> {
         ),
         ("--legacy-service", "kbf".to_owned()),
     ];
+    let pairs = pairs
+        .into_iter()
+        .chain(store.map(|path| ("--xcode-dir", path.display().to_string())));
     let mut args: Vec<OsString> = vec!["hostkeeper-coordinator".into(), "serve".into()];
     for (flag, value) in pairs {
         args.push(flag.into());
@@ -102,6 +105,12 @@ fn request_of(request: &Request) -> hyper::Request<Full<Bytes>> {
 
 /// The real gateway on a loopback server of port 0, its state in a directory under `scratch`.
 pub fn start(pki: &Pki, scratch: &Path) -> Server {
+    start_with(pki, scratch, false)
+}
+
+/// [`start`], and with `store` the coordinator has an Xcode store (`--xcode-dir`, a directory of
+/// its own under `scratch`), so that its private listener's route answers `/v1/xcode/`.
+pub fn start_with(pki: &Pki, scratch: &Path, store: bool) -> Server {
     let dir = Scratch::under(scratch, "coordinator").expect("the coordinator's directory");
     Server::serve(
         pki,
@@ -110,9 +119,14 @@ pub fn start(pki: &Pki, scratch: &Path) -> Server {
                 .enable_all()
                 .build()
                 .expect("a runtime");
-            let Command::Serve(flags) = Cli::try_parse_from(serve_args(dir.path()))
-                .expect("the flags parse")
-                .command
+            let xcode = dir.path().join("xcode");
+            if store {
+                std::fs::create_dir(&xcode).expect("the Xcode store's directory");
+            }
+            let Command::Serve(flags) =
+                Cli::try_parse_from(serve_args(dir.path(), store.then_some(xcode.as_path())))
+                    .expect("the flags parse")
+                    .command
             else {
                 panic!("the verb is serve");
             };

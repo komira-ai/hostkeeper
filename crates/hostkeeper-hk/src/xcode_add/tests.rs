@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::time::Duration;
 
 use super::find::{named, parts};
-use super::progress::{Progress, size_text};
+use super::progress::{Progress, of_text, size_text};
 use super::reuse::release_of;
 
 /// Proves: a version's parts drop the trailing zeros and compare as numbers, and what is no version
@@ -161,5 +161,25 @@ fn a_clock_that_has_not_moved_gives_no_rate() {
     assert_eq!(
         String::from_utf8(out).expect("text"),
         "hk: uploading 10 of 10 B (100%)\n"
+    );
+}
+
+/// Proves: a progress that resumes at a byte says no line for the tenths before it, counts the
+/// rate over the bytes sent since, and a size is told as `<done> of <total> <unit>` in the unit of
+/// the total (never more than the total).
+#[test]
+fn a_resumed_progress_skips_the_tenths_passed_and_rates_the_bytes_sent_since() {
+    assert_eq!(of_text(7_310_000_000, 11_920_000_000), "7.31 of 11.92 GB");
+    assert_eq!(of_text(0, 999), "0 of 999 B");
+    assert_eq!(of_text(5000, 999), "999 of 999 B");
+    let mut out = Vec::new();
+    let mut progress = Progress::new("uploading", 1000, false, clock).from(400);
+    progress.at(450, &mut out);
+    progress.at(500, &mut out);
+    progress.at(1000, &mut out);
+    assert_eq!(
+        String::from_utf8(out).expect("text"),
+        "hk: uploading 0.50 of 1.00 KB (50%), 50 B/s\n\
+         hk: uploading 1.00 of 1.00 KB (100%), 150 B/s\n"
     );
 }

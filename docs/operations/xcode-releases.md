@@ -98,13 +98,35 @@ nothing:
 7. **The store is asked again** with the release known. The same release from other bytes, or another
    build of the version, stops the run naming the line `hk xcode remove --sha256 <sha256> --reason
    <why>` that removes the held archive first, if the new bytes are the ones to keep.
-8. The archive is uploaded unmodified and streamed with the `PUT` below (the bytes that were hashed, no
-   more), with your token from the settings file or `--token-file` as the bearer: the token is never an
-   argument, an environment variable of a program `hk` runs, or a line it prints. The request says
-   `Expect: 100-continue`, so a refusal the coordinator makes before the body comes back before the
-   archive is sent. The progress goes to stderr (one line rewritten in place on a terminal, otherwise
-   one line per tenth of the archive); `stored: Xcode 27.2 (27B52), sha256 <sha256>, <n> bytes` goes to
-   stdout.
+8. **The upload resumes.** `hk` asks the store what it holds of these bytes, `GET /v1/xcode/<sha256>/upload`
+   (below), with your token as the bearer: `none` starts at byte 0, `partial` continues from the bytes the
+   store keeps (an earlier run's, from this Mac or another, within 24 hours), `held` means the archive is
+   stored already and nothing is sent. The rest of the archive is sent in one `PUT` with `Content-Range:
+   bytes <first>-<last>/<size>` (below), unmodified and streamed from the file (the bytes that were hashed,
+   no more): one request and not parts, because a request that is cut off keeps what the store received
+   of it, so a cut costs only the bytes in flight. The request says `Expect: 100-continue`, so a refusal
+   the coordinator makes before the body comes back before the archive is sent. The token is never an
+   argument, an environment variable of a program `hk` runs, or a line it prints. The progress goes to
+   stderr (one line rewritten in place on a terminal, otherwise one line per tenth of the archive; a
+   resumed run says `continuing at 4.10 of 11.92 GB` and counts its rate from there);
+   `stored: Xcode 27.2 (27B52), sha256 <sha256>, <n> bytes` goes to stdout.
+   - A connection that breaks, a `409 offset_mismatch` (its answer carries the offset to go on from) and
+     a `409 partial_locked` (another upload of these bytes holds the store's lock, not yet stale) are
+     tried again from the offset the store then reports (after `partial_locked` and a broken connection,
+     by asking again; after `offset_mismatch`, from its `received`), five tries in all, each after a
+     wait that doubles from 2 seconds (2, 4, 8, 16). A `202` (a part kept, bytes still due) goes on at
+     once. If the archive is found stored by the next query (the answer to the last request was lost),
+     the run ends with `stored:` as if the answer had come.
+   - Then `hk` stops with `the upload stopped at 7.31 of 11.92 GB; run hk xcode add again to continue`
+     (exit 1), the offset being what the store held at the last query. The store keeps the partial
+     upload for 24 hours: run `hk xcode add` again, from any Mac with the same archive, and it continues.
+   - Any other refusal of the `PUT` or of the query ends the run, said in words, then `refused:
+     <code>`, with the exit code of its status (3 for 401 and 403, 2 for other 4xx, among them
+     `partial_differs`, whose words say to remove the partial with `hk xcode remove`, 1 for the rest).
+   - A coordinator without the query (it answers the `GET` `405 method_not_allowed`) cannot resume: `hk`
+     says so and sends the whole archive in one `PUT` with no `Content-Range`, as before; a cut of that
+     request keeps nothing. A `404` is a coordinator with no Xcode store (no `--xcode-dir`): `hk` says so
+     and exits 1.
 9. **The Macs.** After `stored:` and after `already in the store:`, `hk` reads every page of `Hosts.List`
    and `HostGroups.List`, the runs that have not ended (`Maintenance.List`, then `Maintenance.Get` of
    each) and says on stdout which Macs (hosts of the platform `darwin-arm64`) are due the release, by

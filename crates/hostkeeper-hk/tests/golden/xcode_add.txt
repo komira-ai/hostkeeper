@@ -32,11 +32,23 @@ hk xcode add [<version> | <archive.xip>]
        archive's must be it (version_mismatch).
     7. Xcode.List again: the same release from other bytes, or another build of the version, is
        a stop naming the hk xcode remove line.
-    8. PUT /v1/xcode/<sha256>?version=<version>&build=<build> with Expect: 100-continue: the
-       archive unmodified and streamed, with progress on stderr (one line rewritten in place on
-       a terminal, otherwise one line per tenth). stored: Xcode 27.2 (27B52), sha256 ..., N bytes
-       goes on stdout. A refusal is said in words, then refused: <code>, and exits 3 (401, 403),
-       2 (other 4xx) or 1. The answer is waited for 30 minutes at least once the archive is sent.
+    8. The upload. GET /v1/xcode/<sha256>/upload asks what the store holds of these bytes (none,
+       a part, or all of them: stored already). The rest of the archive goes in one PUT
+       /v1/xcode/<sha256>?version=<version>&build=<build> with Content-Range: bytes
+       <first>-<last>/<size> and Expect: 100-continue, unmodified and streamed, with progress
+       on stderr (one line rewritten in place on a terminal, otherwise one line per tenth; a
+       run that continues says where). A connection that breaks, offset_mismatch (it names the
+       offset to go on from) and partial_locked (another upload of these bytes holds the
+       store's lock) are tried again after a wait, from the offset the store reports: five
+       tries in all, the waits 2, 4, 8 and 16 seconds. Then the run stops with `the upload
+       stopped at 7.31 of 11.92 GB; run hk xcode add again to continue` (exit 1), and the next
+       run, from this Mac or another with the same archive, continues from what the store
+       kept (24 hours). A coordinator that answers the query 405 cannot resume: the whole
+       archive goes in one PUT, which says so. 404: the coordinator has no Xcode store (exit
+       1). stored: Xcode 27.2 (27B52), sha256 ..., N bytes goes on stdout. Any other refusal
+       is said in words, then refused: <code>, and exits 3 (401, 403), 2 (other 4xx,
+       partial_differs among them) or 1. The answer is waited for 30 minutes at least once the
+       archive is sent.
     9. The Macs. After stored: and after already in the store: the Macs of platform darwin-arm64
        are read (Hosts.List, HostGroups.List, Maintenance.List and Maintenance.Get of each open
        run) and stdout says which are due the release, by group with the group's xcode_keep and
@@ -59,7 +71,7 @@ hk xcode add [<version> | <archive.xip>]
        is 0. With no Mac known stdout has nothing more and stderr says so.
 
 Exit codes: 0 stored, already held, or nothing to add; 1 a check failed, a program could not run,
-another run holds the lock, the upload failed, the coordinator has no store; 2 usage, not_an_xip
+another run holds the lock, the upload stopped, the coordinator has no store; 2 usage, not_an_xip
 or a refusal of the store; 3 unauthorized or forbidden.
 
 It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
