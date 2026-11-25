@@ -621,7 +621,7 @@ fn prune_of_a_store_that_cannot_be_listed_does_nothing() {
 
 /// Proves: a release a Mac reports installed stays however old: `kept` over four archives with
 /// `keep` 1 and the oldest installed keeps the newest and the oldest, and a `keep` of 0 is read as
-/// 1; the coordinator reports no installed release yet.
+/// 1; a coordinator no host has reported to holds no installed release.
 ///
 /// Catches: an installed Xcode pruned from under a Mac, or a store emptied by a keep of 0.
 #[test]

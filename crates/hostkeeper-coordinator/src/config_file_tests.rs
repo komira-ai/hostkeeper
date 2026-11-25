@@ -391,6 +391,39 @@ fn the_file_turns_the_wildcard_private_listener_on_with_true_only() {
     assert_eq!(parsed(WILDCARD_OFF), ("0.0.0.0:8444".to_owned(), false));
 }
 
+/// Proves: `macos-update-via = "daemon"` in the file stands for `--macos-update-via daemon` and
+/// the flags hold `MacosUpdateVia::Daemon`, while `"apple-business"` there is refused by the
+/// parser as a value that fails validation (the key is known, the value is not taken), its
+/// message the flag's own: the value, the flag and that apple-business is not built.
+///
+/// Catches: a key the file's expansion or the parser does not know, so that the refusal of
+/// apple-business in the file would be an unknown-flag error and not the value's.
+#[test]
+fn the_file_key_macos_update_via_takes_daemon_and_refuses_apple_business() {
+    let parsed = |via: &str| {
+        let args = os(&["hostkeeper-coordinator", "serve", "--config", "/f"]);
+        let text = format!("{PACKAGED}macos-update-via = \"{via}\"\n");
+        let text: &'static str = Box::leak(text.into_boxed_str());
+        let expanded = expand(args, reads("/f", text)).expect("the file holds flags");
+        Cli::try_parse_from(expanded)
+    };
+    let Command::Serve(flags) = parsed("daemon").expect("the flags of serve").command else {
+        panic!("serve");
+    };
+    assert_eq!(
+        flags.maintenance.macos_update_via,
+        crate::config_maintenance::MacosUpdateVia::Daemon
+    );
+    let refused = parsed("apple-business").expect_err("refused");
+    assert_eq!(refused.kind(), clap::error::ErrorKind::ValueValidation);
+    assert_eq!(
+        refused.to_string(),
+        "error: invalid value 'apple-business' for '--macos-update-via <WAY>': apple-business is \
+         not built: Apple Business offers no call that installs an update on one Mac; only daemon \
+         is taken\n\nFor more information, try '--help'.\n"
+    );
+}
+
 /// Proves: a flag name is lower-case letters, digits and `-`, starting with a lower-case letter,
 /// and each other character or an empty name is not one.
 ///

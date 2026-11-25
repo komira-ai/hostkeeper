@@ -702,3 +702,69 @@ fn a_turn_with_xcode_on_a_linux_host_orders_no_xcode() {
     );
     assert_eq!(maintain.xcode, None);
 }
+
+/// Proves: the store keeps a release a Mac reports installed, however old. A group keeps one
+/// Xcode, the store holds 27.1, 27.2 and 27.3, and the Mac reports 27.1 installed in its own
+/// directory: the coordinator's installed set is exactly 27.1 (27A10), and a prune leaves exactly
+/// 27.3 and 27.1 in the store and audits the removal of 27.2 alone. A Mac that reports 27.2 in
+/// `Xcode.app` (foreign) keeps it too, as the design keeps any release a Mac reports; an Xcode
+/// whose version is not a version number names no release.
+///
+/// Catches: a coordinator whose installed set stays empty though its Macs report their Xcodes, so
+/// the prune removes from the store the release a Mac is running once it falls out of the newest
+/// `xcode_keep`.
+#[test]
+fn the_store_keeps_each_release_a_mac_reports_installed() {
+    let farm = Farm::new("mx-installed", 1, None, &[MAC]);
+    let oldest = farm.add("27.1", "27A10");
+    let middle = farm.add("27.2", "27B52");
+    let newest = farm.add("27.3", "27C30");
+    tell(
+        &farm.world,
+        MAC,
+        mac_beat(&[installed("27.1", "27A10", true, false)]),
+    );
+    let coordinator = farm.world.coordinator();
+    assert_eq!(
+        coordinator.xcodes_installed(),
+        std::collections::BTreeSet::from([xcode_id("27.1", "27A10")])
+    );
+    coordinator.prune_xcode_store();
+    let held = |farm: &Farm| {
+        let mut held: Vec<Archive> = farm.store.archives().expect("listed");
+        held.sort_by(|a, b| b.id.cmp(&a.id));
+        held
+    };
+    assert_eq!(held(&farm), vec![newest.clone(), oldest.clone()]);
+    let removed: Vec<Option<String>> = farm
+        .world
+        .audit()
+        .into_iter()
+        .filter(|entry| entry.action == crate::audit_actions::XCODE_REMOVE)
+        .map(|entry| entry.reason)
+        .collect();
+    assert_eq!(
+        removed,
+        vec![Some(format!(
+            "pruned: Xcode 27.2 (27B52), sha256 {}",
+            middle.sha256
+        ))]
+    );
+
+    let again = farm.add("27.2", "27B52");
+    tell(
+        &farm.world,
+        MAC,
+        mac_beat(&[
+            installed("27.1", "27A10", false, false),
+            installed("27.2", "27B52", true, true),
+            installed("Xcode-beta", "27D5", false, true),
+        ]),
+    );
+    assert_eq!(
+        farm.world.coordinator().xcodes_installed(),
+        std::collections::BTreeSet::from([xcode_id("27.1", "27A10"), xcode_id("27.2", "27B52")])
+    );
+    farm.world.coordinator().prune_xcode_store();
+    assert_eq!(held(&farm), vec![newest, again, oldest]);
+}
