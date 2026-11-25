@@ -11,7 +11,7 @@ use crate::ssh::client::{self, Client, from_status, unary};
 use crate::ssh::error::Error;
 use crate::ssh::programs::Programs;
 use crate::ssh::state::{CertInfo, State, check_host_id};
-use crate::ssh::{Coordinator, Verb, access};
+use crate::ssh::{Coordinator, Verb, access, tunnel};
 use access::Identity;
 
 /// What a run needs from outside: the OpenSSH programs, the time, the path of this program
@@ -31,6 +31,16 @@ pub struct Env<'a> {
     pub keepalive_secs: u64,
     /// The program's name, the prefix of every diagnostic (`<name>: <error>`).
     pub name: &'a str,
+}
+
+/// Whether `ssh-proxy` turns this process's SIGHUP and SIGTERM into a close of its tunnel: what
+/// [`System`](crate::ssh::System) runs, and never a test's own process, which [`run`] runs in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stops {
+    /// No signal reaches the proxy.
+    Ignored,
+    /// SIGHUP and SIGTERM do ([`crate::ssh::tunnel::stop_signals`]).
+    Process,
 }
 
 /// Why a verb stopped: its tail did not parse (clap's own text, with its code), or it failed.
@@ -270,6 +280,10 @@ async fn say(output: &mut (impl AsyncWrite + Unpin), text: &str) -> Result<(), E
     output.flush().await.map_err(fail)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments of `run`, and whether the proxy takes the process's signals"
+)]
 async fn dispatch<R, W>(
     verb: Verb,
     coordinator: &Coordinator,
@@ -278,6 +292,7 @@ async fn dispatch<R, W>(
     input: R,
     output: &mut W,
     diag: &mut dyn std::io::Write,
+    stops: Stops,
 ) -> Result<i32, Stop>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -293,8 +308,21 @@ where
             } = parse(args)?;
             let (mut client, _, _, cert) =
                 prepare(coordinator, env, &host_id, identity.as_deref(), &reason).await?;
-            crate::ssh::tunnel::proxy(&mut client, &host_id, cert.serial, Box::new(input), output)
-                .await?;
+            // Taken only now: a signal before the tunnel is asked for ends the process, which
+            // leaves nothing in the coordinator's audit to close.
+            let signals = match stops {
+                Stops::Ignored => Box::pin(tokio_stream::pending()),
+                Stops::Process => tunnel::stop_signals()?,
+            };
+            tunnel::proxy(
+                &mut client,
+                &host_id,
+                cert.serial,
+                Box::new(input),
+                output,
+                signals,
+            )
+            .await?;
             0
         }
         Verb::Revoke => revoke(coordinator, env, parse(args)?, output).await?,
@@ -308,8 +336,40 @@ where
 /// Runs `verb` with the tail `args`; its exit code (2 for a tail that does not parse, 1 for any
 /// other failure, ssh's own code for `ssh`). `input` and `output` are the byte stream of
 /// `Proxy` and the text of the others; `diag` is where a failure (`<name>: <error>`) and a
-/// warning go.
+/// warning go. No signal reaches `Proxy`; [`System`](crate::ssh::System) runs [`run_with`], whose
+/// proxy closes its tunnel at SIGHUP and SIGTERM.
 pub async fn run<R, W>(
+    verb: Verb,
+    coordinator: &Coordinator,
+    args: &[OsString],
+    env: &Env<'_>,
+    input: R,
+    output: W,
+    diag: &mut dyn std::io::Write,
+) -> u8
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
+    run_with(
+        verb,
+        coordinator,
+        args,
+        env,
+        input,
+        output,
+        diag,
+        Stops::Ignored,
+    )
+    .await
+}
+
+/// [`run`], with `stops` saying whether `Proxy` takes the process's SIGHUP and SIGTERM.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments of `run`, and whether the proxy takes the process's signals"
+)]
+pub(crate) async fn run_with<R, W>(
     verb: Verb,
     coordinator: &Coordinator,
     args: &[OsString],
@@ -317,12 +377,24 @@ pub async fn run<R, W>(
     input: R,
     mut output: W,
     diag: &mut dyn std::io::Write,
+    stops: Stops,
 ) -> u8
 where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
 {
-    match dispatch(verb, coordinator, args, env, input, &mut output, diag).await {
+    match dispatch(
+        verb,
+        coordinator,
+        args,
+        env,
+        input,
+        &mut output,
+        diag,
+        stops,
+    )
+    .await
+    {
         Ok(code) => u8::try_from(code).unwrap_or(255),
         Err(Stop::Fail(error)) => {
             let _ = writeln!(diag, "{}: {error}", env.name);

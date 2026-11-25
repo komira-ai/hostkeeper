@@ -188,6 +188,10 @@ the cause, the bytes each way and the seconds open. The causes: `eof` (the clien
 - `revoked`: the certificate the tunnel was opened with was revoked (`Ssh/Revoke`);
 - `instance_lost`: the book no longer holds the tunnel, because another instance closed it as lost.
 
+A normal `hk ssh` session closes `host_closed`: when ssh exits it sends SIGHUP to `hk ssh-proxy`, which then
+sends `close` and waits for the host to close (as it does at end of input, and when ssh no longer reads its
+output). An `error` close is a stream that failed, not a session that ended.
+
 Each instance polls every `--ssh-revoke-poll-s` (default 10), so a revocation closes the tunnels it concerns
 within that and one poll's work. At the same poll it refreshes its tunnels' `last_seen` in the database, and
 closes the rows that have not been refreshed for three polls with `instance_lost`, which is how the tunnels

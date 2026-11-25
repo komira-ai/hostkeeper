@@ -1965,6 +1965,7 @@ dependencies = [
  "prost-reflect",
  "protox",
  "rcgen",
+ "rustix",
  "rustls",
  "rustls-native-certs",
  "serde_json",

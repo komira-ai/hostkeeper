@@ -30,8 +30,12 @@ pub const NOW: u64 = 1_000_000;
 /// How the next tunnel behaves.
 #[derive(Clone, Debug)]
 pub enum Tunnel {
-    /// `opened`, then every `data` frame echoed, and at end of input `bye` and `host_closed`.
+    /// `opened`, then every `data` frame echoed, and at the client's `close` `bye` and
+    /// `host_closed`; the cause the coordinator audits is sent to [`Rig::audited`].
     Echo,
+    /// As [`Tunnel::Echo`], but at the client's `close` the host answers `half-closed` and does
+    /// not close: the tunnel ends at the client's next move.
+    Linger,
     /// Refused with this token.
     Refuse(&'static str),
     /// A first answer that is not `opened`.
@@ -60,6 +64,8 @@ pub struct Seen {
 }
 
 pub struct Script {
+    /// The cause of each close the fake audits, in order.
+    pub audit: Mutex<std::sync::mpsc::Sender<&'static str>>,
     pub sign: Mutex<Result<proto::SignUserCertResponse, Status>>,
     pub keys: Mutex<Result<proto::HostKeysResponse, Status>>,
     pub revoke: Mutex<Result<proto::RevokeResponse, Status>>,
@@ -77,8 +83,9 @@ pub fn certificate_reply(serial: u64, expires: u64) -> proto::SignUserCertRespon
 }
 
 impl Script {
-    fn new() -> Script {
+    fn new(audit: std::sync::mpsc::Sender<&'static str>) -> Script {
         Script {
+            audit: Mutex::new(audit),
             sign: Mutex::new(Ok(certificate_reply(41, NOW + 3600))),
             keys: Mutex::new(Ok(proto::HostKeysResponse {
                 fingerprints: vec![PIN.into()],
@@ -104,6 +111,51 @@ fn note(script: &Script, request: &Request<impl Sized>) {
 }
 
 struct Service(Arc<Script>);
+
+/// The relay of an open tunnel, ended as the coordinator's (`pump` in hostkeeper-coordinator's
+/// `ssh_tunnel.rs`) ends it, and the cause it audits: a client's `close` shuts the host's input
+/// and the host answers `bye` and closes (`host_closed`); a request stream that ends is `eof`;
+/// one that fails, which is a client that went away, is `error`. With `linger`, the host answers
+/// a `close` with `half-closed` and stays; then a second `close` or more data is audited as such.
+async fn relay(
+    script: &Script,
+    incoming: &mut Streaming<proto::TunnelFrame>,
+    out: &mpsc::Sender<Result<proto::TunnelFrame, Status>>,
+    linger: bool,
+) -> &'static str {
+    let mut closed = false;
+    loop {
+        match incoming.message().await {
+            Ok(Some(proto::TunnelFrame {
+                frame: Some(Frame::Data(bytes)),
+            })) => {
+                if closed {
+                    return "data after close";
+                }
+                script.seen.lock().expect("seen").frames.push(bytes.clone());
+                let _ = out.send(Ok(frame(Frame::Data(bytes)))).await;
+            }
+            Ok(Some(proto::TunnelFrame {
+                frame: Some(Frame::Close(_)),
+            })) => {
+                if closed {
+                    return "a second close";
+                }
+                if !linger {
+                    let _ = out.send(Ok(frame(Frame::Data(b"bye".to_vec())))).await;
+                    return "host_closed";
+                }
+                closed = true;
+                let _ = out
+                    .send(Ok(frame(Frame::Data(b"half-closed".to_vec()))))
+                    .await;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => return "eof",
+            Err(_) => return "error",
+        }
+    }
+}
 
 type Answers = Pin<Box<dyn tokio_stream::Stream<Item = Result<proto::TunnelFrame, Status>> + Send>>;
 
@@ -225,28 +277,20 @@ impl Ssh for Service {
                     let _ = out.send(Ok(opened("root"))).await;
                     let _ = out.send(Err(Status::unavailable(message))).await;
                 }
-                _ => {
+                Tunnel::Echo | Tunnel::Linger => {
                     let _ = out.send(Ok(opened("root"))).await;
                     // A frame a client has no use for (a second `opened`) is passed over.
                     let _ = out.send(Ok(opened("root"))).await;
-                    while let Ok(Some(next)) = incoming.message().await {
-                        match next.frame {
-                            Some(Frame::Data(bytes)) => {
-                                script.seen.lock().expect("seen").frames.push(bytes.clone());
-                                let _ = out.send(Ok(frame(Frame::Data(bytes)))).await;
-                            }
-                            Some(Frame::Close(_)) => {
-                                let _ = out.send(Ok(frame(Frame::Data(b"bye".to_vec())))).await;
-                                let close = Frame::Close(proto::Close {
-                                    cause: "host_closed".into(),
-                                });
-                                let _ = out.send(Ok(frame(close))).await;
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
+                    let linger = matches!(mode, Tunnel::Linger);
+                    let cause = relay(&script, &mut incoming, &out, linger).await;
+                    // The coordinator writes the close in its audit, then tells the client.
+                    let _ = script.audit.lock().expect("audit").send(cause);
+                    let close = Frame::Close(proto::Close {
+                        cause: cause.into(),
+                    });
+                    let _ = out.send(Ok(frame(close))).await;
                 }
+                Tunnel::Refuse(_) => {}
             }
         });
         let answers: Answers = Box::pin(ReceiverStream::new(answers));
@@ -282,6 +326,7 @@ pub fn pki() -> Pki {
 /// The fake coordinator on loopback, a state directory, and the files the flags name.
 pub struct Rig {
     pub script: Arc<Script>,
+    audited: Mutex<std::sync::mpsc::Receiver<&'static str>>,
     pub scratch: Scratch,
     pub port: u16,
     _runtime: tokio::runtime::Runtime,
@@ -305,7 +350,8 @@ impl Rig {
         let port = listener.local_addr().expect("its address").port();
         let tls =
             ServerTlsConfig::new().identity(Identity::from_pem(&pki.server_cert, &pki.server_key));
-        let script = Arc::new(Script::new());
+        let (audit, audited) = std::sync::mpsc::channel();
+        let script = Arc::new(Script::new(audit));
         let server = Server::builder()
             .tls_config(tls)
             .expect("TLS")
@@ -316,6 +362,7 @@ impl Rig {
         runtime.spawn(server);
         Rig {
             script,
+            audited: Mutex::new(audited),
             scratch,
             port,
             _runtime: runtime,
@@ -338,6 +385,15 @@ impl Rig {
             token_file: self.dir().join("token"),
             timeout_secs: 30,
         }
+    }
+
+    /// The cause of the next close the fake audits, waiting for it.
+    pub fn audited(&self) -> &'static str {
+        self.audited
+            .lock()
+            .expect("audited")
+            .recv()
+            .expect("the fake audits each tunnel it relays")
     }
 
     pub fn seen<T>(&self, read: impl FnOnce(&Seen) -> T) -> T {
