@@ -47,6 +47,9 @@ the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Pa
 Sign out and a button that collapses the menu to icons; on a narrow screen it is a drawer opened by the top bar's Menu button.
 The top bar says where you are and who is signed in. The menu's icons are small inline SVG drawings (`icon` in `ui/view.js`; no image or font is loaded). Banners come in three kinds: `error` (red), `warning` (amber) and `notice` (blue, for what is true and needs no action); an empty one shows nothing. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
 by their route and are not in the menu.
+Every draw makes new elements; the control that had the focus (the one of the same name, and the same one of that name) has it
+again after a draw, with its caret where it was, so a page's repeat or a status line does not take the focus from a field being
+typed in (`mount` in `ui/view.js`).
 
 - **Home**: the lab. The floor plan is a band for each row of the cluster with a footprint for each rack (its number, its U in use
   and a dot for each state of its servers: healthy, updating, offline, pending); a click on a row opens its racks as front

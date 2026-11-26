@@ -269,7 +269,8 @@ export async function click(tree, name, index) {
   await named(tree, name)[index || 0].on.click();
 }
 
-// A document that makes plain objects and records every element it makes.
+// A document that makes plain objects and records every element it makes, and keeps which of them
+// has the focus.
 export function fakeDocument() {
   const created = [];
   function createElement(tag, namespace) {
@@ -293,6 +294,21 @@ export function fakeDocument() {
       },
       setAttribute(name, value) {
         this.attributes[name] = String(value);
+      },
+      getAttribute(name) {
+        return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null;
+      },
+      // Focus: the document's `activeElement` becomes this element, and the options it was given
+      // are kept (`focusedWith`). A text control's selection is set as a browser's is; an element
+      // that was never given one has none (`selectionStart` undefined).
+      focus(options) {
+        theDocument.activeElement = this;
+        this.focusedWith = options;
+      },
+      setSelectionRange(start, end, direction) {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+        this.selectionDirection = direction;
       },
       appendChild(child) {
         child.parentNode = this;
@@ -330,6 +346,8 @@ export function fakeDocument() {
   }
   const theDocument = {
     created,
+    // The element that has the focus, null for none (a browser's body).
+    activeElement: null,
     createElement,
     createElementNS: (namespace, tag) => createElement(tag, namespace),
     createTextNode(data) {

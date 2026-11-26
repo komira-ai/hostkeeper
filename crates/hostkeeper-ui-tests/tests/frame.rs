@@ -433,3 +433,67 @@ return { before, console: text().includes("Console of l-1"), runs: text().includ
     ));
     assert_eq!(out, json!({"before": true, "console": true, "runs": false}));
 }
+
+#[test]
+fn the_maintenance_pages_hosts_refresh_keeps_the_focus_in_the_field_being_typed_in() {
+    // Asserts: in the whole app, with the frame's repeat faked, the Maintenance page's 60-second
+    // read of the hosts draws the page again, and the second group's Reason field, which had the
+    // focus, has it again in the new elements, with what was typed and the caret where it was.
+    // Catches: the repeat's draw taking the focus from the field, so a character typed after it
+    // goes nowhere.
+    let mut ui = Ui::start();
+    ui.session("tok_a");
+    let fleet = json!({"hosts": [
+        {"nodeId": "a-1", "hostGroup": "a",
+         "maintenance": {"host": {"osName": "ubuntu"}, "due": [], "lookedUnix": "1799999400"}},
+        {"nodeId": "b-1", "hostGroup": "b",
+         "maintenance": {"host": {"osName": "ubuntu"}, "due": [], "lookedUnix": "1799999400"}},
+    ]});
+    // Home, where the app starts, reads the hosts first; the Maintenance page reads them next, and
+    // again on its repeat.
+    ui.reply(&m("Hosts/List"), json!({}));
+    ui.reply(&m("Hosts/List"), fleet.clone());
+    ui.reply(&m("Maintenance/List"), json!({}));
+    ui.reply(&m("Hosts/List"), fleet);
+    ui.run(
+        r#"
+import { fakeDocument, settle } from "../test/kit.js";
+import { startApp } from "./app.js";
+export async function main() {
+  const doc = fakeDocument();
+  globalThis.doc = doc;
+  globalThis.repeats = [];
+  const every = (run, milliseconds) => {
+    globalThis.repeats.push({ run, milliseconds });
+    return () => {};
+  };
+  const app = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000, every });
+  await settle();
+  app.navigate("maintenance", {});
+}"#,
+    );
+    let out = ui.run(&steps(
+        r#"
+await settle();
+const reasons = () => elements(doc.root).filter((e) => e.attributes["name"] === "update-reason");
+const field = reasons()[1];
+fire(field, "input", { target: { value: "kernel" } });
+field.focus();
+field.setSelectionRange(3, 3, "none");
+globalThis.repeats.find((r) => r.milliseconds === 60000).run();
+await settle();
+const now = doc.activeElement;
+return {
+  reasons: reasons().length,
+  drawnAgain: now !== field,
+  second: now === reasons()[1],
+  value: now.value,
+  selection: [now.selectionStart, now.selectionEnd, now.selectionDirection],
+};"#,
+    ));
+    assert_eq!(
+        out,
+        json!({"reasons": 2, "drawnAgain": true, "second": true, "value": "kernel",
+               "selection": [3, 3, "none"]})
+    );
+}

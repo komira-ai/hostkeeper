@@ -167,7 +167,7 @@ async function readRuns(ctx) {
 }
 
 // Whether two reads of the runs say the same, so a repeat that finds nothing new does not draw the
-// page again (which would take the focus from a field the operator is typing in).
+// page again.
 function sameRuns(a, b) {
   const said = (read) => JSON.stringify([
     read.runs.map(({ run, hosts, failure }) => [run, hosts, failure ? describeError(failure) : null]),
