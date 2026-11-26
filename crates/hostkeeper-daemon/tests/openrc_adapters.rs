@@ -160,6 +160,7 @@ fn the_openrc_observer_reads_the_status_and_the_supervised_child() {
             active: ActiveState::Active,
             sub: "started".to_owned(),
             main_pid: Some(4242),
+            restarts: None,
         })
     );
     assert_eq!(
@@ -168,6 +169,7 @@ fn the_openrc_observer_reads_the_status_and_the_supervised_child() {
             active: ActiveState::NotFound,
             sub: "no init script".to_owned(),
             main_pid: None,
+            restarts: None,
         })
     );
     assert_eq!(

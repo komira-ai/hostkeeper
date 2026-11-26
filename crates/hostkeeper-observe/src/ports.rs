@@ -34,6 +34,24 @@ pub struct UnitState {
     /// The unit's main process, `None` when it has none (systemd `MainPID=0`, such as a
     /// `oneshot` unit with `RemainAfterExit`).
     pub main_pid: Option<u32>,
+    /// How the unit has restarted; `None` where the manager keeps no restart counter (launchd,
+    /// OpenRC, a systemd unit type with no `NRestarts`, a unit the manager does not know).
+    pub restarts: Option<UnitRestarts>,
+}
+
+/// How one unit has restarted, as the service manager counts it (systemd's `NRestarts`, `Result`,
+/// `ExecMainCode` and `ExecMainStatus`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnitRestarts {
+    /// The manager's count of the unit's automatic restarts. systemd sets it back to 0 when the
+    /// unit is started or restarted by hand, so a restart by a deploy is never counted.
+    pub count: u32,
+    /// The unit's last result in the manager's words (`success`, `exit-code`, `signal`,
+    /// `core-dump`, `start-limit-hit`, ...); empty when it gives none.
+    pub result: String,
+    /// The exit code of the unit's main process when it last exited by itself (systemd
+    /// `ExecMainCode=1`); `None` when no main process has exited, or a signal ended it.
+    pub exit_status: Option<i32>,
 }
 
 /// The service manager: systemd on Linux (`crate::systemd`), launchd later.
@@ -79,6 +97,9 @@ pub struct HealthReply {
     pub status: u16,
     /// How many bytes after the header block were read (never more than the read cap allows).
     pub body_bytes_read: usize,
+    /// The first bytes of the body, at most [`crate::health::MAX_BODY_BYTES`]: read only when the
+    /// status is not 2xx, empty otherwise.
+    pub body: Vec<u8>,
 }
 
 /// How long a probe may wait: to connect, and for each read or write after that. The caller

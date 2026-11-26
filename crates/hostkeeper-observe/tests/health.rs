@@ -148,7 +148,8 @@ fn the_status_code_is_read_from_the_status_line() {
             answer,
             Ok(HealthReply {
                 status,
-                body_bytes_read
+                body_bytes_read,
+                body: Vec::new()
             }),
             "{reply:?}"
         );
@@ -218,7 +219,8 @@ fn the_response_is_read_to_at_most_4_kib() {
         answer,
         Ok(HealthReply {
             status: 200,
-            body_bytes_read: 0
+            body_bytes_read: 0,
+            body: Vec::new()
         })
     );
     assert_eq!(peer.served(), MAX_REPLY_BYTES);
@@ -236,7 +238,8 @@ fn the_response_is_read_to_at_most_4_kib() {
         answer,
         Ok(HealthReply {
             status: 200,
-            body_bytes_read: 4
+            body_bytes_read: 4,
+            body: Vec::new()
         })
     );
     assert_eq!(pieces.served(), "HTTP/1.1 200 OK\r\n\r\nbody".len());
@@ -292,6 +295,7 @@ fn transport_failures_are_told_apart() {
             Ok(HealthReply {
                 status: 200,
                 body_bytes_read: 0,
+                body: Vec::new(),
             }),
         ),
         (
@@ -302,6 +306,7 @@ fn transport_failures_are_told_apart() {
             Ok(HealthReply {
                 status: 500,
                 body_bytes_read: 0,
+                body: Vec::new(),
             }),
         ),
     ];

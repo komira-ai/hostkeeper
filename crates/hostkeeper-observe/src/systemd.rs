@@ -1,12 +1,21 @@
 //! The real [`ServiceManager`] on Linux: one `systemctl show` per unit, run through a
-//! [`CommandRunner`], and its four properties read.
+//! [`CommandRunner`], and its properties read.
 //!
-//! `systemctl show --property=ActiveState,SubState,MainPID,LoadState -- <unit>` prints one
-//! `Key=Value` line per property. `LoadState=not-found` is [`ActiveState::NotFound`] whatever the
-//! other properties say; otherwise `ActiveState` decides (`active`, `reloading` and `refreshing`
-//! are running). `MainPID=0` is no main process. A failure to run, a deadline passed, an exit
-//! other than 0, output past the runner's cap, a missing property, an `ActiveState` this module
-//! does not know or a `MainPID` that is not a number is `Err`, never a state.
+//! `systemctl show` of [`SHOW_PROPERTIES`] (`ActiveState`, `SubState`, `MainPID`, `LoadState`,
+//! `NRestarts`, `Result`, `ExecMainCode`, `ExecMainStatus`) `-- <unit>` prints one `Key=Value`
+//! line per property it has. `LoadState=not-found` is
+//! [`ActiveState::NotFound`] whatever the other properties say; otherwise `ActiveState` decides
+//! (`active`, `reloading` and `refreshing` are running). `MainPID=0` is no main process. A failure
+//! to run, a deadline passed, an exit other than 0, output past the runner's cap, a missing one of
+//! the first four properties, an `ActiveState` this module does not know or a `MainPID` that is
+//! not a number is `Err`, never a state.
+//!
+//! The unit's restarts ([`UnitRestarts`]) are read from the other four: `NRestarts`, the count;
+//! `Result`, the last result (empty when it is not printed); and the exit code `ExecMainStatus`
+//! when `ExecMainCode=1` (the main process exited by itself; 2 and 3 are a signal, 0 no exit
+//! yet). A unit with no `NRestarts` (a systemd before 235, a unit type that is not a service) or
+//! not found has no restarts. An `NRestarts`, or with `ExecMainCode=1` an `ExecMainStatus`, that
+//! is not a number is `Err`, like a `MainPID` that is not.
 //!
 //! This is the only module that knows systemd; launchd gets its own adapter of the same port.
 
@@ -14,10 +23,10 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::error::ObserveError;
-use crate::ports::{ActiveState, CommandRunner, ServiceManager, UnitState};
+use crate::ports::{ActiveState, CommandRunner, ServiceManager, UnitRestarts, UnitState};
 
 /// The properties asked for.
-pub const SHOW_PROPERTIES: &str = "--property=ActiveState,SubState,MainPID,LoadState";
+pub const SHOW_PROPERTIES: &str = "--property=ActiveState,SubState,MainPID,LoadState,NRestarts,Result,ExecMainCode,ExecMainStatus";
 
 /// The service manager over `systemctl`.
 #[derive(Clone, Debug)]
@@ -91,9 +100,40 @@ fn parse_show(stdout: &[u8]) -> Result<UnitState, String> {
             ));
         }
     };
+    let restarts = match (active, properties.get("NRestarts")) {
+        (ActiveState::NotFound, _) | (_, None) => None,
+        (_, Some(count)) => Some(UnitRestarts {
+            count: count
+                .parse::<u32>()
+                .map_err(|_| format!("NRestarts {count:?} is not a number"))?,
+            result: properties
+                .get("Result")
+                .copied()
+                .unwrap_or_default()
+                .to_owned(),
+            exit_status: exit_status(&properties)?,
+        }),
+    };
     Ok(UnitState {
         active,
         sub: sub.to_owned(),
         main_pid: (main_pid != 0).then_some(main_pid),
+        restarts,
     })
+}
+
+/// The main process's exit code: `ExecMainStatus` when `ExecMainCode` is 1 (`CLD_EXITED`), and
+/// `None` for any other code (a signal, or no exit yet) or none printed.
+fn exit_status(properties: &BTreeMap<&str, &str>) -> Result<Option<i32>, String> {
+    if properties.get("ExecMainCode").copied() != Some("1") {
+        return Ok(None);
+    }
+    let status = properties
+        .get("ExecMainStatus")
+        .copied()
+        .unwrap_or_default();
+    status
+        .parse::<i32>()
+        .map(Some)
+        .map_err(|_| format!("ExecMainStatus {status:?} is not a number"))
 }

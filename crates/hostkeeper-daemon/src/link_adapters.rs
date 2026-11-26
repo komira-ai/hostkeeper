@@ -19,7 +19,9 @@
 //! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
 //! version, at that version, with the target of its step record while the record is unfinished
 //! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation
-//! [`Daemon::status`] reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
+//! [`Daemon::status`] reports ([`Daemon::observer`]), in the loop's words ([`observation`]), with
+//! the service's restarts counted over the last ten minutes of the daemon's monotonic clock
+//! ([`RestartWindow`]).
 //!
 //! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
@@ -29,7 +31,7 @@
 //! stay in the protocol, unsent.
 
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
@@ -40,8 +42,9 @@ use hostkeeper_link::{
     RenewalSource, ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource,
     Verb,
 };
-use hostkeeper_observe::{ServiceState, VersionView, beat_health};
+use hostkeeper_observe::{RestartWindow, ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
+use hostkeeper_steps::Clock as _;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 
@@ -463,14 +466,19 @@ pub fn settled_result(record: &Record) -> Option<OrderResult> {
     })
 }
 
-/// The service-observer port over the daemon's observer.
+/// The service-observer port over the daemon's observer, and the window its services' restarts
+/// are counted in.
 pub struct DaemonObserver {
     daemon: Arc<Daemon>,
+    restarts: Mutex<RestartWindow>,
 }
 
 impl DaemonObserver {
     pub fn new(daemon: Arc<Daemon>) -> DaemonObserver {
-        DaemonObserver { daemon }
+        DaemonObserver {
+            daemon,
+            restarts: Mutex::new(RestartWindow::new()),
+        }
     }
 }
 
@@ -503,28 +511,40 @@ impl ServiceObserver for DaemonObserver {
     /// One observation of `service` ([`observer::observe`]); a service the daemon does not
     /// observe is `unobserved`, never absent or stopped, and the daemon's own service is never
     /// absent ([`own_running`]). A repository package's observation also carries its drift
-    /// ([`drift`]).
+    /// ([`drift`]). Its restarts are its run units' counts at this observation, with the
+    /// restarts of the last ten minutes the window counted ([`RestartWindow::record`], at the
+    /// daemon's monotonic second); a service not observed, or whose units the service manager
+    /// counts no restarts of, has none, and the window forgets it.
     fn observe(&self, service: &ServiceName) -> Observation {
         let ctx = self.daemon.ctx();
-        let observed = observer::observe(
+        let seen = observer::observe(
             self.daemon.observer(),
             &ctx.dirs.packages,
             &crate::selfupdate::binary_dir(&ctx.dirs.state),
             &ctx.own_version,
             service,
-        )
-        .map_or_else(
+        );
+        let units = seen.as_ref().map_or(&[][..], |seen| &seen.restarts[..]);
+        let restarts = self
+            .restarts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .record(service.as_str(), units, ctx.clock.mono_secs());
+        let observed = seen.map_or_else(
             || Observation {
                 liveness: Liveness::Unobserved,
                 version: None,
                 health: Health::Unhealthy,
                 health_detail: Some(NOT_OBSERVED.to_owned()),
                 drift: None,
+                health_body: None,
+                restarts: None,
             },
             |seen| own_running(service, observation(&seen)),
         );
         Observation {
             drift: drift(ctx, service),
+            restarts,
             ..observed
         }
     }
@@ -559,8 +579,9 @@ pub fn drift(ctx: &Ctx, service: &ServiceName) -> Option<Drift> {
 
 /// `seen` in the loop's words: the state as the liveness (live is running); the version only when
 /// the running executable confirmed it; the health as the heartbeat's health
-/// ([`beat_health`]); and the token that says why the service is not plainly live, healthy and
-/// confirmed as the detail. A service with nothing to observe (no run units and no health URL: a
+/// ([`beat_health`]); the token that says why the service is not plainly live, healthy and
+/// confirmed as the detail; and the first bytes of the body of the health URL's answer that was
+/// not 2xx. A service with nothing to observe (no run units and no health URL: a
 /// configuration package, which only places files) is healthy, as a live service with no health
 /// URL is: nothing of it can fail to serve, and a coordinator that read it unhealthy would never
 /// count its host as serving, or its bake as healthy.
@@ -599,6 +620,9 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
         health_detail: seen.reason_token().map(str::to_owned),
         // The repository installer's drift is added by the daemon's observer ([`drift`]).
         drift: None,
+        health_body: seen.health_body.clone(),
+        // The restarts are counted by the daemon's observer, across observations.
+        restarts: None,
     }
 }
 

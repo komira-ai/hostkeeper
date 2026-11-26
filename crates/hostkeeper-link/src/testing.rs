@@ -176,6 +176,8 @@ impl ServiceObserver for FakeObserver {
                 health: Health::Healthy,
                 health_detail: None,
                 drift: None,
+                health_body: None,
+                restarts: None,
             })
     }
 }

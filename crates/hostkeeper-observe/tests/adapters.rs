@@ -54,10 +54,11 @@ fn manager_error(why: &str) -> Result<UnitState, ObserveError> {
     })
 }
 
-/// Catches the adapter asking anything but `systemctl show` of the four properties for the one
-/// unit, with the unit after `--` so no name is read as an option, and within its deadline.
+/// Catches the adapter asking anything but `systemctl show` of the state and restart properties
+/// for the one unit, with the unit after `--` so no name is read as an option, and within its
+/// deadline. A systemd that prints no `NRestarts` gives no restarts.
 #[test]
-fn systemd_asks_for_the_four_properties_of_one_unit() {
+fn systemd_asks_for_the_state_and_restart_properties_of_one_unit() {
     let runner = FakeCommandRunner::default();
     runner.then(Ok(printed(
         "ActiveState=active\nSubState=running\nMainPID=4242\nLoadState=loaded\n",
@@ -69,13 +70,14 @@ fn systemd_asks_for_the_four_properties_of_one_unit() {
             active: ActiveState::Active,
             sub: "running".to_owned(),
             main_pid: Some(4242),
+            restarts: None,
         })
     );
     let argv = ["systemctl", "show", SHOW_PROPERTIES, "--", UNIT].map(str::to_owned);
     assert_eq!(runner.calls(), [(argv.to_vec(), Duration::from_secs(5))]);
     assert_eq!(
         SHOW_PROPERTIES,
-        "--property=ActiveState,SubState,MainPID,LoadState"
+        "--property=ActiveState,SubState,MainPID,LoadState,NRestarts,Result,ExecMainCode,ExecMainStatus"
     );
 }
 
@@ -93,6 +95,7 @@ fn systemd_states_map_to_the_port_states() {
             active,
             sub: "sub".to_owned(),
             main_pid,
+            restarts: None,
         })
     };
     let cases = [
