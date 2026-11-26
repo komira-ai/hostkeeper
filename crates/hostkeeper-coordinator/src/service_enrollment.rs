@@ -267,3 +267,7 @@ fn updating(
             ))
         })
 }
+
+#[cfg(test)]
+#[path = "service_enrollment_tests.rs"]
+mod tests;

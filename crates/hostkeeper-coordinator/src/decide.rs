@@ -53,7 +53,7 @@
 //!    The asking host's own order is never counted against it, so a host asking again under its
 //!    own order is told the same again. A host the service no longer counts (excluded, out of its
 //!    selector, not announcing it) still holds its slot until its beats or its order's age free
-//!    it ([`Fleet::occupants_of`]).
+//!    it, the age only while it still heartbeats ([`Fleet::occupants_of`]).
 //!
 //! A host moved into its group ([`crate::moving`]) is told [`Gate::Moving`] for every package, before
 //! every rule above but a halt, until the group's plans admit it and, if its daemon announced

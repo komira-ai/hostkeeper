@@ -467,7 +467,8 @@ impl Fleet {
     /// Stops counting the host `id` for `service`: what it said moves out of the service's
     /// hosts, to be kept with any order for it as what the host still occupies
     /// ([`Self::occupants_of`]), until its own beats, recorded with
-    /// [`Self::record_outside_in`], or the order's age release it.
+    /// [`Self::record_outside_in`], or the order's age release it (the age only while the host
+    /// still heartbeats: [`Self::is_ordered`]).
     pub fn forget_in(&mut self, service: &str, id: &HostId) {
         if let Some(host) = self
             .hosts

@@ -179,7 +179,8 @@ enum LiveReason {
   LIVE_REASON_UPDATING = 1;
   // A host's last word is that it waits for the promotion of its update.
   LIVE_REASON_PROMOTION_PENDING = 2;
-  // An order the coordinator sent the host is outstanding; it ages out if the host never reports it.
+  // An order the coordinator sent the host is outstanding; it ages out if the host goes on
+  // heartbeating without reporting it, and holds while the host is silent.
   LIVE_REASON_ORDERED = 3;
   // A host of the plan runs the desired version after an update and has not finished its bake.
   LIVE_REASON_BAKING = 4;
