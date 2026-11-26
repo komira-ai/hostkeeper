@@ -9,10 +9,17 @@
 //! ([`Fleet::abandon_in`]); a beat of the host, updating or not, ends it as any beat does. A host
 //! the fleet has never heard (an order given before anything of the host was noted, as only a test
 //! does) is judged by the order's age alone.
+//!
+//! A restarted coordinator knows no host until it beats, and forgets its orders (design 8.2). A
+//! host that was updating when last heard, as its enrollment kept it, holds its slot from the
+//! start, as a silent updating host does ([`Fleet::hold_restored`]): one silent through the quiet
+//! start would otherwise let a second update be ordered while it runs.
 
 use std::time::Duration;
 
-use hostkeeper_wire::HostId;
+use hostkeeper_wire::version::Version;
+use hostkeeper_wire::wire::{Health, Heartbeat};
+use hostkeeper_wire::{HostId, Platform};
 
 use super::{DOWN_AFTER, Fleet, Host, ORDER_AGE, Order};
 
@@ -114,6 +121,56 @@ impl Fleet {
         self.orders.remove(&key);
         self.drop_orders([key], now);
         held
+    }
+
+    /// Notes that the host `id`, of the role named `role` on `platform`, said when it was last
+    /// heard, before the coordinator started, that it was updating `service` from `running` to
+    /// `updating`: until a word of it about the service replaces this, it holds the service's
+    /// update slot as a silent updating host does, unhealthy and last heard at no time since the
+    /// start. It is kept as what the host occupies ([`Self::occupants_of`]), never as one of the
+    /// service's hosts, so no plan counts it. A host the fleet already holds a word of for the
+    /// service is left as it is.
+    pub fn hold_restored(
+        &mut self,
+        service: &str,
+        id: HostId,
+        role: &str,
+        platform: Platform,
+        (running, updating): (Version, Version),
+    ) {
+        if self.occupant(service, &id).is_some() {
+            return;
+        }
+        let beat = Heartbeat {
+            local_halt: None,
+            platform,
+            version: running,
+            health: Health::Unhealthy,
+            last_update: None,
+            updating: Some(updating),
+            services: None,
+            agent_features: Vec::new(),
+            step: None,
+            commit: None,
+            step_secs: Default::default(),
+            promotion_pending: false,
+            deferred: None,
+            agent: None,
+            sent_unix: None,
+            cert_not_after_unix: None,
+            last_renew_error: None,
+            record_try: None,
+            maintenance: None,
+        };
+        let host = Host {
+            role: role.to_owned(),
+            beat,
+            seen: Duration::ZERO,
+        };
+        self.outside
+            .entry(service.to_owned())
+            .or_default()
+            .insert(id, host);
     }
 }
 

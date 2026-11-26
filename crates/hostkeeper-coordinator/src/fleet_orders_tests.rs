@@ -233,3 +233,54 @@ fn node(seen: Duration) -> Node {
         maintenance: None,
     }
 }
+
+/// Proves: a host a restarted coordinator was told was updating holds the service's slot as a
+/// silent updating host, kept outside the service's hosts so no plan counts it; a host the fleet
+/// already heard for the service is left as it said; the host's first beat replaces it, and one
+/// that is no longer updating frees the slot.
+///
+/// Catches: a host updating across a restart that holds nothing until it beats (a second update
+/// ordered in the farm), a restored word that overwrites what the host itself said since, or one
+/// that keeps the slot after the host beat done.
+#[test]
+fn a_host_updating_when_last_heard_holds_its_slot_until_it_beats() {
+    let now = secs(5000);
+    let mut fleet = Fleet::new(secs(4990), QUIET_START);
+    let versions = (version("1.0"), version("2.0"));
+    fleet.hold_restored(
+        "web",
+        id("s1"),
+        "storage",
+        Platform::LinuxX86_64,
+        versions.clone(),
+    );
+    let restored = fleet
+        .occupants_of("web")
+        .find(|(host, _)| **host == id("s1"))
+        .map(|(_, host)| host.clone())
+        .expect("held");
+    assert!(
+        fleet.get_in("web", &id("s1")).is_none(),
+        "no host of the service"
+    );
+    assert_eq!(restored.beat.updating, Some(version("2.0")));
+    assert!(fleet.holds_slot("web", &id("s1"), &restored, now));
+    assert!(!restored.is_live(now), "never heard since the start");
+
+    fleet.record_in("web", id("s2"), role("storage"), beat("1.0"), now);
+    fleet.hold_restored("web", id("s2"), "storage", Platform::LinuxX86_64, versions);
+    let heard = fleet.get_in("web", &id("s2")).expect("heard");
+    assert_eq!(heard.beat.updating, None, "what it said stands");
+
+    fleet.record_in("web", id("s1"), role("storage"), beat("2.0"), now);
+    let beaten = fleet.get_in("web", &id("s1")).expect("heard").clone();
+    assert!(!fleet.holds_slot("web", &id("s1"), &beaten, now), "done");
+    assert_eq!(
+        fleet
+            .occupants_of("web")
+            .filter(|(host, _)| **host == id("s1"))
+            .count(),
+        1,
+        "the restored word is gone"
+    );
+}

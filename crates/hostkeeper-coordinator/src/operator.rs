@@ -430,9 +430,10 @@ impl Coordinator {
     /// `Hosts.Exclude`: takes the host out of the service, as `/v1/operator`'s `exclude` does.
     /// Its slot stays held until its own beats or its order's age free it (the age only while the
     /// host still heartbeats: [`crate::fleet::Fleet::is_ordered`]); with `abandon`, for a host that
-    /// is gone, the slot is freed now, and the entry is `exclude_abandon` with
-    /// `possibly_mid_update` in its reason: an alert while the host stays excluded
-    /// ([`crate::alerts`], logged with `alert = "exclude_abandon"`).
+    /// is gone, the slot is freed now, the enrollment's record of the host forgets that it was
+    /// updating the service (so a restart does not hold the slot again), and the entry is
+    /// `exclude_abandon` with `possibly_mid_update` in its reason: an alert while the host stays
+    /// excluded ([`crate::alerts`], logged with `alert = "exclude_abandon"`).
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `unknown_service`, `invalid_request` (the node id or the
@@ -470,6 +471,9 @@ impl Coordinator {
         if request.abandon {
             let held = fleet.abandon_in(&def.name, &id, now);
             tracing::info!(service = %def.name, node_id = %id, held_slot = held, "abandoned");
+            if let Some(enrollment) = self.enrollment() {
+                enrollment.forget_updating(&id, &def.name);
+            }
         } else {
             fleet.forget_in(&def.name, &id);
         }

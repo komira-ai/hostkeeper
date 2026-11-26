@@ -1,13 +1,15 @@
 //! The calls of [`Coordinator`] that ask enrollment: who an enrolled host's certificate names,
-//! whether a host is denied, retiring or duplicate, what a heartbeat noted of the host, and a
-//! retiring host's final report.
+//! whether a host is denied, retiring or duplicate, what a heartbeat noted of the host, the
+//! update slots hosts held when last heard, and a retiring host's final report.
 
 use std::sync::Arc;
 
 use std::time::Duration;
 
-use hostkeeper_enrollment::enroll::HostRunning;
+use hostkeeper_enrollment::enroll::{EnrolledHost, HostRunning};
+use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Health, Heartbeat};
+use hostkeeper_wire::{HostId, Platform};
 
 use super::{Coordinator, HeartbeatRefused};
 use crate::agent_service::runs_itself;
@@ -129,11 +131,24 @@ impl Coordinator {
     /// nothing. Enrollment audits into this coordinator's ops store from now on, and an
     /// approval it recorded whose audit entry is missing there is audited now
     /// ([`Enrollment::audit_to`]). It places each host it approves by this coordinator's host
-    /// groups while it holds one ([`Enrollment::held_groups`]).
+    /// groups while it holds one ([`Enrollment::held_groups`]). Each service an enrolled host was
+    /// updating when last heard, as its enrollment kept it, holds the host's update slot until the
+    /// host beats ([`crate::fleet::Fleet::hold_restored`], design 8.2 and 8.4); an enrollment
+    /// store that cannot be read holds none, logged.
     #[must_use]
     pub fn with_enrollment(mut self, enrollment: Arc<Enrollment>) -> Self {
         enrollment.audit_to(Arc::clone(&self.ops));
         enrollment.place_by(Arc::clone(&self.desired));
+        let enrolled = enrollment.store().enrolled_hosts().unwrap_or_else(|why| {
+            tracing::warn!(%why, "the update slots hosts held were not read");
+            Vec::new()
+        });
+        let mut fleet = self.lock_fleet();
+        for (service, id, role, platform, versions) in enrolled.iter().flat_map(updating) {
+            tracing::info!(%service, node_id = %id, "updating when last heard: holds its slot");
+            fleet.hold_restored(&service, id, &role, platform, versions);
+        }
+        drop(fleet);
         self.enrollment = Some(enrollment);
         self
     }
@@ -221,4 +236,34 @@ impl Coordinator {
         }
         released
     }
+}
+
+/// The services `enrolled` was updating when last heard, as its record of what it runs kept them:
+/// each service's name, the host, its role and platform (a Mac when it claimed a Mac's serial
+/// number), and the version it ran and the one it was updating to. A host id or a version that does
+/// not parse holds nothing.
+fn updating(
+    enrolled: &EnrolledHost,
+) -> impl Iterator<Item = (String, HostId, String, Platform, (Version, Version))> + '_ {
+    let id = enrolled.host_id.as_str().parse::<HostId>().ok();
+    let platform = match enrolled.claims.mac_serial.is_empty() {
+        true => Platform::LinuxX86_64,
+        false => Platform::DarwinArm64,
+    };
+    enrolled
+        .running
+        .iter()
+        .flat_map(|running| &running.services)
+        .filter_map(move |one| {
+            let to = Version::parse(one.updating.as_deref()?).ok()?;
+            let running = Version::parse(&one.version).ok()?;
+            let role = enrolled.role.as_str().to_owned();
+            Some((
+                one.service.clone(),
+                id.clone()?,
+                role,
+                platform,
+                (running, to),
+            ))
+        })
 }

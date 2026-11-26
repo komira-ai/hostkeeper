@@ -85,6 +85,7 @@ fn note_running(enrolling: &Enrolling, host: &str) {
             service: "web".to_owned(),
             version: "1.0".to_owned(),
             installer: "deb".to_owned(),
+            updating: None,
         }],
     };
     enrolling

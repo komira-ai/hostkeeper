@@ -2,7 +2,8 @@
 //!
 //! Nothing here is stored. After a restart the coordinator knows no host until it
 //! heartbeats, which is why the minimums are counted against the heartbeats it has seen and
-//! never against a host list (`docs/design/host-updates.md`). Time is a `Duration`
+//! never against a host list (`docs/design/host-updates.md`); only a host its enrollment says was
+//! updating a service holds that slot from the start ([`Fleet::hold_restored`]). Time is a `Duration`
 //! since the coordinator started, so the decision replays exactly in a test.
 //!
 //! The orders it has given are kept the same way, in memory only. A host reports that it
