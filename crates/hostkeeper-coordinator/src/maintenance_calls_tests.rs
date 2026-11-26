@@ -243,6 +243,7 @@ pub(crate) fn run_of(id: &str, hosts: Vec<RunHost>) -> Run {
         by: "operator".to_owned(),
         scheduled_unix: UNIX,
         cancelled_unix: None,
+        xcode_sha256: String::new(),
         hosts,
     }
 }
@@ -490,6 +491,7 @@ fn list_answers_newest_first_by_state_and_limit() {
             one("run-1-1", Step::Waiting, 0),
             Run {
                 cancelled_unix: Some(UNIX - 5),
+                xcode_sha256: String::new(),
                 ..one("run-1-2", Step::NotReached, UNIX - 5)
             },
             one("run-1-3", Step::Done, UNIX - 50),
@@ -673,6 +675,7 @@ fn get_answers_the_run_and_its_hosts() {
             ended_unix: 0,
             halted_groups: vec!["beta".to_owned()],
             host_count: 2,
+            xcode_sha256: String::new(),
         })
     );
     assert_eq!(

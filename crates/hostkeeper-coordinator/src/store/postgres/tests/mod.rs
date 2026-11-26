@@ -345,6 +345,7 @@ mod lost;
 mod maintenance_operator;
 mod maintenance_rows;
 mod maintenance_turns;
+mod maintenance_xcode_check;
 mod migrate_ddl;
 mod numbers;
 mod periodic;
