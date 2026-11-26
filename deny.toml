@@ -6,10 +6,12 @@
 
 [graph]
 all-features = true
-# The targets this workspace is built for: CI's tests and the musl and gnu builds of
-# artifacts.yml on Linux x86_64 and arm64, and the Mac's on Apple silicon. Every check here
-# judges the crates compiled for one of them; a crate only another target pulls in (Windows,
-# WebAssembly, Redox) is in no binary we build. A target added to a build is added here.
+# The targets this workspace is built or described for: the Linux x86_64 and arm64 musl
+# builds (artifacts.yml, pr-device.yml, privileged.yml, net-install.yml), CI's tests and the
+# farm build on x86_64 gnu, artifacts.yml's SBOMs (`cargo cyclonedx --target`) on x86_64 and
+# arm64 gnu, and the Mac's builds on Apple silicon. Every check here judges the crates compiled
+# for one of them; a crate only another target pulls in (Windows, WebAssembly, Redox) is in no
+# binary we build. A target added to a build is added here.
 targets = [
     "x86_64-unknown-linux-gnu",
     "x86_64-unknown-linux-musl",
