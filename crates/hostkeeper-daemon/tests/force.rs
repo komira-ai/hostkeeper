@@ -518,13 +518,16 @@ fn force_starts_exactly_the_units_the_target_lists() {
     assert_eq!(asked_active(&rig, &extra), 0);
 }
 
-/// Catches a wait that ends on the first active unit, ends early, or reads another clock: with
-/// `force_start_secs` 60, one unit active at once is asked after once, and another that turns
-/// active on its 61st ask passes, on its 62nd fails `start_failed`; either way the clock moved 60
-/// seconds, by the force's polls alone. The same holds on a clock whose boot id cannot be read:
-/// the wait is of this process and ends at its bound, never waits forever nor ends at once.
+/// Proves the force's wait is for the run set to be live, as the observer reads it (one unit
+/// active, design 5.6): with `force_start_secs` 60 and a first unit that is never active, a second
+/// that turns active on its 61st ask passes, on its 62nd fails `start_failed`; either way both
+/// units are asked 61 times and the clock moved 60 seconds, by the force's polls alone. The same
+/// holds on a clock whose boot id cannot be read: the wait is of this process and ends at its
+/// bound, never waits forever nor ends at once.
+/// Catches a wait that ends before the bound with no unit active, ends late, or reads another
+/// clock.
 #[test]
-fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
+fn force_waits_for_the_run_set_to_be_live_within_force_start_secs() {
     let two = unit(WEB, "two");
     let two = two.as_str();
     let failed_start = failed(Phase::AfterCommit, Class::Release, "start_failed");
@@ -540,6 +543,7 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
         let daemon = rig.daemon();
         rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[UNIT, two]));
         rig.pin(WEB, "2.0.0");
+        rig.units.active_after(UNIT, 1_000);
         rig.units.active_after(two, asks);
         let began = rig.clock.mono_secs();
         assert_eq!(
@@ -548,9 +552,35 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
             "{asks} {lost}"
         );
         assert_eq!(rig.clock.mono_secs() - began, 60, "{asks} {lost}");
-        assert_eq!(asked_active(&rig, UNIT), 1, "{asks} {lost}");
+        assert_eq!(asked_active(&rig, UNIT), 61, "{asks} {lost}");
         assert_eq!(asked_active(&rig, two), 61, "{asks} {lost}");
     }
+}
+
+/// Proves a force over a run set with a standby, a unit kept inactive by design (one of
+/// tierstore's two instances), reports `Succeeded` as soon as the other unit is active: both
+/// units are started, the wait ends on the first ask with no poll, the standby is never active,
+/// and the record's verdict is `Succeeded`.
+/// Catches a force that waits for every unit and fails `start_failed` while the host's heartbeat
+/// says Live.
+#[test]
+fn force_over_a_run_set_with_an_inactive_standby() {
+    let rig = NativeHost::new("force-standby");
+    let daemon = rig.daemon();
+    let standby = unit(WEB, "standby");
+    let standby = standby.as_str();
+    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[UNIT, standby]));
+    rig.pin(WEB, "2.0.0");
+    rig.units.active_after(standby, 1_000);
+    let began = rig.clock.mono_secs();
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 1, 0)), succeeded());
+    assert_eq!(rig.clock.mono_secs() - began, 0);
+    assert_eq!(started(&rig), [UNIT, standby]);
+    assert_eq!(rig.units.active(), set(&[UNIT]));
+    assert_eq!(asked_active(&rig, UNIT), 1);
+    let record = rig.record(WEB).expect("the record");
+    let verdict = record.force.and_then(|force| force.verdict);
+    assert_eq!(verdict, Some(ForceVerdict::Succeeded));
 }
 
 /// Catches a force that rolls back after a failed start, or fetches the version it left again

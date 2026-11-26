@@ -369,7 +369,7 @@ A broken version must be fixable on every host with one call, with no hook, beca
 12. Link the target's units and `files/` by the write-ahead protocol of section 4.7.
 13. Run `systemctl daemon-reload`.
 14. Start the units the target manifest's `run` names.
-15. Wait until every one is `active` and the daemon has seen it so once, within `force_start_secs` on an injected clock.
+15. Wait until the run set is live as section 5.8 reads it, one of its units `active` (a unit kept inactive by design is a standby, such as one of tierstore's two instances, and fails nothing), within `force_start_secs` on an injected clock; `start_failed` when none is. The built-in `cutover` and `verify` (section 6.3) read a run set the same way, so a force's verdict and the heartbeat's state agree.
 16. Record the verdict: `Forced{Succeeded}`, or `Forced{Failed}` with `link_failed`, `daemon_reload_failed` or `start_failed`.
 
 *Report.*
@@ -421,7 +421,7 @@ Designed. The boot image or package carries the daemon and `/etc/hostkeeper/host
 
 Designed (B8); replaces kbf's registration socket (`/run/updater/register.sock`), which is not carried; a new daemon unlinks an old one at start. The daemon makes the probes and reports the result in the heartbeat.
 
-- **Liveness** from the service manager: systemd `ActiveState`/`SubState` of the manifest's `[units] run`; launchd job state on macOS.
+- **Liveness** from the service manager: systemd `ActiveState`/`SubState` of the manifest's `[units] run`; launchd job state on macOS. A run set is live when any one of its units is active; the others may be standbys.
 - **Version** from the step record, verified against the main process's executable: the pair (pid, start time) is read before and after hashing `/proc/<pid>/exe`; if they differ the round is discarded. A wrapper binary shows `version_mismatch`. The `/proc` hash check is the first to drop if it proves costly.
 - **Health** from the manifest's `[health] url`: scheme `http`, loopback literal host, no redirects, 4 KiB read cap, only 2xx is healthy.
 - States: `absent`, `stopped`, `transitioning`, `unobserved`, `unmonitored` (no `run` units), live-with-version-unknown. **An observation failure is `unobserved` and is never read as absent or stopped.**
