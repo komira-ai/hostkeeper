@@ -166,6 +166,10 @@ The route is on the private listener, the one operators use. The caller sends an
 bearer (an operator token or a user's API token; CI's token is refused) and the archive as the body; the
 path names the SHA-256 of the body as 64 lowercase hex characters, and the query holds exactly `version`
 (digits and dots, `27.2`) and `build` (letters, digits and dots, at most 32, `27B52`), each once.
+`hk xcode-push` makes it from a Mac; from an operator's Linux box, where `hk xcode-push` does not run,
+any HTTPS client that reads the bearer from a file makes it the same way. The store checks no
+signature: each Mac checks Apple's signature, the version and the build when it stages the archive,
+before it installs it ([maintenance.md](maintenance.md), "From a box that is not a Mac").
 
 The checks run in this order, and a refusal stores nothing. Each answer is JSON, `{"error":"<code>"}`:
 

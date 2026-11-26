@@ -144,6 +144,9 @@ const NONE: &str = include_str!("../fixtures/maintenance/softwareupdate/macos26_
 const IOREG: &str = include_str!("../fixtures/maintenance/mac/ioreg.txt");
 /// `pkgutil --pkg-info` of the Command Line Tools.
 const PKGUTIL: &str = include_str!("../fixtures/maintenance/mac/pkgutil_clt.txt");
+/// `pkgutil --check-signature` of an archive Apple signed.
+const PKGUTIL_SIGNATURE: &str =
+    include_str!("../fixtures/maintenance/mac/pkgutil_check_signature.txt");
 /// `fdesetup list`: the update account is a FileVault user.
 const FILEVAULT_USERS: &str = include_str!("../fixtures/maintenance/mac/fdesetup_list.txt");
 
@@ -162,7 +165,7 @@ pub const XCODE_SELECT: &str = "/usr/bin/xcode-select";
 pub const XIP: &str = "/usr/bin/xip";
 pub const CODESIGN: &str = "/usr/bin/codesign";
 const IOREG_PROGRAM: &str = "/usr/sbin/ioreg";
-const PKGUTIL_PROGRAM: &str = "/usr/sbin/pkgutil";
+pub const PKGUTIL_PROGRAM: &str = "/usr/sbin/pkgutil";
 const DSCL: &str = "/usr/bin/dscl";
 const SYSADMINCTL: &str = "/usr/sbin/sysadminctl";
 /// The probe's programs the other constants do not name.

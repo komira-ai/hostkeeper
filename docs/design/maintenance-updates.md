@@ -187,8 +187,15 @@ are not gateway calls gains it. The steps below are the first form of it; its ch
    body whose SHA-256 is not its path's, and audits the upload.
 
 The Macs then install it from the store in their own drained turn (2.4), where the daemon checks the size, the SHA-256, Apple's signature
-(`xip --expand`) and the expanded app's `ProductBuildVersion` again. It needs no automatic login and no Apple session on any farm Mac; the
-cost is one command by a person per release.
+(`pkgutil --check-signature`, then `xip --expand`) and the expanded app's `ProductBuildVersion` again. It needs no automatic login and no
+Apple session on any farm Mac; the cost is one command by a person per release.
+
+**From a box that is not a Mac (owner's direction, 2026-11-25).** The owner may download the archive in a browser on an operator's Linux
+box, where `pkgutil`, `xip` and `plutil` do not exist. The archive then reaches the store through the same `PUT`, with the version from
+the archive's name and the build the coordinator lists for that release (the alert's), and steps 2 and 3's checks are made by the Mac
+that stages it, before anything is installed: `pkgutil --check-signature` with the same rule as step 2, then `xip --expand` and the
+build (2.4, Built). A mislabelled or foreign archive is held in the store but never installed: every Mac's stage defers it, and an
+operator removes it (`hk xcode remove`). `docs/operations/mac-proof-owner-session.md` step 1 is this route.
 
 **The alternative: the fetcher Mac (section 2.2).** A farm Mac holds the Apple session and logs its account in at boot; a person signs in
 on it when Apple has ended the session. It is kept only for the case where no operator's Mac can push.
@@ -270,8 +277,11 @@ No step below needs an Apple Account: the daemon runs each as root.
    staged in `/Applications/.hostkeeper-staging/<sha256>/`. The free space checked first is, per archive to fetch, what is left of it
    to fetch plus three times its size. The archive is read by `GET /v1/xcode/<sha256>` alone, resumed with a range after a broken
    connection (at most 8 connections) or from a copy an interrupted hook left, and refused before `xip` unless its size and SHA-256
-   are the order's. The verified app ends at `<sha256>/Xcode.app`, the archive and the expansion removed. An encrypted archive is
-   deferred until the Mac proof shows `archiveutil`'s use. Any failure defers and removes the staging directory.
+   are the order's. Before `xip`, `pkgutil --check-signature` must report Apple's own signature with a chain ending at Apple Root CA,
+   by its SHA-256 fingerprint, the rule of 2.0's step 2 (Built: `xcode/signature.rs`), so the Mac does not rest on `xip`'s check
+   **[V]** or on the uploader's, which an archive uploaded from a box with no `pkgutil` never had (2.0); otherwise it defers
+   `xcode_archive_not_apple`. The verified app ends at `<sha256>/Xcode.app`, the archive and the expansion removed. An encrypted
+   archive is deferred until the Mac proof shows `archiveutil`'s use. Any failure defers and removes the staging directory.
 2. **On the drained host:** move it to `/Applications/Xcode-<version>.app` (a rename on one volume), `xcodebuild -license accept`,
    `xcodebuild -runFirstLaunch` (it installs packages every Xcode shares, which is why the host is drained, [V]), then `xcode-select -s` to
    the group's default Xcode.
@@ -622,6 +632,14 @@ in its `SUCorePersistedStatePolicyFields` / `SUCoreDDMDeclarationGlobalSettings`
 `Beta`. A file there that cannot be read fails the look (`look_failed`), never reads as a clean Mac. The Mac proof (MP) shows how each
 setting appears on a Mac and corrects these keys.
 
+**The Mac's own setting (decided 2026-11-25).** Without any device management, macOS keeps `AutomaticallyInstallMacOSUpdates` in the
+Mac's own `/Library/Preferences/com.apple.SoftwareUpdate.plist`, and sets it to 1 by default; the farm Macs have it so (10.1.2). On, it
+installs a macOS update and restarts the Mac without a drain, which this section rules out. It is not a conflict to report, since no
+one sets it on purpose: a Mac's daemon turns it off at each start, the way it keeps the Mac awake (Built:
+`crates/hostkeeper-daemon/src/auto_install.rs`; `docs/macos.md`, "macOS installs no update by itself"), and `defaults read` of the key
+(the file is readable without root) shows it. The other keys of that file (`AutomaticDownload`, `AutomaticCheckEnabled`, `CriticalUpdateInstall`) install no macOS update
+and stay as macOS sets them; whether a security response that `CriticalUpdateInstall` lets in ever restarts a Mac is not shown.
+
 ## 6. Builds stay correct across an Xcode change
 
 - **Side by side.** A new Xcode is a new directory. An Xcode a build uses is never replaced under it and one is removed only on a drained
@@ -875,6 +893,38 @@ launchd job, no account, no install. What each read showed, and what it decides:
 - **The minor update (MP-U1 to MP-U3) cannot be shown, because none is pending.** `softwareupdate --list` finds nothing, and
   `--list-full-installers` lists 27.2.1 and older only.
 
+### 10.1.3 The owner's steps, shrunk, 2026-11-25
+
+The six steps 10.2 left to the owner were each weighed: does it need the owner, and if not, who does it. Nothing in this subsection
+was run on a Mac: each line is a decision and what it rests on, and the runs it leads to are recorded here when they are made. What
+is left for the owner is one session, `docs/operations/mac-proof-owner-session.md`.
+
+- **The Xcode archive.** Stays the owner's (the Apple Account's two-factor prompt, 2.0), now in a browser on an operator's Linux box
+  (2.0, "From a box that is not a Mac"). The checks `xcode-push` made on the operator's Mac move to the Mac that stages it: the stage
+  now runs `pkgutil --check-signature` with the same rule before `xip` (2.4, Built). So MP-X2's positive case and MP-I1, MP-I3 and
+  MP-I5 are one `xcode` run on the proof Mac, from the store. MP-X1 (paths on the operator's Mac) and MP-X3 to MP-X6 (what the
+  operator's `pkgutil` and `xip` say of a damaged archive and its table of contents) are not run on this route: the stage's verdict
+  and its deferral reasons are tested over fixtures, and the real archive's run shows the positive case.
+- **The administrator's password.** Handed over (a file on the operator's side) but not used: the lead does not put it on a Mac by
+  hand. It serves one purpose, the update account's Secure Token (5.5), and how it reaches a Mac is the owner's choice (the session's
+  step 4). Built, it is read from the Blueprint's hostkeeper settings, `/Library/Managed Preferences/dev.hostkeeper.config.plist`;
+  whether other users of the Mac can read that file is not shown, and a `stat` of it in the administrator's `hk ssh` session, with no `sudo`, shows it **[V]**. A
+  build job runs as a user of the Mac, so if they can, neither password goes there.
+- **FileVault on, and its pre-boot password.** Off the list: a Mac not reported FileVault off is never ordered `macos`
+  (`filevault_not_ready`), and the ruling is FileVault off (question 4). MP-A7, MP-A8, MP-U4, MP-U5 and MP-U8's FileVault-on case
+  prove a path no run takes; they come back only if FileVault is wanted on build Macs.
+- **Apple Business settings.** Stay the owner's (5.5.1: the API cannot make them), in one sitting on a Blueprint of the proof Mac's
+  own, read from the daemon's report (`mdmConflicts`, after a probe run, since the daemon looks again when a turn ends) rather than
+  from a root shell, as `xcode-one-action.md` 6.2 has it.
+- **A major upgrade.** Nothing to choose: every farm Mac runs macOS 27, the newest major (10.1.1). It stays the owner's choice when
+  macOS 28 ships (`macos_major` on one Mac's own group).
+- **The Mac's own `AutomaticallyInstallMacOSUpdates` 1.** Decided by the lead, as the rule of 5.8 already implies: off. The daemon
+  turns it off at each start (5.8, "The Mac's own setting"; Built), and a `defaults read` of the key, which needs no root, shows it **[V]**.
+
+**A minor macOS update through a run on the proof Mac** (MP-U1 to MP-U3) still cannot be made: none was offered (10.1.2), and no
+farm Mac has the update account, which a run needs (`no_update_account`). The account waits for the owner's answer to the session's
+step 4.
+
 ### 10.2 Each [V]
 
 Status `not run` means: not yet run on a Mac. The common reasons: no root shell on any farm Mac (10.1, until 10.1.2); no Mac drained in a group
@@ -883,23 +933,23 @@ Apple Business); a major upgrade, which cannot be undone, needs the owner's choi
 
 | [V] | Section | Settled by | Status | What each result decides |
 |---|---|---|---|---|
-| `xcode-push` runs only on macOS, with `pkgutil`, `xip` and `plutil` at their paths | 2.0 | MP-X1 | not run: needs the operator's own Mac | paths present: as built (`xcode_push/mod.rs` `Mac::system`); elsewhere: change those paths |
-| `pkgutil --check-signature` on a real `.xip` exits 0, `Status: signed Apple Software`, chain ending at `Apple Root CA` with the fingerprint the code holds | 2.0, 2.4 | MP-X2, MP-X3 | not run: needs a real archive (the Apple Account, owner's Mac) | as expected: `signature.rs` stands; other status text or root: change `SIGNED_BY_APPLE` / `APPLE_ROOT_CA*`, never widening to a developer-ID status; no signature (an encrypted archive): step 2 needs another check (MP-X6) |
+| `xcode-push` runs only on macOS, with `pkgutil`, `xip` and `plutil` at their paths | 2.0 | MP-X1 | not run: on the route of 10.1.3 the archive comes from an operator's Linux box, and its checks run on the staging Mac instead | paths present: as built (`xcode_push/mod.rs` `Mac::system`); elsewhere: change those paths |
+| `pkgutil --check-signature` on a real `.xip` exits 0, `Status: signed Apple Software`, chain ending at `Apple Root CA` with the fingerprint the code holds | 2.0, 2.4 | MP-X2, MP-X3 | not run: needs a real archive (the owner's download, session step 1); the positive case is now the staging Mac's `pkgutil` in an `xcode` run (10.1.3); the negative cases are the stage's tests | as expected: `signature.rs` stands; other status text or root: change `SIGNED_BY_APPLE` / `APPLE_ROOT_CA*`, never widening to a developer-ID status; no signature (an encrypted archive): step 2 needs another check (MP-X6) |
 | The archive's version and build are readable | 2.0, 2.2 | MP-X4, MP-X5 | not run | the built read expands the archive and reads `Contents/Info.plist` and `Contents/version.plist`; the copy of `xip`'s manual page read (an older macOS's) documents only `--expand`, not checked against macOS 26, so 2.2's "`xip` lists it before it expands" is unproven and is changed to the expand-then-read if MP-X4 finds none |
-| `xip --expand` checks Apple's signature | 2.4 | MP-I1 | not run | refuses a damaged or re-signed archive: the stage step relies on it; expands it anyway: stage runs `pkgutil --check-signature` first, as `xcode-push` does |
+| `xip --expand` checks Apple's signature | 2.4 | MP-I1 | not run: an `xcode` run on the proof Mac, after session step 1; the stage no longer rests on it (`pkgutil` first, 2.4) | refuses a damaged or re-signed archive: the stage step relies on it; expands it anyway: stage runs `pkgutil --check-signature` first, as `xcode-push` does |
 | An encrypted archive is expanded with `archiveutil` as `xcodes` does | 2.4 | MP-I2, MP-X6 | not run: needs an encrypted release | other tools run `archiveutil extractXcodeAEA <archive>` in the destination directory (read in their sources, not run); the store names every archive `<sha256>.xip` (`xcode_store.rs`), so an encrypted one needs its kind recorded beside it, or the stage step choosing by the file's first bytes |
-| `xcodebuild -runFirstLaunch` installs packages every Xcode shares | 2.4 | MP-I3 | not run | the receipts it adds (`pkgutil --pkgs` before and after) say whether the drain is needed for it |
+| `xcodebuild -runFirstLaunch` installs packages every Xcode shares | 2.4 | MP-I3 | not run: the same `xcode` run | the receipts it adds (`pkgutil --pkgs` before and after) say whether the drain is needed for it |
 | Simulator platforms by `xcodebuild -exportPlatform` and `-importPlatform`; `xcode-push` uploads them | 2.4 | MP-I4 | not run | a copy of `xcodebuild`'s manual page read (not checked on a Mac) lists neither `-exportPlatform` nor `-importPlatform`; the route other tools use is, as recalled and not checked, `-downloadPlatform <platform> -exportPath <dir>`, then `-importPlatform <file>`. If MP-I4 shows that, 2.4 names it, and the export needs one download from Apple on the pushing Mac |
-| An Xcode install, a swap and a removal, js-agent probing before and after | 2.4, MP | MP-I5 | not run: needs the drained Mac and its js-agent | js-agent's probe reads `/Applications/Xcode*.app/Contents/version.plist` and runs nothing (komira-ai/jobscheduler); what it reports after each step decides whether J2's re-read in `resume` is enough |
+| An Xcode install, a swap and a removal, js-agent probing before and after | 2.4, MP | MP-I5 | not run: the same `xcode` run, which drains the Mac through js-agent | js-agent's probe reads `/Applications/Xcode*.app/Contents/version.plist` and runs nothing (komira-ai/jobscheduler); what it reports after each step decides whether J2's re-read in `resume` is enough |
 | `sysadminctl -addUser` and `-secureTokenOn` take both passwords on standard input (`-`), or need a pseudo-terminal | 5.5 | MP-A2, MP-A3 | not run | on a pipe: the Built stdin runner is enough; only from a terminal: the daemon gives it a pseudo-terminal it owns; a password reaches no argument in either case |
 | The Secure Token grant, and the account hidden | 5.5 | MP-A1, MP-A4, MP-A5 | MP-A1 shown (10.1.2): the reads before the account, and a hidden account's `dsAttrTypeNative:IsHidden: 1`, fixed; MP-A4, MP-A5 not run | read three ways (`sysadminctl -secureTokenStatus`, `diskutil apfs listCryptoUsers /`, `fdesetup list`); the built read uses the first (`maintenance_account.rs`) |
-| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8, MP-E13 | MP-A6 from a root shell with FileVault off shown (10.1.2); from launchd with FileVault off, not run: it is MP-E13's probe run, which needs no cordon, once the coordinator and the Mac run a release with the probe; with FileVault on, not run: needs FileVault turned on by the owner | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
-| A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: no minor update pending on 2026-11-25 (10.1.2) | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
-| A major upgrade by `startosinstall --nointeraction --user --stdinpass`, FileVault off and on | 5.5 | MP-U6 to MP-U8 | not run: cannot be undone; needs a Mac on an older major and the owner's choice | as for the minor; one Mac can show only one of the two FileVault cases |
-| `startosinstall` restarts authenticated with FileVault on | 5.5 | MP-U8 | not run (as above) | if it stops at the pre-boot login, major upgrades are ordered only on Macs with FileVault off |
+| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8, MP-E13 | MP-A6 from a root shell with FileVault off shown (10.1.2); from launchd with FileVault off, not run: it is MP-E13's probe run, which needs no cordon, once the coordinator and the Mac run a release with the probe; with FileVault on, not needed: no run orders `macos` on a Mac whose FileVault is not off (10.1.3) | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
+| A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: no minor update pending on 2026-11-25 (10.1.2) and no update account on any farm Mac (10.1.3); MP-U4 and MP-U5 (FileVault on) not needed (10.1.3) | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
+| A major upgrade by `startosinstall --nointeraction --user --stdinpass`, FileVault off and on | 5.5 | MP-U6 to MP-U8 | not run: cannot be undone; every farm Mac runs the newest major, so none is possible until macOS 28 (10.1.3); then the owner's choice | as for the minor; one Mac can show only one of the two FileVault cases |
+| `startosinstall` restarts authenticated with FileVault on | 5.5 | MP-U8 | not needed: a major upgrade is never ordered with FileVault on (10.1.3) | if it stops at the pre-boot login, major upgrades are ordered only on Macs with FileVault off |
 | An install on macOS 26 or later stops on a step that needs the screen | 5.5 | MP-U9 | not run | a pane after the restart that waits for a person: the host does not come back by itself, and `verify` must name it |
-| How each setting of 5.8 shows: `/Library/Managed Preferences`, the declarations the Mac reports, the undocumented DDM state file | 5.8 | MP-M1 to MP-M6 | MP-M1 baseline shown (10.1.2): none of the files, no conflict; MP-M2 to MP-M6 not run: each setting is made in Apple Business by the owner, one at a time | each key seen corrects `maintenance_mdm.rs`'s keys; a nested `Deferrals` or `AutomaticActions` dictionary with nothing on in it is reported as on by `is_on`, which MP-M4 checks |
-| Apple Business's `SOFTWARE_UPDATE` Configuration is the enforcement declaration | 5.5.1 | MP-M7 | not run (owner's console) | 5.5.1 stays "not chosen" either way; the answer only says whether the Blueprint route would work |
+| How each setting of 5.8 shows: `/Library/Managed Preferences`, the declarations the Mac reports, the undocumented DDM state file | 5.8 | MP-M1 to MP-M6 | MP-M1 baseline shown (10.1.2): none of the files, no conflict; MP-M2 to MP-M6 not run: the owner makes the settings in Apple Business in one sitting (session steps 2 and 3), read from the daemon's report | each key seen corrects `maintenance_mdm.rs`'s keys; a nested `Deferrals` or `AutomaticActions` dictionary with nothing on in it is reported as on by `is_on`, which MP-M4 checks |
+| Apple Business's `SOFTWARE_UPDATE` Configuration is the enforcement declaration | 5.5.1 | MP-M7 | not run: session step 3 (owner's console) | 5.5.1 stays "not chosen" either way; the answer only says whether the Blueprint route would work |
 
 ### 10.3 What the proof must allow for
 
