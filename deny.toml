@@ -6,6 +6,17 @@
 
 [graph]
 all-features = true
+# The targets this workspace is built for: CI's tests and the musl and gnu builds of
+# artifacts.yml on Linux x86_64 and arm64, and the Mac's on Apple silicon. Every check here
+# judges the crates compiled for one of them; a crate only another target pulls in (Windows,
+# WebAssembly, Redox) is in no binary we build. A target added to a build is added here.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+]
 
 # What `cargo xtask advisories` reports. No advisory is ignored here: a finding goes to the
 # issue, not into an `ignore` list.
