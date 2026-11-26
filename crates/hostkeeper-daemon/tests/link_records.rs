@@ -19,7 +19,7 @@ use hostkeeper_observe::{
     HealthView, ServiceState, UnhealthyReason, UnobservedReason, VersionView,
 };
 use hostkeeper_steps::record::RECORD_FILE;
-use support::{Rig, name};
+use support::{PENDING_LINE, Rig, name};
 use support_apt::AptRig;
 use support_apt::seen::succeeded;
 use support_apt::services;
@@ -136,6 +136,41 @@ fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
     );
     gate.release();
     order.join().expect("the order's thread");
+    assert_eq!(
+        records.installed().expect("read"),
+        [apt_listed("web", "2.0.0", None, Some(1))]
+    );
+}
+
+/// Catches a daemon that frees the farm's update slot while its update waits for its promotion: an
+/// update whose first `verify` says `promotion_pending` is listed updating to its target while the
+/// post-success watcher's `verify` is held, and listed updating nothing once the watcher recorded
+/// its verdict.
+#[test]
+fn an_update_whose_promotion_is_pending_is_listed_updating_until_its_watcher_ends() {
+    let apt = AptRig::new("records-promotion");
+    let order = services::update_of(&apt, "web", "2.0.0", 1);
+    let daemon = Arc::new(apt.daemon());
+    let records = DaemonRecords::new(Arc::clone(&daemon));
+    apt.rig
+        .launcher
+        .replies("web", Step::Verify, &[(0, PENDING_LINE), (0, "")]);
+    let first = apt.rig.launcher.hold("web", Step::Verify);
+    let running = Arc::clone(&daemon);
+    let order = spawn("the order", move || running.order(&order));
+    first.entered(&order).expect("the first verify is entered");
+    // The first verify has been taken from the launcher, so this holds the watcher's.
+    let watcher = apt.rig.launcher.hold("web", Step::Verify);
+    first.release();
+    watcher
+        .entered(&order)
+        .expect("the watcher's verify is entered");
+    assert_eq!(
+        records.installed().expect("read"),
+        [apt_listed("web", "2.0.0", Some("2.0.0"), Some(1))]
+    );
+    watcher.release();
+    assert_eq!(order.join().expect("the order's thread"), succeeded());
     assert_eq!(
         records.installed().expect("read"),
         [apt_listed("web", "2.0.0", None, Some(1))]
