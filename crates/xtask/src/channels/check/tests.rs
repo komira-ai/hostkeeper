@@ -834,3 +834,35 @@ fn a_mirror_out_of_sync_then_another_failure_fails_with_the_last_answer() {
         "apt-get update failed (run 2 times): E: Could not get lock"
     );
 }
+
+#[test]
+fn both_updates_out_of_sync_each_have_all_the_pauses() {
+    let (calls, pauses, checked) = with_updates(
+        "both-updates",
+        &[
+            Some(MIRROR_SYNC),
+            Some(MIRROR_SYNC),
+            None,
+            Some(MIRROR_SYNC),
+            Some(MIRROR_SYNC),
+            Some(MIRROR_SYNC),
+            None,
+        ],
+    );
+    assert_eq!(pauses, [30, 60, 30, 60, 120].map(Duration::from_secs));
+    assert_eq!(updates_of(&calls), 7);
+    assert_eq!(checked.expect("checked").len(), 6);
+}
+
+#[test]
+fn a_mirror_whose_url_only_starts_like_the_repository_is_another_mirror() {
+    let (calls, pauses, checked) = with_updates(
+        "prefix",
+        &[Some(
+            "E: Failed to fetch https://packages.komira.ai/apt-other/dists/testing/main/binary-amd64/Packages.gz  Hash Sum mismatch",
+        )],
+    );
+    assert_eq!(pauses, [Duration::from_secs(30)]);
+    assert_eq!(updates_of(&calls), 3);
+    checked.expect("checked");
+}

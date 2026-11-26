@@ -48,7 +48,7 @@ pub(crate) const KEYRING_NAME: &str = "komira-archive-keyring.gpg";
 /// The pauses before each repeated `apt-get update` of an Ubuntu mirror out of sync: a mirror's
 /// cache can serve an older index than its `Release` names for a few minutes, so `apt-get update`
 /// is run at most `UPDATE_PAUSES.len() + 1` times in about three and a half minutes.
-pub(crate) const UPDATE_PAUSES: [Duration; 3] = [
+const UPDATE_PAUSES: [Duration; 3] = [
     Duration::from_secs(30),
     Duration::from_secs(60),
     Duration::from_secs(120),
@@ -191,7 +191,9 @@ pub(crate) struct Apt<'a> {
 /// Whether a failed `apt-get update` failed only because a mirror other than the repository at
 /// `apt_url` is out of sync: every error is a failed fetch apt suspects of a mirror sync ("Mirror
 /// sync in progress?") or a hash mismatch, of a URL not below `apt_url`, but for apt's closing
-/// line that index files were ignored; and there is at least one such fetch.
+/// line that index files were ignored; and there is at least one such fetch. The wording is apt's
+/// (English, `E: ` lines) in the job's image, which is pinned by digest: an image whose apt words
+/// it otherwise makes every failure final, as before this repeat, never a failure ignored.
 fn mirror_out_of_sync(stderr: &str, apt_url: &str) -> bool {
     let ours = format!("{apt_url}/");
     let mut fetches = 0;
@@ -214,7 +216,8 @@ fn mirror_out_of_sync(stderr: &str, apt_url: &str) -> bool {
 }
 
 /// `apt-get update`, run again after each of [`UPDATE_PAUSES`] while it fails only because an
-/// Ubuntu mirror is out of sync ([`mirror_out_of_sync`]): one notice per repeat.
+/// Ubuntu mirror is out of sync ([`mirror_out_of_sync`]): one notice per repeat, printed with the
+/// check's result.
 fn update(host: &dyn Host, r: &Apt) -> Result<Vec<String>, Error> {
     let mut notices = Vec::new();
     let mut pauses = UPDATE_PAUSES.iter();
