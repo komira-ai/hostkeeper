@@ -4,7 +4,9 @@
 //! The members of a plan that have not started are the hosts it orders next
 //! ([`crate::stages::View`]). But the decision checks rules before the plan's gate
 //! ([`crate::decide`]), and one of them can hold such a host for as long as its cause stands: the
-//! host holds a halt of the service of its own (`halted_here`, `stale_halt_here`), its install
+//! host reported a halt of the service that the desired version moved past and that still holds
+//! it (`halted`, [`crate::halt::HaltScope`]), it holds a halt of the service of its own
+//! (`halted_here`, `stale_halt_here`), its install
 //! waits for a package listed before it that is not installed (`install_order`), it was moved into
 //! its group and is not admitted yet or its uninstalls are not done (`moving`), another service
 //! updates on it (`busy_elsewhere`), or its agent cannot take the order (`unsupported`,
@@ -41,9 +43,10 @@ fn held(
     now: Duration,
 ) -> bool {
     let service = def.name.as_str();
-    let halted_here = fleet
-        .occupant(service, id)
-        .is_some_and(|host| host.beat.local_halt.is_some());
+    let halted_here = fleet.halts_host_in(def, Some(&want.version), id)
+        || fleet
+            .occupant(service, id)
+            .is_some_and(|host| host.beat.local_halt.is_some());
     // A host moving into its group is held until it is admitted and, once it is, while its
     // uninstalls are not done, as the decision holds it (`moving`).
     let moving = fleet.holds_moving(id) || (fleet.is_moving(id) && fleet.uninstalls_listed(id));

@@ -304,8 +304,9 @@ fn halt_now(rig: &Rig) -> Option<crate::ops::Halt> {
 
 /// Catches: a halt's origin ignored when CI sets a new version: the updater's halt
 /// (`artifact_changed`) is lifted by CI's set of 3.0, audited as CI's with the workflow and
-/// counted as a clear; a hook's halt stays; and CI's set of the updater halt's own target lifts
-/// nothing.
+/// counted as a clear; a hook's halt stays, holding the host that raised it (`d1` is told nothing)
+/// while another host (`d2`) is ordered 3.0 (komira-ai/hostkeeper#418); and CI's set of the
+/// updater halt's own target lifts nothing.
 #[tokio::test]
 async fn ci_write_lifts_an_updater_halt_but_not_a_hook_halt() {
     let three = r#"{"version":"3.0","min_up":{"storage":0,"frontend":0}}"#;
@@ -344,7 +345,14 @@ async fn ci_write_lifts_an_updater_halt_but_not_a_hook_halt() {
     hook.set(three).await;
     assert!(halt_now(&hook).is_some(), "a hook's halt stays");
     assert_eq!(wanted(&hook), version("3.0"));
-    assert_eq!(ask(&hook, "d2", beat("1.0"), 2_015), ServiceReply::Nothing);
+    assert_eq!(
+        ask(&hook, "d1", halting("disk_tainted"), 2_010),
+        ServiceReply::Nothing
+    );
+    assert!(matches!(
+        ask(&hook, "d2", beat("1.0"), 2_015),
+        ServiceReply::Update { .. }
+    ));
 }
 
 /// Catches: an updater's halt lifted over a hook's report kept while it stood (that report is a

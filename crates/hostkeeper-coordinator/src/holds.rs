@@ -25,6 +25,7 @@ use hostkeeper_wire::version::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::fleet::{Fleet, Marks};
+use crate::halt::HaltScope;
 use crate::ops::OpsState;
 use crate::rollouts::Rollout;
 
@@ -97,8 +98,9 @@ pub fn holding<'a>(
 
 /// What the fleet keeps of the ops state for its decisions: the holds, the hosts each standing
 /// force orders ([`crate::force`]), the assignments ([`crate::assignment`]), the labels, the
-/// exclusions, where each update plan stands ([`crate::rollouts`]), the services halted or
-/// with versions marked bad, which a plan reads of the other services, and the hosts in their turn
+/// exclusions, where each update plan stands ([`crate::rollouts`]), the services halted (and whom
+/// each halt holds, [`HaltScope`]) or with versions marked bad, which a plan reads of the other
+/// services, and the hosts in their turn
 /// of a maintenance run, over every run.
 #[must_use]
 pub fn marks_of(state: &OpsState) -> Marks {
@@ -118,6 +120,11 @@ pub fn marks_of(state: &OpsState) -> Marks {
     let mut group_rollouts: BTreeMap<String, BTreeMap<String, Rollout>> = BTreeMap::new();
     let mut group_halted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut group_forced: BTreeMap<String, BTreeMap<String, BTreeSet<HostId>>> = BTreeMap::new();
+    let mut halt_scopes: BTreeMap<(Option<String>, String), HaltScope> = state
+        .services
+        .iter()
+        .filter_map(|(name, marks)| Some(((None, name.clone()), HaltScope::of_marks(marks)?)))
+        .collect();
     for (group, packages) in &state.host_groups.0 {
         for (package, marks) in packages {
             let name = group.to_string();
@@ -127,11 +134,12 @@ pub fn marks_of(state: &OpsState) -> Marks {
                     .or_default()
                     .insert(package.clone(), marks.rollout.clone());
             }
-            if marks.halt.is_some() {
+            if let Some(scope) = HaltScope::of(marks.halt.as_ref(), &marks.halt_seen) {
                 group_halted
                     .entry(name.clone())
                     .or_default()
                     .insert(package.clone());
+                halt_scopes.insert((Some(name.clone()), package.clone()), scope);
             }
             if let Some(force) = &marks.force {
                 let hosts = force.hosts.iter().filter_map(|host| host.parse().ok());
@@ -146,6 +154,7 @@ pub fn marks_of(state: &OpsState) -> Marks {
         group_rollouts,
         group_halted,
         group_forced,
+        halt_scopes,
         group_mode: false,
         in_maintenance: state
             .maintenance_runs

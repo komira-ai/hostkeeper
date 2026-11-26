@@ -13,9 +13,9 @@
 //! failed hosts as the ceiling, [`crate::failed_hosts`]) it is the operator's to resolve, and it
 //! keeps holding a slot of its own service while it is not healthy, against its role's
 //! `max_updating`, so the service piles no more failures on; where the plan goes on past it, it
-//! holds no slot and the plan stays live while it has other hosts to order. A halted service, a
-//! service at a version marked bad, and a plan held by its failed hosts order nothing until an
-//! operator acts, so they never hold another service's rollout.
+//! holds no slot and the plan stays live while it has other hosts to order. A service a halt holds
+//! at its desired version, a service at a version marked bad, and a plan held by its failed hosts
+//! order nothing until an operator acts, so they never hold another service's rollout.
 //!
 //! A bake counts only for a host of the plan: an excluded or held host, a host that stopped
 //! heartbeating and a host the release picks no package for bake nothing that holds the others.

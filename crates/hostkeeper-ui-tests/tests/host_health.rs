@@ -28,7 +28,7 @@ fn live(node: &str, services: Value) -> Value {
 }
 
 const TAINT_SAID: &str = "the agent is tainted: daemonised_child";
-const HALT_SAID: &str = "js-agent is halted at 0.1.250 by node-07, check tainted: nothing is ordered for it until an operator clears the halt";
+const HALT_SAID: &str = "js-agent is halted at 0.1.250 by node-07, check tainted: the hosts that reported it are ordered nothing of it, and no host is ordered a version it was reported at, until an operator clears the halt";
 const PREREQ_SAID: &str = "node-07 cannot make sure of its host prerequisites (xcode-command-line-tools failed 3 in a row, next try at unix 1800000600: softwareupdate exited 1); its daemon tries again by itself, and until it succeeds the host lacks what its host group needs";
 
 /// js-agent's view on a host whose update hook halted for a taint.

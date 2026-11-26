@@ -346,9 +346,9 @@ impl Coordinator {
         })
     }
 
-    /// `Releases.Halt`: halts a service by hand, as a host's halt report does
-    /// ([`halt::raise_by_operator`]): no host of it is ordered until `ClearHalt` or a force. The
-    /// halt stands at the service's desired version.
+    /// `Releases.Halt`: halts a service by hand ([`halt::raise_by_operator`]): no host of it is
+    /// ordered, whatever version is desired, until `ClearHalt` or a force. The halt stands at the
+    /// service's desired version.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `unknown_service`, `invalid_request` (the reason, or a

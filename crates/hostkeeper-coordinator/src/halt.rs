@@ -2,9 +2,12 @@
 //!
 //! A host whose last update to a service `Failed` in the `halt` phase has found something a
 //! new release cannot fix (a tainted disk, a state no hook can read). The coordinator raises a
-//! halt for the service: every host and role of it is held ([`Gate::Halted`]), a new desired
-//! version does not lift it, the convergence says `halted`, and nothing rolls back. Nothing
-//! retries either, but for one halt: see [`clear_if_absent`].
+//! halt for the service: while its desired version is the version the halt was raised for, every
+//! host and role of it is held ([`Gate::Halted`]), the convergence says `halted`, and nothing rolls
+//! back. A new desired version does not lift it, but it narrows whom it holds ([`HaltScope`]): the
+//! host that raised it, and each host that reported a halt while it stood, stay held, and the other
+//! hosts are ordered the new version, until one of them halts at it too. Nothing retries either,
+//! but for one halt: see [`clear_if_absent`].
 //! The coordinator has no pager: a standing halt is an alert ([`crate::alerts`]), logged at
 //! error with the field `alert = "halt"` once when it appears, which is what an operator alert
 //! watches.
@@ -25,7 +28,8 @@
 //! by the operator's `clear_halt` and also by CI's set of a desired version other than its
 //! target ([`lift_by_ci`]): a fix-forward release is the remedy. A halt a hook raised (its exit
 //! 76; any other reason) is lifted only by `clear_halt`, and so is a halt an operator raised
-//! (`Releases.Halt`, [`raise_by_operator`]). A force lifts any of them ([`crate::force`]).
+//! (`Releases.Halt`, [`raise_by_operator`]). A force lifts any of them ([`crate::force`]). An
+//! operator's halt names no host, so it holds every host whatever version is desired.
 //!
 //! One halt lifts itself: when the host that raised it reports the service absent (nothing is
 //! installed, so nothing is left to protect: the halted order's rollback took the package off the
@@ -72,7 +76,7 @@
 //! exactly that report, and when the service is halted already: the first halt stands until it
 //! is cleared (the convergence names it).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use hostkeeper_wire::HostId;
@@ -87,7 +91,9 @@ use crate::identity::Identity;
 use crate::membership::{self, Standing};
 use crate::operate::{clear_standing, cleared};
 use crate::ops::AuditBy;
-use crate::ops::{AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, Write};
+use crate::ops::{
+    AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, ServiceOps, Write,
+};
 use crate::services::{ServiceDef, Services};
 
 /// The feature an agent announces to be told the clear generations.
@@ -563,12 +569,81 @@ pub(crate) fn standing(state: &OpsState, group: Option<&GroupName>, service: &st
     state.halt_in(group, service).cloned()
 }
 
-/// [`Gate::Halted`] for a service that is halted; for a host that holds a halt of the service of
-/// its own (its beat's `local_halt`), [`Gate::HaltedHere`], or [`Gate::StaleHaltHere`] when the
-/// generation it holds is above the service's (the one this coordinator issued last, which only
-/// grows); and [`decide_marked`] (which holds the versions marked bad) for the rest.
+/// Whom a standing halt holds (komira-ai/hostkeeper#418). A halt is raised for a host's state, at
+/// the version its update was for: while that version, or the version of a report kept while it
+/// stood, is the one desired, every host of the service is held, so a release that halts on one
+/// host is ordered to no other. Once another version is desired the halt holds the hosts that
+/// reported it alone, and the other hosts are ordered the new version; a host that halts at that
+/// version too is kept with the halt, and holds every host again. An operator's halt
+/// ([`HaltOrigin::Operator`]) names no host and holds every host whatever is desired. Only a clear,
+/// a force or the lift of an updater's halt ends it. An updater's halt narrows as a hook's does,
+/// but a set of another version lifts it ([`lift_by_setter`]), so it stands narrowed only when that
+/// lift could not be written or a hook's report is kept with it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HaltScope {
+    /// An operator's halt: it holds every host, whatever version is desired.
+    every: bool,
+    /// The versions the halt and the reports kept while it stood were for.
+    targets: BTreeSet<Version>,
+    /// The hosts that reported them, by node id.
+    hosts: BTreeSet<String>,
+}
+
+impl HaltScope {
+    /// The scope of the standing halt `halt`, with the reports `seen` kept while it stood; `None`
+    /// when no halt stands.
+    pub(crate) fn of(halt: Option<&Halt>, seen: &[HaltAck]) -> Option<Self> {
+        let halt = halt?;
+        let reports = std::iter::once((&halt.node_id, &halt.target))
+            .chain(seen.iter().map(|seen| (&seen.node_id, &seen.target)));
+        let mut scope = Self {
+            every: halt.origin == HaltOrigin::Operator,
+            ..Self::default()
+        };
+        for (node, target) in reports {
+            scope.targets.insert(target.clone());
+            if !node.is_empty() {
+                scope.hosts.insert(node.clone());
+            }
+        }
+        Some(scope)
+    }
+
+    /// The scope of the standing halt in `marks`.
+    pub(crate) fn of_marks(marks: &ServiceOps) -> Option<Self> {
+        Self::of(marks.halt.as_ref(), &marks.halt_seen)
+    }
+
+    /// Whether the halt holds every host while `desired` is the desired version (`None`: none
+    /// is): an operator's halt, no desired version, or one a report of the halt was for.
+    #[must_use]
+    pub(crate) fn holds_every_host(&self, desired: Option<&Version>) -> bool {
+        self.every || desired.is_none_or(|version| self.targets.contains(version))
+    }
+
+    /// Whether the halt holds the host `node` while `desired` is the desired version: every host,
+    /// or a host that reported it.
+    #[must_use]
+    pub(crate) fn holds(&self, desired: Option<&Version>, node: &str) -> bool {
+        self.holds_every_host(desired) || self.hosts.contains(node)
+    }
+}
+
+/// Whether the standing halt in `marks`, if any, holds every host while `version` is desired
+/// ([`HaltScope::holds_every_host`]): what stops an update plan.
+#[must_use]
+pub(crate) fn stops(marks: &ServiceOps, version: &Version) -> bool {
+    HaltScope::of_marks(marks).is_some_and(|scope| scope.holds_every_host(Some(version)))
+}
+
+/// [`Gate::Halted`] for a host a standing halt of the service holds ([`HaltScope::holds`]: every
+/// host while the desired version is one the halt was raised for, else the hosts that reported
+/// it); for a host that holds a halt of the service of its own (its beat's `local_halt`),
+/// [`Gate::HaltedHere`], or [`Gate::StaleHaltHere`] when the generation it holds is above the
+/// service's (the one this coordinator issued last, which only grows); and [`decide_marked`]
+/// (which holds the versions marked bad) for the rest.
 ///
-/// A halt is checked first, so that a halted service is told nothing: not an order, and not
+/// A halt is checked first, so that a halted host is told nothing: not an order, and not
 /// the reason a version is bad. The halt, the generation and the bad versions are read under one
 /// lock. A host's own halt comes next: it refuses every order of the service (`halted`), so it
 /// is told why it is held, never the `failed_here` its refusal would read as.
@@ -582,9 +657,12 @@ pub(crate) fn decide(
     now: Duration,
 ) -> Decision {
     let group = services.get(service).and_then(ServiceDef::group);
-    let (halted, issued, bad) = ops.read(|state| {
+    let (scope, issued, bad) = ops.read(|state| {
         (
-            standing(state, group, service).is_some(),
+            HaltScope::of(
+                state.halt_in(group, service),
+                state.halt_seen_in(group, service),
+            ),
             state.halt_generation_in(group, service),
             state
                 .services
@@ -593,7 +671,8 @@ pub(crate) fn decide(
                 .unwrap_or_default(),
         )
     });
-    if halted {
+    let wanted = desired.get(service).map(|want| &want.version);
+    if scope.is_some_and(|scope| scope.holds(wanted, id.as_str())) {
         return Decision::Gate(Gate::Halted);
     }
     let held = fleet

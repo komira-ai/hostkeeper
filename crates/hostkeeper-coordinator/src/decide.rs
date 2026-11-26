@@ -144,7 +144,9 @@ pub fn decide_in(
 #[serde(rename_all = "snake_case")]
 pub enum Gate {
     /// The service is halted: a host reported a failure no version can repair and an operator
-    /// has not cleared it. Checked before every other rule ([`crate::halt::decide`]).
+    /// has not cleared it, and the halt holds this host (every host while the desired version is
+    /// one the halt was raised for, else the hosts that reported it: [`crate::halt::HaltScope`]).
+    /// Checked before every other rule ([`crate::halt::decide`]).
     Halted,
     /// The host holds a halt of the service of its own (its beat's `local_halt`) that no halt of
     /// this coordinator stands for, under a generation this coordinator has issued: it refuses

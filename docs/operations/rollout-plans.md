@@ -91,7 +91,7 @@ plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `b
 | waits | meaning |
 |---|---|
 | `paused` | an operator paused the plan (by whom, and why, is shown) |
-| `halted` | the package is halted, or the desired version is marked bad |
+| `halted` | a halt holds every host of the package at its desired version (an operator's halt, or a host's halt reported at that version: [holds-and-force.md](holds-and-force.md#marks)), or the desired version is marked bad |
 | `rollout_elsewhere` | another service's rollout is live (see `--live-rollouts` below) |
 | `quiet` | the coordinator was started recently and has not heard the fleet, or (on the database store) the fleet's beats had a gap, or the database's link is lost |
 | `manual_advance` | the next stage is `manual`: it waits for `Rollouts.Advance` |

@@ -689,6 +689,21 @@ impl OpsState {
         acked.map_or(&[], Vec::as_slice)
     }
 
+    /// The halt reports kept while the halt of `service` stood, as a decision in `group` reads
+    /// them, without copying the marks.
+    pub(crate) fn halt_seen_in(&self, group: Option<&GroupName>, service: &str) -> &[HaltAck] {
+        let seen = match group {
+            None => self.services.get(service).map(|marks| &marks.halt_seen),
+            Some(group) => self
+                .host_groups
+                .0
+                .get(group)
+                .and_then(|packages| packages.get(service))
+                .map(|marks| &marks.halt_seen),
+        };
+        seen.map_or(&[], Vec::as_slice)
+    }
+
     /// How many halts of `service` an operator has cleared, as a decision in `group` reads it.
     pub(crate) fn halt_generation_in(&self, group: Option<&GroupName>, service: &str) -> u64 {
         match group {

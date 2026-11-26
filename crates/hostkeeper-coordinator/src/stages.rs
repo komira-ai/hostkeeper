@@ -299,7 +299,8 @@ pub struct Member {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Wait {
-    /// The service is halted, or its desired version is marked bad.
+    /// A halt of the service holds every host of it at its desired version
+    /// ([`crate::halt::HaltScope`]), or its desired version is marked bad.
     Halted,
     /// An operator paused the plan.
     Paused,
@@ -378,7 +379,8 @@ impl View {
 
     /// The plan of `def` for `want` at `now` from the position `kept`, having entered every
     /// stage it may enter by itself since ([`reach`]): where the decision and the status read it.
-    /// It enters none while the plan is paused, the service is halted or its version marked bad,
+    /// It enters none while the plan is paused, a halt holds every host of the service at its
+    /// version ([`crate::halt::HaltScope`]) or its version is marked bad,
     /// or the coordinator is quiet, as the coordinator writes none then; otherwise the
     /// coordinator writes the position it reaches at the same heartbeat
     /// ([`crate::rollouts::advance`]), with its audit entry.
