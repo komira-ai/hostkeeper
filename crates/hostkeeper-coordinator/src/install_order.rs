@@ -94,9 +94,9 @@ pub(crate) fn uninstall_waits(
 
 /// Whether `earlier`, which the host `id` is not past, holds the packages listed after it back:
 /// it is not installed on the host, excluded or not ([`installed_on`]), its own decision is not
-/// one of the four that say it cannot be, and the host did not decline its install at the desired version (an open deferral of that
-/// version) while nothing but its wait, its next order or another order on the host stands in its
-/// way.
+/// one of the four that say it cannot be, and the host did not decline its install at the
+/// desired version (an open deferral of that version) while nothing but its wait, its next order
+/// or another order on the host stands in its way.
 fn holds_back(
     earlier: &ServiceDef,
     want: Option<&Desired>,
