@@ -33,7 +33,7 @@ use rustix::io::Errno;
 use serde::{Deserialize, Serialize};
 
 use crate::names::Reason;
-use crate::order::DeferredReport;
+use crate::order::{DeferredReport, OrderResult};
 use crate::ports::Log;
 
 /// The file's name in the service's step-record directory.
@@ -375,4 +375,11 @@ impl Book {
             self.unwritten.remove(&key);
         }
     }
+}
+
+/// The deferral a deferred verdict starts at `now`, under the verdict's reason, or `deferred`
+/// when it gave none.
+pub(crate) fn deferral_of(result: &OrderResult, now: u64, retry_after_secs: u64) -> Deferral {
+    let reason = result.reason.clone().unwrap_or_else(Reason::deferred);
+    Deferral::starting(result.target.clone(), reason, now, retry_after_secs)
 }

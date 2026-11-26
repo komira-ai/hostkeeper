@@ -20,6 +20,7 @@ mod full_disk_access;
 mod grpc;
 mod grpc_reply;
 mod halts;
+mod health;
 mod host_facts;
 mod host_ssh;
 mod kbf;

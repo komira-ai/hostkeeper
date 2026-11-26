@@ -627,7 +627,7 @@ fn every_maintenance_request_field_is_a_flag_and_none_is_secret() {
     };
     assert_eq!(
         values("schedule", "kinds"),
-        ["macos", "xcode", "linux", "reboot", "probe"]
+        ["macos", "xcode", "linux", "reboot", "probe", "repair"]
     );
     assert_eq!(
         values("list", "states"),

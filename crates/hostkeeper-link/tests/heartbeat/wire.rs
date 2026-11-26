@@ -53,6 +53,9 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
         record_try: None,
         installer: None,
         drift: None,
+        health_reason: None,
+        health_body: None,
+        restarts: None,
     }
 }
 
@@ -76,6 +79,7 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 
@@ -362,6 +366,9 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
                 record_try: None,
                 installer: None,
                 drift: None,
+                health_reason: None,
+                health_body: None,
+                restarts: None,
             }
         })
         .collect();

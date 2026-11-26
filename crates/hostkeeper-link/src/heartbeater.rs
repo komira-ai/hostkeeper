@@ -112,12 +112,11 @@ use crate::beat::{
     OPERATOR_KEYS, Observed, PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
     SSH, ServiceFacts, fit,
 };
-use crate::deferral::{Book, Deferral};
+use crate::deferral::{Book, deferral_of};
 use crate::host_facts::PushedFacts;
 use crate::host_ssh::PushedSsh;
-use crate::names::Reason;
 use crate::order::{
-    Acknowledged, MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply, Verb,
+    Acknowledged, MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply, Verb, answered,
 };
 use crate::ports::{
     BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
@@ -541,6 +540,9 @@ impl Heartbeater {
                     .halts
                     .holding(&name)
                     .map(|held| LocalHalt::at(held, now)),
+                health_reason: None,
+                health_body: None,
+                restarts: None,
                 name,
             });
         }
@@ -600,6 +602,8 @@ impl Heartbeater {
                 .as_ref()
                 .filter(|_| self.maintains())
                 .map(|source| source.report()),
+            // No daemon of this release reads its host's hardware health (`host-health-v1`).
+            health: None,
         })
     }
 
@@ -695,6 +699,9 @@ impl Heartbeater {
             installer: None,
             drift: None,
             local_halt: None,
+            health_reason: None,
+            health_body: None,
+            restarts: None,
             name,
         }
     }
@@ -712,6 +719,9 @@ impl Heartbeater {
             ssh,
             prerequisites,
             maintain,
+            // Records the daemon holds are dropped by these; it holds none in this release, since
+            // it announces no `host-health-v1`.
+            health_written: _,
         } = reply;
         self.advertised = Features::of(&features);
         let facts_held = self.write_facts(facts);
@@ -972,26 +982,4 @@ impl Heartbeater {
             log.line(&format!("{named} answered {}", answered(&answer)));
         }));
     }
-}
-
-/// An answer as the log says it: the outcome, then the reason and the detail when it has them.
-fn answered(result: &OrderResult) -> String {
-    let mut text = result.outcome.as_str().to_owned();
-    if let Some(reason) = &result.reason {
-        text.push_str(": ");
-        text.push_str(reason.as_str());
-    }
-    if let Some(detail) = &result.detail {
-        text.push_str(" (");
-        text.push_str(detail);
-        text.push(')');
-    }
-    text
-}
-
-/// The deferral a deferred verdict starts at `now`, under the verdict's reason, or `deferred`
-/// when it gave none.
-fn deferral_of(result: &OrderResult, now: u64, retry_after_secs: u64) -> Deferral {
-    let reason = result.reason.clone().unwrap_or_else(Reason::deferred);
-    Deferral::starting(result.target.clone(), reason, now, retry_after_secs)
 }

@@ -130,6 +130,9 @@ fn record_now() -> op::InventoryRecord {
         used_unix: 1_800_000_060,
         platform: 0,
         host_group: String::new(),
+        // Host health's (additions_host_health.rs).
+        installed_memory_bytes: 0,
+        memory_modules: 0,
     }
 }
 

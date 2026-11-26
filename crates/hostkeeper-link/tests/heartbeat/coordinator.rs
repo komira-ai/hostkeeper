@@ -349,6 +349,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -372,6 +373,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             ssh: None,
             prerequisites: None,
             maintain: None,
+            health_written: Vec::new(),
         })
     );
     server.join().expect("the server").expect("a request");

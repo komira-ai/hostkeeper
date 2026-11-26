@@ -27,6 +27,9 @@ fn required(name: &str, detail_len: usize) -> ServiceFacts {
         record_try: None,
         installer: None,
         drift: None,
+        health_reason: None,
+        health_body: None,
+        restarts: None,
     }
 }
 
@@ -65,6 +68,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 
@@ -78,6 +82,8 @@ fn heartbeat_over_16_kib_drops_optional_facts_first_in_order_and_refuses_if_stil
     assert_eq!(
         DROP_ORDER,
         [
+            OptionalFact::HostHealthDetail,
+            OptionalFact::ServiceHealthBody,
             OptionalFact::RemoteLoginProbe,
             OptionalFact::HealthDetail,
             OptionalFact::DeferralDetail,
@@ -117,7 +123,12 @@ fn heartbeat_over_16_kib_drops_optional_facts_first_in_order_and_refuses_if_stil
     // Required facts that fit only without the observer's detail: everything optional goes.
     let pad = MAX_HEARTBEAT_BYTES - base - observer / 2;
     let fitted = fit(beat(vec![with_optional(required("x", pad), 100)])).expect("it fits");
-    assert_eq!(fitted.dropped, DROP_ORDER[1..].to_vec(), "no probe to drop");
+    // It holds no probe, no host health and no service health body: those groups are passed over.
+    assert_eq!(
+        fitted.dropped,
+        DROP_ORDER[3..].to_vec(),
+        "no probe, host health detail or health body to drop"
+    );
     assert_eq!(fitted.beat, beat(vec![required("x", pad)]));
     assert_eq!(
         fitted.beat.encoded_len(),
