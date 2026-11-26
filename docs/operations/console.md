@@ -139,7 +139,8 @@ power = false
 **An address that overrides** (`console-targets-file`; optional; root's, readable by the group, no
 secret). Leave it out unless a BMC's address cannot be found
 ([Each BMC's address](#each-bmcs-address)): a BMC whose host runs no daemon, or a coordinator
-reached through the route of the alternative. One `[[target]]` for each such BMC: `mac` is the
+reached through the route of the alternative; a Mac's Desktop always needs an entry ([A Mac's
+Desktop](#a-macs-desktop)). One `[[target]]` for each such BMC: `mac` is the
 BMC MAC of the host's inventory record, and `address` an IP address or a DNS name, with no port (a
 BMC's is 623). A BMC the file names is reached at that address alone, so an address that moved is
 `address_mismatch` until the file is fixed. A Mac's screen is reached only at the address this file

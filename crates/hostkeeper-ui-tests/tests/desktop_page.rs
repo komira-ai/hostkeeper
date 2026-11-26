@@ -420,7 +420,8 @@ return { status: status(), sockets: seen.sockets.length, reopen: has("open-deskt
 /// targets file and the data MACs of the Mac's record (a Mac has no BMC, and the coordinator
 /// reaches its screen only at an address that file gives), and `console_busy` says where to see
 /// who holds it. The other words are the Console page's, and a refusal the page has no words for
-/// is still shown as its code and token. No refusal opens a socket.
+/// is still shown as its code and token, as is one whose token is a name every JavaScript object
+/// inherits (`constructor`). No refusal opens a socket.
 ///
 /// Catches: a Mac's Desktop refused for a missing targets file entry shown as
 /// `FAILED_PRECONDITION no_address`, which tells the operator neither what is missing nor where,
@@ -447,7 +448,7 @@ fn a_macs_open_refusals_are_said_in_a_macs_words() {
             "You are not named in the coordinator's console operators file, so you cannot open one.",
         ),
         (
-            503,
+            429,
             "RESOURCE_EXHAUSTED",
             "too_many_sessions",
             "The coordinator holds as many console sessions as it allows. Close one and try again.",
@@ -469,6 +470,12 @@ fn a_macs_open_refusals_are_said_in_a_macs_words() {
             "FAILED_PRECONDITION",
             "ambiguous_record",
             "The desktop did not open: FAILED_PRECONDITION ambiguous_record.",
+        ),
+        (
+            400,
+            "FAILED_PRECONDITION",
+            "constructor",
+            "The desktop did not open: FAILED_PRECONDITION constructor.",
         ),
     ] {
         let mut ui = Ui::start();
