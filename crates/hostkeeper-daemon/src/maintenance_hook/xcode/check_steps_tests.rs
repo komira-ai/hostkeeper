@@ -51,11 +51,13 @@ fn a_good_archive_passes_in_eight_steps_and_leaves_nothing() {
 fn each_archive_failure_ends_the_steps_with_its_reason_and_verdict() {
     let developer = APPLE_REPORT.replace("signed Apple Software", "signed by a developer");
     let why = "its status is \"signed by a developer\", not \"signed Apple Software\"";
+    // The plain file's name differs from `Xcode.app` in more than case: the Mac's volume is case
+    // insensitive, so `xcode.app` there is the directory `Xcode.app` and cannot be written.
     let two_apps: Program = Box::new(|spawn| {
         for dir in ["Xcode.app", "Xcode-beta.app", "Other"] {
             fs::create_dir_all(spawn.cwd.join(dir))?;
         }
-        fs::write(spawn.cwd.join("xcode.app"), b"a file, not an app")?;
+        fs::write(spawn.cwd.join("Notes.app"), b"a file, not an app")?;
         Ok(Ran {
             code: Some(0),
             ..Ran::default()
