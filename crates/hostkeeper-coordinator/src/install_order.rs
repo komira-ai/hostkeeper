@@ -11,7 +11,12 @@
 //!
 //! A package that is not installed and is in any other state holds the later ones back: a halt, a
 //! hold, a version marked bad, the quiet start, a gate of its plan or an install the host is
-//! ordered next. A coordinator without host groups orders nothing by the list.
+//! ordered next. But for one: a package whose install of its desired version the host was ordered
+//! and declined (the deferral [`crate::defer`] keeps) holds nothing back while it waits out its
+//! deferral, is ordered again or waits for another order on the host, since a service that cannot
+//! start without the files of the config package listed after it declines its install until that
+//! package is there. A halt, an exclusion and the other holds above still hold it. A coordinator
+//! without host groups orders nothing by the list.
 //!
 //! Uninstalls go the other way: the intents a `Put` wrote for one host have generations in the
 //! reverse of the old list, and the uninstall of a package waits, told
@@ -24,7 +29,7 @@ use std::time::Duration;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::Health;
 
-use crate::decide::{Decision, Skip, consider, installed_on};
+use crate::decide::{Decision, Gate, Skip, consider, installed_on};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::{ServiceDef, Services};
@@ -87,8 +92,10 @@ pub(crate) fn uninstall_waits(
 }
 
 /// Whether `earlier`, which the host `id` is not past, holds the packages listed after it back:
-/// it is not installed on the host and its own decision is not one of the four that say it
-/// cannot be.
+/// it is not installed on the host, its own decision is not one of the four that say it cannot
+/// be, and the host did not decline its install at the desired version (an open deferral of that
+/// version) while nothing but its wait, its next order or another order on the host stands in its
+/// way.
 fn holds_back(
     earlier: &ServiceDef,
     want: Option<&Desired>,
@@ -110,10 +117,13 @@ fn holds_back(
         return true;
     }
     let considered = consider(earlier, want, fleet.bad_versions(name), fleet, id, now);
-    !matches!(
-        considered.hold,
+    match considered.hold {
         Some(Decision::Skip(
-            Skip::NoTarget | Skip::NoPackageForPlatform | Skip::NoBuildForHost
-        ))
-    )
+            Skip::NoTarget | Skip::NoPackageForPlatform | Skip::NoBuildForHost,
+        )) => false,
+        None | Some(Decision::Skip(Skip::Deferred) | Decision::Gate(Gate::BusyElsewhere)) => fleet
+            .deferred_until(name, id, &want.version, &earlier.defer_backoff)
+            .is_none(),
+        Some(_) => true,
+    }
 }

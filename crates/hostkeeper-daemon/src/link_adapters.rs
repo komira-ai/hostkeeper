@@ -559,8 +559,11 @@ pub fn drift(ctx: &Ctx, service: &ServiceName) -> Option<Drift> {
 
 /// `seen` in the loop's words: the state as the liveness (live is running); the version only when
 /// the running executable confirmed it; the health as the heartbeat's health
-/// ([`beat_health`]), a health the observer cannot tell being unhealthy; and the token
-/// that says why the service is not plainly live, healthy and confirmed as the detail.
+/// ([`beat_health`]); and the token that says why the service is not plainly live, healthy and
+/// confirmed as the detail. A service with nothing to observe (no run units and no health URL: a
+/// configuration package, which only places files) is healthy, as a live service with no health
+/// URL is: nothing of it can fail to serve, and a coordinator that read it unhealthy would never
+/// count its host as serving, or its bake as healthy.
 pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
     let liveness = match &seen.state {
         ServiceState::Absent => Liveness::Absent,
@@ -577,12 +580,15 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
         } => Version::new(version).ok(),
         _ => None,
     };
-    let health = match beat_health(seen).0 {
-        wire::Health::Healthy => Health::Healthy,
-        wire::Health::Absent => Health::Absent,
-        // `Silent` is the coordinator's word, which a local read never yields; like a health the
-        // daemon cannot tell, it counts as unhealthy.
-        wire::Health::Unhealthy | wire::Health::Unspecified | wire::Health::Silent => {
+    let health = match (beat_health(seen).0, &seen.state) {
+        (wire::Health::Healthy, _) => Health::Healthy,
+        (wire::Health::Absent, _) => Health::Absent,
+        // `beat_health` leaves an unmonitored service with no health URL unspecified: there is
+        // nothing to observe, so nothing unhealthy.
+        (wire::Health::Unspecified, ServiceState::Unmonitored) => Health::Healthy,
+        // `Silent` is the coordinator's word, which a local read never yields; like any other
+        // health the daemon cannot tell, it counts as unhealthy.
+        (wire::Health::Unhealthy | wire::Health::Unspecified | wire::Health::Silent, _) => {
             Health::Unhealthy
         }
     };
