@@ -312,6 +312,46 @@ fn a_lock_that_cannot_be_examined_or_made_is_a_store_failure() {
     ));
 }
 
+/// Proves: a stale lock that cannot be moved out of its name (a directory is where the takeover
+/// puts it) is [`LockError::Store`] naming the lock, not a refusal and not a takeover, the stale
+/// lock stays, and the writer holds nothing after it.
+///
+/// Catches: a failed takeover answered as another writer's lock, which a client retries for ever,
+/// or as a lock taken while the stale one is still there.
+#[test]
+fn a_stale_lock_that_cannot_be_moved_is_a_store_failure() {
+    let dir = scratch("partial-takeover-io");
+    let clock = Arc::new(AtomicU64::new(0));
+    let first = store_over(dir.path(), &clock);
+    let late = store_over(dir.path(), &clock);
+    let lock = dir.path().join(format!(".partial-{}.lock", sha('a')));
+    let dead = first
+        .lock_upload(&sha('a'))
+        .expect("the first writer's lock");
+    let stale = fs::read_to_string(&lock).expect("the lock");
+    clock.store(LOCK_STALE, Ordering::SeqCst);
+    let grave = format!(
+        "{}.{}-{:020}.stale",
+        lock.display(),
+        late.token,
+        late.next.load(Ordering::Relaxed)
+    );
+    fs::create_dir(&grave).expect("a directory at the grave's name");
+
+    let why = match late.lock_upload(&sha('a')) {
+        Err(LockError::Store(why)) => why,
+        other => panic!("not a store failure: {:?}", other.map(|_| ())),
+    };
+
+    assert!(
+        why.to_string().contains(&lock.display().to_string()),
+        "{why}"
+    );
+    assert_eq!(fs::read_to_string(&lock).expect("the lock stays"), stale);
+    assert!(!late.is_writing(&sha('a')));
+    drop(dead);
+}
+
 /// Proves: a refresh writes the second of the clock into the lock (once for each second: the same
 /// second is no second write), keeping the writer's name; and a refresh is [`LockError::Held`]
 /// when the lock file is gone or another writer's, which is what a writer whose lock was taken as
@@ -351,6 +391,27 @@ fn a_refresh_keeps_the_lock_alive_and_finds_it_taken() {
     fs::create_dir(&path).expect("a directory in the lock's place");
     clock.store(200, Ordering::SeqCst);
     assert!(matches!(mine.refresh(), Err(LockError::Store(_))));
+}
+
+/// Proves: a refresh that finds the lock its own but cannot write it (the file is read only) is
+/// [`LockError::Store`], and the second it failed in is not recorded as refreshed: the next refresh
+/// writes again.
+///
+/// Catches: a writer that goes on believing its lock is alive after the disk refused the refresh.
+#[test]
+fn a_refresh_that_cannot_write_the_lock_is_a_store_failure_and_is_tried_again() {
+    let (dir, clock, store) = rig("partial-refresh-io");
+    let path = dir.path().join(format!(".partial-{}.lock", sha('a')));
+    let mut mine = store.lock_upload(&sha('a')).expect("the lock");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("read only");
+    clock.store(20, Ordering::SeqCst);
+
+    assert!(matches!(mine.refresh(), Err(LockError::Store(_))));
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("writable");
+    mine.refresh().expect("the refresh is tried again");
+    let text = fs::read_to_string(&path).expect("the lock");
+    assert!(text.contains(&format!("{:020}", START + 20)), "{text}");
 }
 
 /// Proves: a partial upload is begun with its record, appended to, read back with the bytes held,
