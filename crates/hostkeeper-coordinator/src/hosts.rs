@@ -143,7 +143,7 @@ impl Coordinator {
             .map(|(id, _)| self.enrolled_host(id.as_str()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
-        let (mut hosts, shown) = self.page_hosts(page, enrolled);
+        let (mut hosts, shown) = self.page_hosts(page, enrolled, now, unix_now);
         self.show_inventory_with(&mut hosts, &shown);
         self.show_groups(&mut hosts);
         self.show_xcode_due(&mut hosts);
@@ -197,7 +197,7 @@ impl Coordinator {
             .enrolled_host(&host.node_id)
             .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
         let mut hosts = [host];
-        self.show_running(&mut hosts[0], &id, enrolled.as_ref());
+        self.show_running(&mut hosts[0], &id, enrolled.as_ref(), now, unix_now);
         self.show_inventory_with(&mut hosts, &[enrolled]);
         self.show_groups(&mut hosts);
         self.show_xcode_due(&mut hosts);

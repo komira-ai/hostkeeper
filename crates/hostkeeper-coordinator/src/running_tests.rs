@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use hostkeeper_enrollment::fs::FaultFs;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
@@ -152,7 +153,7 @@ fn over_grpc(f: &Fixture) {
         .expect("a host");
     assert_eq!(
         (got.running, got.running_unix),
-        (installed, host.running_unix)
+        (installed, Some(got.last_heartbeat_unix))
     );
 }
 
@@ -607,6 +608,8 @@ fn a_coordinator_without_enrollment_lists_the_hosts_it_heard() {
 fn a_host_denied_while_the_page_was_made_is_not_listed() {
     let rig = Rig::new("running-denied-between");
     let page = vec![(id("db-1"), None)];
-    let (hosts, kept) = rig.coordinator.page_hosts(page, vec![None]);
+    let (hosts, kept) = rig
+        .coordinator
+        .page_hosts(page, vec![None], Duration::ZERO, 0);
     assert_eq!((hosts, kept.len()), (Vec::new(), 0));
 }

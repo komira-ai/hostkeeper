@@ -672,8 +672,8 @@ impl Coordinator {
         let noted = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
         let ops = self.ops.state();
         kept.serving = self.serves(&basis.services, &who.host_id, &node, &beat, &ops, now);
-        kept.running =
-            self.note_running(fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
+        let ordered = turn == Turn::Order;
+        kept.running = self.note_running(fleet, &who, &beat, &announced, legacy, ordered, now);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
         let dropped =
