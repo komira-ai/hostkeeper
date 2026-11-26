@@ -61,20 +61,26 @@ fn the_feature_is_advertised_by_no_coordinator_yet() {
     assert!(GATED_FIELDS.iter().all(|(_, feature)| *feature != FEATURE));
 }
 
+/// The answer to `message`, the first heartbeat of an enrolled host, from a coordinator of its
+/// own named `name`: every coordinator of this file starts in the same state.
+async fn first_answer(name: &str, message: &agent::HeartbeatRequest) -> agent::HeartbeatResponse {
+    let enrollment = EnrollmentRig::new(&format!("{name}-enrollment"));
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let world = world_over(name, &enrollment);
+    let reply = beat(&world.coordinator, &peer_of(&certificate), message).await;
+    assert_eq!(reply.token(), (Code::Ok, ""), "{name}");
+    reply.decode()
+}
+
 /// Proves a gRPC heartbeat of a daemon that announces `host-health-v1` and carries the host's
-/// health and a service's health reason, body and restarts is answered, not refused, with the
-/// same features as the same heartbeat without them, `host-health-v1` not among them, and no
-/// record named written.
+/// health and a service's health reason, body and restarts is answered, not refused, exactly as
+/// the same heartbeat without them is by a coordinator in the same state: the whole answer is the
+/// same, `host-health-v1` is not among its features, and it names no record written.
 ///
-/// Catches: a heartbeat of a later daemon refused, or answered differently, for fields this
-/// coordinator does not read; and records named written that no log holds.
+/// Catches: a heartbeat of a later daemon refused, or answered differently in any field, for
+/// fields this coordinator does not read; and records named written that no log holds.
 #[tokio::test]
 async fn a_heartbeat_with_health_is_answered_as_one_without() {
-    let enrollment = EnrollmentRig::new("grpc-host-health-enrollment");
-    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
-    let world = world_over("grpc-host-health", &enrollment);
-    let peer = peer_of(&certificate);
-
     let mut without = proto_message(&[svc("kbf", "1.0")]);
     without.features.push(FEATURE.to_owned());
     let mut with = without.clone();
@@ -89,16 +95,9 @@ async fn a_heartbeat_with_health_is_answered_as_one_without() {
         exit_status: Some(1),
     });
 
-    let mut answers = Vec::new();
-    for message in [&with, &without] {
-        let reply = beat(&world.coordinator, &peer, message).await;
-        assert_eq!(reply.token(), (Code::Ok, ""));
-        answers.push(reply.decode::<agent::HeartbeatResponse>());
-    }
-    let [with_health, without_health] = answers.as_slice() else {
-        panic!("two answers");
-    };
-    assert_eq!(with_health.features, without_health.features);
+    let with_health = first_answer("grpc-host-health-with", &with).await;
+    let without_health = first_answer("grpc-host-health-without", &without).await;
+    assert_eq!(with_health, without_health);
     assert!(!with_health.features.iter().any(|name| name == FEATURE));
     assert!(with_health.health_written.is_empty());
 }

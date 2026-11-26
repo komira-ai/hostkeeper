@@ -313,6 +313,56 @@ fn a_health_group_the_heartbeat_does_not_hold_is_passed_over() {
     assert_eq!(fitted.beat.health, Some(bare));
 }
 
+/// Catches a group whose test of what the heartbeat holds reads only one of its parts, and a group
+/// that clears only some services: each part alone (memory devices without sources, sources
+/// without memory devices, a health body without restarts, restarts without a health body) makes
+/// its group dropped and listed, and the services' group clears every service's body and restarts.
+#[test]
+fn each_part_of_a_health_group_alone_makes_it_dropped() {
+    let over = |services: Vec<ServiceFacts>, health: pb::HostHealth| {
+        let mut services = services;
+        services[0].health_detail = Some("h".repeat(MAX_HEARTBEAT_BYTES));
+        fit(beat(services, Some(health))).expect("it fits")
+    };
+    let groups = |fitted: &Fitted| fitted.dropped[..fitted.dropped.len() - 1].to_vec();
+
+    for health in [health(1, 2, 0), health(1, 0, 2)] {
+        let fitted = over(vec![required("js-agent", 0)], health.clone());
+        assert_eq!(groups(&fitted), [OptionalFact::HostHealthDetail]);
+        assert_eq!(fitted.beat.health, Some(without_detail(health)));
+    }
+
+    let mut body_only = with_health(required("a", 0));
+    body_only.restarts = None;
+    let mut restarts_only = with_health(required("b", 0));
+    restarts_only.health_body = None;
+    for service in [body_only, restarts_only] {
+        let fitted = over(vec![service], health(1, 0, 0));
+        assert_eq!(groups(&fitted), [OptionalFact::ServiceHealthBody]);
+        let kept = &fitted.beat.services[0];
+        assert_eq!((&kept.health_body, &kept.restarts), (&None, &None));
+    }
+
+    let fitted = over(
+        vec![
+            with_health(required("a", 0)),
+            with_health(required("b", 0)),
+            with_health(required("c", 0)),
+        ],
+        health(1, 0, 0),
+    );
+    assert_eq!(groups(&fitted), [OptionalFact::ServiceHealthBody]);
+    for kept in &fitted.beat.services {
+        assert_eq!(
+            (&kept.health_body, &kept.restarts),
+            (&None, &None),
+            "{:?}",
+            kept.name
+        );
+        assert_eq!(kept.health_reason.as_deref(), Some("health_url_status"));
+    }
+}
+
 /// Catches a record given up before the optional facts, the most severe or oldest record given
 /// up first, a record given up when the heartbeat fit without it, and the give-up listed more than
 /// once: over the bound by one record, the last record alone goes; over it by two, the last two
@@ -370,8 +420,7 @@ fn a_heartbeat_over_the_bound_with_every_record_given_up_is_refused() {
 
 /// Proves a heartbeat of 16 services, each with its health reason, body and restarts at their
 /// bounds, and a host health of 6 records at every bound (at most its 4 KiB encoded) fits whole,
-/// with nothing dropped. With the maintenance and prerequisites reports beside them it would not:
-/// that is what the two health groups, dropped first, are for.
+/// with nothing dropped.
 #[test]
 fn a_heartbeat_with_every_health_fact_at_its_bound_fits_whole() {
     let full = health(6, 0, 0);

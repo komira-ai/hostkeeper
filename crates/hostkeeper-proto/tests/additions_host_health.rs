@@ -151,11 +151,29 @@ fn an_older_coordinator_keeps_a_heartbeats_health() {
             agent::HeartbeatRequest::decode(bytes.as_slice()).expect("decodes"),
             beat
         );
-        assert!(bytes.windows(2).any(|w| w == [0xaa, 0x01]));
-        let service = crash_looping().encode_to_vec();
-        for tag in [[0x82, 0x01], [0x8a, 0x01], [0x92, 0x01]] {
-            assert!(service.windows(2).any(|w| w == tag), "{tag:x?}");
+        let alone = agent::HeartbeatRequest {
+            health: beat.health.clone(),
+            ..agent::HeartbeatRequest::default()
         }
+        .encode_to_vec();
+        assert_eq!(alone[..2], [0xaa, 0x01], "field 21, length-delimited");
+        let facts = crash_looping();
+        let only = |service: agent::ServiceBeat| service.encode_to_vec()[..2].to_vec();
+        let tags = [
+            only(agent::ServiceBeat {
+                health_reason: facts.health_reason.clone(),
+                ..agent::ServiceBeat::default()
+            }),
+            only(agent::ServiceBeat {
+                health_body: facts.health_body.clone(),
+                ..agent::ServiceBeat::default()
+            }),
+            only(agent::ServiceBeat {
+                restarts: facts.restarts.clone(),
+                ..agent::ServiceBeat::default()
+            }),
+        ];
+        assert_eq!(tags, [[0x82, 0x01], [0x8a, 0x01], [0x92, 0x01]]);
 
         let read = DynamicMessage::decode(beat_d.clone(), bytes.as_slice()).expect("decodes");
         assert_eq!(kept(&read), [21]);
@@ -203,7 +221,15 @@ fn an_older_daemon_keeps_the_records_written() {
         agent::HeartbeatResponse::decode(bytes.as_slice()).expect("decodes"),
         answer
     );
-    assert!(bytes.contains(&0x52));
+    let alone = agent::HeartbeatResponse {
+        health_written: vec!["e".to_owned()],
+        ..agent::HeartbeatResponse::default()
+    };
+    assert_eq!(
+        alone.encode_to_vec(),
+        [0x52, 0x01, b'e'],
+        "field 10, length-delimited"
+    );
     let read = DynamicMessage::decode(answer_d, bytes.as_slice()).expect("decodes");
     assert_eq!(kept(&read), [10]);
     assert_eq!(
