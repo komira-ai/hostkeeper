@@ -75,7 +75,7 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 | Observation | `Health` | Version |
 |---|---|---|
 | `absent` | `HEALTH_ABSENT` | empty |
-| `unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` | recorded |
+| `unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` (the heartbeat sends `HEALTH_HEALTHY`, below) | recorded |
 | `unmonitored`, healthy | `HEALTH_HEALTHY` | recorded |
 | `unmonitored`, unhealthy | `HEALTH_UNHEALTHY` | recorded |
 | `stopped`, `transitioning`, `unobserved` | `HEALTH_UNHEALTHY` | recorded |

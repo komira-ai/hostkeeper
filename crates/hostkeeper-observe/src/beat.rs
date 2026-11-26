@@ -5,7 +5,7 @@
 //! | Observation | Health | Version |
 //! |---|---|---|
 //! | `Absent` | `HEALTH_ABSENT` | empty |
-//! | `Unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` | recorded |
+//! | `Unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED`, which the daemon's heartbeat sends as `HEALTH_HEALTHY` | recorded |
 //! | `Unmonitored`, health `Healthy` | `HEALTH_HEALTHY` | recorded |
 //! | `Unmonitored`, health `Unhealthy` | `HEALTH_UNHEALTHY` | recorded |
 //! | `Stopped`, `Transitioning`, `Unobserved` | `HEALTH_UNHEALTHY` | recorded |
