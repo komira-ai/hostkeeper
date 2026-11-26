@@ -755,6 +755,14 @@ impl Store for KeyWriteFails {
     fn prune(&self, used: u64) -> Result<(), StoreError> {
         self.0.prune(used)
     }
+
+    fn renewal_asked(&self) -> Result<bool, StoreError> {
+        self.0.renewal_asked()
+    }
+
+    fn clear_renewal(&self) -> Result<(), StoreError> {
+        self.0.clear_renewal()
+    }
 }
 
 /// One test's coordinator, clocks, entropy and pki directory.

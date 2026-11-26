@@ -1,8 +1,8 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
 //! `hostkeeper maintenance-hook`, the maintenance hook the daemon runs as a step
 //! ([`crate::maintenance_hook`]), which exits with the hook contract's codes; and the verbs root
-//! runs on the host itself with the coordinator out of reach, `hostkeeper activate`, `pin` and
-//! `unpin` ([`crate::local`], which says their exit statuses).
+//! runs on the host itself, `hostkeeper activate`, `pin`, `unpin` (with the coordinator out of
+//! reach) and `renew` ([`crate::local`], which says their exit statuses).
 //! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
 //! default is a constant here.
 //!
@@ -158,7 +158,8 @@ pub enum Command {
     /// Run a step of the maintenance hook: the OS work of a maintenance run, which the daemon
     /// runs as it runs a hook's step.
     MaintenanceHook(HookArgs),
-    /// `activate`, `pin` and `unpin`: what root runs on the host itself ([`crate::local`]).
+    /// `activate`, `pin`, `unpin` and `renew`: what root runs on the host itself
+    /// ([`crate::local`]).
     #[command(flatten)]
     Local(crate::local::LocalVerb),
 }
