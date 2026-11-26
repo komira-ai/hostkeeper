@@ -23,27 +23,36 @@
 //! absolute path, a deadline), each output the non-empty lines of its standard output then its
 //! standard error, trimmed and joined by `; `, cut to the probe's bound:
 //!
-//! 1. `sw_vers` and 2. `uname -sm`, 60 s each: recorded, and never fail the check.
+//! 1. `sw_vers` and 2. `uname -sm`, 60 s each, in [`CHECK_DIR`] (the runner keeps a program's
+//!    output in files of its working directory): recorded, and never fail the check; `not run:
+//!    ...` with no exit code when [`CHECK_DIR`] is not the check's.
 //! 3. `pkgutil --check-signature <archive>` in [`CHECK_DIR`]: must exit 0 and report Apple's own
 //!    signature ([`super::signature`]); `xcode_archive_not_apple` otherwise. Its output is then
 //!    `signed Apple Software, its chain ending at Apple Root CA`, or why the report is not Apple's.
-//! 4. `xip --expand <archive>` in `<CHECK_DIR>/expand`: `xcode_expand_failed` on a non-zero exit.
+//! 4. `xip --expand <archive>` in `<CHECK_DIR>/expand`, once the volume still has
+//!    [`EXPANSION_FACTOR`] times the archive's size free (`free_space_short` or
+//!    `free_space_unreadable`, not checked, otherwise): `xcode_expand_failed` on a non-zero exit.
 //! 5. `app`, no program: the names of the `.app` directories xip made, or `none`; not exactly one
 //!    is `xcode_expand_failed`.
 //! 6. `version`, no program: `<CFBundleShortVersionString> <ProductBuildVersion>` of the app's
 //!    `Contents/version.plist`; a file or key that is not there, or another version or build than
-//!    the entry's, is `xcode_build_mismatch`.
+//!    the entry's, is `xcode_build_mismatch`; a file that cannot be read is `xcode_staging_failed`,
+//!    not checked.
 //! 7. `codesign --verify --deep --strict <app>`: `xcode_signature_invalid` on a non-zero exit.
 //! 8. `verdict`, always last: `pass` with exit 0; `<reason>: <detail>` with exit 1 for an archive a
 //!    step refused (the steps after it do not run); with no exit code, `xcode_check_unfinished:
 //!    <detail>` for a program that did not start, was killed at its deadline or was ended by a
-//!    signal (its own step has no exit code and says which), `xcode_staging_failed: <detail>`
+//!    signal (its own step has no exit code and says which), `free_space_short: <detail>` or
+//!    `free_space_unreadable: <detail>` for a volume short of the expansion,
+//!    `xcode_staging_failed: <detail>`
 //!    for a file of the check that could not be read, written or made, or an archive that is gone
 //!    (then no program of steps 3 to 7 runs), or `xcode_order_invalid: <detail>` for an order that
 //!    does not name one valid archive (the same).
 //!
 //! The steps stop at the first refusal of steps 3 to 7. Whatever happened, [`CHECK_DIR`] is
-//! removed after the steps, so the check leaves nothing in `/Applications`. It installs nothing: no
+//! removed after the steps, so the check leaves nothing in `/Applications`. A run that ends after
+//! the prepare and before the cutover (cancelled, its drain deferred) leaves the archive there
+//! until the Mac's next probe, whose prepare removes it, with an archive or without. It installs nothing: no
 //! program of the check is given a password, and every file it makes is under [`CHECK_DIR`].
 
 use std::ffi::OsStr;
@@ -160,12 +169,16 @@ impl ArchiveCheck {
     }
 
     /// Fetches and checks the archive of `entries` into [`CHECK_DIR`], as the module says; on any
-    /// failure removes [`CHECK_DIR`]. Nothing is done for no entry.
+    /// failure removes [`CHECK_DIR`]. For no entry, only removes what an earlier check left at
+    /// [`CHECK_DIR`].
     ///
     /// # Errors
     /// [`KindError::Deferred`], naming the step.
     pub fn prepare(&self, entries: &[XcodeEntry]) -> Result<(), KindError> {
         if entries.is_empty() {
+            // A plain probe removes what a check whose run ended before its cutover left; what
+            // cannot be removed now is removed by the next probe.
+            let _ = remove(&self.stage.root.path(CHECK_DIR));
             return Ok(());
         }
         let fetched = self.fetch(entries);
@@ -199,7 +212,12 @@ impl ArchiveCheck {
 
     /// Fails `free_space_short` unless the volume has the archive and its expansion free.
     fn check_space(&self, entry: &XcodeEntry) -> Result<(), KindError> {
-        let needed = u128::from(entry.size) + EXPANSION_FACTOR * u128::from(entry.size);
+        self.space_for(u128::from(entry.size) + EXPANSION_FACTOR * u128::from(entry.size))
+    }
+
+    /// Fails `free_space_short` unless the volume has `needed` bytes free, `free_space_unreadable`
+    /// when its free space cannot be read.
+    fn space_for(&self, needed: u128) -> Result<(), KindError> {
         let free = self
             .stage
             .space
@@ -219,13 +237,21 @@ impl ArchiveCheck {
     /// The probe's steps for the archive of `entries`, as the module says, the verdict last; then
     /// removes [`CHECK_DIR`].
     pub fn steps(&self, entries: &[XcodeEntry]) -> Vec<MaintenanceProbeStep> {
-        let cwd = self.stage.root.path("/");
+        // The runner keeps a program's output in files of its working directory, so every
+        // program runs in the check's own directory; when that is not there, steps 1 and 2 say
+        // so and step 3's check of the directory ends the steps.
+        let dir = self.stage.root.path(CHECK_DIR);
         let secs = STEP_DEADLINE.as_secs();
-        let mut steps = vec![
-            self.execute("sw_vers", SW_VERS, &[], &cwd, secs).0,
-            self.execute("uname", UNAME, &UNAME_ARGS.map(OsStr::new), &cwd, secs)
-                .0,
-        ];
+        let mut steps = match trusted(&dir) {
+            true => vec![
+                self.execute("sw_vers", SW_VERS, &[], &dir, secs).0,
+                self.execute("uname", UNAME, &UNAME_ARGS.map(OsStr::new), &dir, secs)
+                    .0,
+            ],
+            false => ["sw_vers", "uname"]
+                .map(|name| step(name, None, format!("not run: {}", unready(&dir))))
+                .into(),
+        };
         let stopped = self.checked(entries, &mut steps).err();
         steps.push(last(stopped));
         // The steps are the answer; what cannot be removed now is removed by the next prepare.
@@ -247,6 +273,10 @@ impl ArchiveCheck {
         let (pkgutil, result) = self.pkgutil(&archive, &dir);
         steps.push(pkgutil);
         result?;
+        // The archive is on the volume; its expansion needs the rest, which the drain may have
+        // taken since the prepare: a volume short of it is the Mac's, not the archive's.
+        self.space_for(EXPANSION_FACTOR * u128::from(entry.size))
+            .map_err(not_checked)?;
         remove(&expand)
             .and_then(|()| make_dir(&expand))
             .map_err(not_checked)?;
@@ -319,7 +349,13 @@ impl ArchiveCheck {
                 let why = format!("{host_path} is missing");
                 return (step("version", None, why.clone()), Err(mismatch(why)));
             }
-            Err(why) => return (step("version", None, why.clone()), Err(mismatch(why))),
+            Err(why) => {
+                let stop = Stop::NotChecked {
+                    reason: REASON_STAGING_FAILED,
+                    detail: why.clone(),
+                };
+                return (step("version", None, why), Err(stop));
+            }
         };
         let version = text(&found, VERSION_KEY);
         let build = text(&found, BUILD_KEY);
@@ -390,10 +426,7 @@ fn present(dir: &Path, archive: &Path) -> Result<(), Stop> {
     if !trusted(dir) {
         return Err(Stop::NotChecked {
             reason: REASON_STAGING_FAILED,
-            detail: format!(
-                "{} is not a directory only this process's user can write",
-                dir.display()
-            ),
+            detail: unready(dir),
         });
     }
     match fs::symlink_metadata(archive) {
@@ -404,6 +437,14 @@ fn present(dir: &Path, archive: &Path) -> Result<(), Stop> {
         }),
         Err(error) => Err(not_checked(staging_failed(archive, "read", &error))),
     }
+}
+
+/// Why the check directory `dir` is not one the check takes.
+fn unready(dir: &Path) -> String {
+    format!(
+        "{} is not a directory only this process's user can write",
+        dir.display()
+    )
 }
 
 /// The last step, the verdict, of steps that `stopped` (or did not).

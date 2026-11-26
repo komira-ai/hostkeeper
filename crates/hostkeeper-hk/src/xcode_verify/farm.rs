@@ -70,12 +70,19 @@ pub(super) fn verify(
         }
     };
     let _ = write!(w.stdout, "{}", verdict.json);
+    let Some(path) = &verdict.path else {
+        say(
+            w,
+            &format!("verdict {}; the record was not kept", verdict.text),
+        );
+        return Err(Stop::Exit(1));
+    };
     say(
         w,
         &format!(
             "verdict {}; record kept in {}",
             verdict.text,
-            verdict.path.display()
+            path.display()
         ),
     );
     if verdict.pass {

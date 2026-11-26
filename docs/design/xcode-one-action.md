@@ -297,7 +297,8 @@ hk xcode verify [--mac <node-id>] <path to .xip>
   only such a Mac may read the store (Built: `xcode_get.rs`).
 - **The record** is `hk xcode verify`'s, `hk-xcode-verify-v1` at the same path (5.2), with a new key `farm` holding the Mac, the
   run and its steps. Its `macos` is the Mac's and its `expansion` holds what the Mac read. The parts the farm check does not make
-  (`programs`, `signature`, `tamper`, `toc`) are `null`. `hk xcode add` reuses a passing record as on a Mac (2.3 step 5).
+  (`programs`, `signature`, `tamper`, `toc`) are `null`. `hk xcode add` reuses a passing record for the version and build as on a
+  Mac (2.3 step 5), and checks nothing again for bytes the store holds with such a record.
 - **The guarantees hold.** Nothing installs: the check moves nothing into `/Applications`, and an install is still an operator's
   `xcode` run, whose stage checks the archive again. A failing check refuses the archive: `hk xcode add` removes it from the store
   (`Xcode.Remove`, audited), and an archive that could not be checked stays stored but unchecked, as a Mac's upload never is, and

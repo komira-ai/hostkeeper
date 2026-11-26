@@ -39,7 +39,7 @@
 //! - `xcode_verify_checks`: its verdict, check by check;
 //! - `tailnet_wait`: `hk tailnet-wait`, its probe of a loopback server, its recorded waits and its
 //!   rejoin through a stand-in `tailscale`;
-//! - `farm_rig`: what the next three share, a fake coordinator that answers the maintenance run, the
+//! - `farm_rig`: what the next five share, a fake coordinator that answers the maintenance run, the
 //!   host's probe and the removal of the check on a farm Mac from a script, whose answers are the
 //!   real messages written as the gateway writes them, and a wait that records what it is asked;
 //! - `xcode_farm_choose`: off macOS, which Mac checks (`--mac`, `xcode_mac`, their usage errors, and
@@ -50,6 +50,8 @@
 //!   answer that is no JSON, a number written as a number, and a call with no answer;
 //! - `xcode_farm_verify`: `hk xcode verify` off macOS: the archive held by the store, checked on the
 //!   farm Mac, and the record printed.
+//! - `xcode_farm_record`: a record of the farm Mac's check that cannot be kept: `hk xcode add` still
+//!   refuses an archive that failed, `hk xcode verify` exits 1.
 
 mod add_rig;
 mod answers;
@@ -80,6 +82,7 @@ mod xcode_add_summary;
 mod xcode_farm_add;
 mod xcode_farm_answers;
 mod xcode_farm_choose;
+mod xcode_farm_record;
 mod xcode_farm_verify;
 mod xcode_push;
 mod xcode_verify;

@@ -217,13 +217,15 @@ fn each_archive_failure_ends_the_steps_with_its_reason_and_verdict() {
     }
 }
 
-/// Proves: an app whose `version.plist` is not there, or is not a property list, is refused
-/// `xcode_build_mismatch` with the step saying which file and why (no exit code, as the step
-/// runs no program).
+/// Proves: an app whose `version.plist` is not there is refused `xcode_build_mismatch`, and one
+/// whose `version.plist` cannot be read (not a property list) is not checked
+/// (`xcode_staging_failed`, no exit code), each with the step saying which file and why (no exit
+/// code, as the step runs no program).
 ///
-/// Catches: a missing or unreadable version list that is taken as a match.
+/// Catches: a missing or unreadable version list taken as a match, or a read that fails on the
+/// Mac taken as a refusal of the archive, which would remove it from the store.
 #[test]
-fn a_version_list_that_is_missing_or_unreadable_is_a_build_mismatch() {
+fn a_version_list_that_is_missing_is_a_build_mismatch_and_one_that_cannot_be_read_is_not_checked() {
     let plist = format!("{CHECK_DIR}/expand/Xcode.app/Contents/version.plist");
     let missing = format!("{plist} is missing");
     let mac = mac("chk-no-plist");
@@ -260,8 +262,8 @@ fn a_version_list_that_is_missing_or_unreadable_is_a_build_mismatch() {
             kept("version", None, &format!("{plist} is not a property list")),
             kept(
                 "verdict",
-                Some(1),
-                &format!("xcode_build_mismatch: {plist} is not a property list")
+                None,
+                &format!("xcode_staging_failed: {plist} is not a property list")
             ),
         ]
     );
@@ -347,11 +349,13 @@ fn sw_vers_and_uname_never_fail_the_check() {
 
 /// Proves: a check directory that is not the user's alone, one with no archive in it (the
 /// prepare was skipped or its archive is gone), and one whose archive is not a file give a
-/// verdict with no exit code `xcode_staging_failed: <why>` after `sw_vers` and `uname`, with no
-/// program of steps 3 to 7 run, and nothing is left.
+/// verdict with no exit code `xcode_staging_failed: <why>`, with no program of steps 3 to 7 run,
+/// and nothing is left. `sw_vers` and `uname` run (in the check directory) when the directory is
+/// the user's alone, and are `not run` with no program started when it is not.
 ///
-/// Catches: Apple's tools run on a path an admin of the Mac swapped in, or a missing archive
-/// taken as a refusal of the archive.
+/// Catches: Apple's tools run on a path an admin of the Mac swapped in, a program run in such a
+/// directory (where the runner writes its output files), or a missing archive taken as a refusal
+/// of the archive.
 #[test]
 fn an_archive_that_is_gone_is_staging_failed_and_runs_no_check() {
     let cases = ["no directory", "no archive", "a directory", "open"];
@@ -385,10 +389,14 @@ fn an_archive_that_is_gone_is_staging_failed_and_runs_no_check() {
                 )
             }
         };
+        let first = match case {
+            "no archive" | "a directory" => recorded(),
+            _ => not_run(&dir),
+        };
         assert_eq!(
             check(&mac).steps(&order()),
             [
-                recorded(),
+                first,
                 vec![kept(
                     "verdict",
                     None,
@@ -398,7 +406,11 @@ fn an_archive_that_is_gone_is_staging_failed_and_runs_no_check() {
             .concat(),
             "{case}"
         );
-        assert_eq!(mac.runner.ran(), recording_runs(&mac), "{case}");
+        let ran = match case {
+            "no archive" | "a directory" => recording_runs(&mac),
+            _ => Vec::new(),
+        };
+        assert_eq!(mac.runner.ran(), ran, "{case}");
         assert_gone(&mac);
     }
 }
@@ -480,6 +492,7 @@ fn files_of_the_check_that_cannot_be_made_or_read_are_not_a_refusal() {
 #[test]
 fn an_order_of_two_archives_is_not_checked_at_cutover() {
     let mac = mac("chk-two");
+    dir_with_mode(&mac, CHECK_DIR, 0o700);
     let entry = entry_of(ARCHIVE_BYTES);
     assert_eq!(
         check(&mac).steps(&[entry.clone(), entry]),
@@ -536,4 +549,64 @@ fn an_output_over_the_bound_is_cut_and_says_so() {
             cut: true,
         }
     );
+}
+
+/// Proves: a volume that has lost, since the prepare, the room the expansion needs (three times
+/// the archive's size) ends the steps after `pkgutil` with a verdict with no exit code
+/// `free_space_short: <detail>`, and one whose free space cannot be read with
+/// `free_space_unreadable: <detail>`; `xip` does not run and nothing is left.
+///
+/// Catches: an `xip` that fails for want of room on the Mac reported as a refusal of the archive
+/// (verdict exit 1), which `hk xcode add` answers by removing a good archive from the store.
+#[test]
+fn a_volume_short_of_the_expansion_at_cutover_is_not_checked() {
+    let expansion = ARCHIVE_BYTES.len() as u64 * 3;
+    let short = format!(
+        "free_space_short: {} bytes are free on the volume of /Applications; the check needs \
+         {expansion}",
+        expansion - 1
+    );
+    for (free, verdict) in [
+        (Ok(expansion - 1), short),
+        (
+            Err("statvfs failed".to_owned()),
+            "free_space_unreadable: statvfs failed".to_owned(),
+        ),
+    ] {
+        let mut mac = mac("chk-room");
+        assert_eq!(check(&mac).prepare(&order()), Ok(()));
+        mac.space.free = free;
+        assert_eq!(
+            check(&mac).steps(&order()),
+            [
+                recorded(),
+                vec![
+                    kept("pkgutil", Some(0), APPLE_SIGNED),
+                    kept("verdict", None, &verdict),
+                ]
+            ]
+            .concat()
+        );
+        let mut runs = recording_runs(&mac);
+        runs.push(pkgutil_run(&mac));
+        assert_eq!(mac.runner.ran(), runs);
+        assert_gone(&mac);
+    }
+}
+
+/// Proves: the prepare of a plain probe (no archive in the order) removes a check directory a
+/// run that ended before its cutover left, with its archive, and fetches nothing.
+///
+/// Catches: a multi-GB archive left in `/Applications` by a cancelled check until another
+/// archive is checked on the Mac.
+#[test]
+fn a_plain_probe_removes_what_an_ended_check_left() {
+    let mac = mac("chk-left");
+    assert_eq!(check(&mac).prepare(&order()), Ok(()));
+    assert!(mac.path(CHECK_DIR).join(ARCHIVE).is_file());
+    let asked = mac.store.asked().len();
+    assert_eq!(check(&mac).prepare(&[]), Ok(()));
+    assert_eq!(mac.store.asked().len(), asked);
+    assert!(mac.runner.ran().is_empty());
+    assert_gone(&mac);
 }

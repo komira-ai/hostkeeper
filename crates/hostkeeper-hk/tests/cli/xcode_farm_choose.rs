@@ -144,9 +144,12 @@ fn on_macos_the_mac_flag_is_a_usage_error_and_the_key_is_ignored() {
 
 /// Proves: `xcode_mac` of `~/.hostkeeper/hk.toml` names the farm Mac when no `--mac` is given (the
 /// schedule asks for that host and the file's key is no unknown key), `--mac` overrides it, a key
-/// that is not a string is a usage error naming the file, and an id that is no host id (a space, a
-/// leading dash, too long, empty) is a usage error naming where it came from, before anything is
-/// asked.
+/// that is not a string is a usage error naming the file, and an id the coordinator would not take
+/// as a node id (a space, a leading or trailing dash, an upper-case letter, `_` or `.`, longer than
+/// 63, empty) is a usage error naming where it came from, before anything is asked.
+///
+/// Catches: an id the coordinator refuses `invalid_request` after the upload, which `hk` would say
+/// as a refusal of the archive.
 #[test]
 fn the_settings_key_names_the_mac_and_the_flag_overrides_it() {
     let add = linux("settings-key");
@@ -185,9 +188,20 @@ fn the_settings_key_names_the_mac_and_the_flag_overrides_it() {
         "{ran:?}"
     );
     // Not a host id, from the file and from the flag.
-    let rule = "is not a host id: 1 to 64 letters, digits, '.', '_' or '-'";
-    let long = "m".repeat(65);
-    for bad in ["bad mac", "-mac", "", long.as_str(), "mac/1"] {
+    let rule = "is not a node id: 1 to 63 lower-case letters, digits or '-', not starting or \
+                ending with '-'";
+    let long = "m".repeat(64);
+    for bad in [
+        "bad mac",
+        "-mac",
+        "mac-",
+        "",
+        long.as_str(),
+        "mac/1",
+        "Mac-01",
+        "mac_01",
+        "mac.01",
+    ] {
         settings_file(&add, &format!("xcode_mac = {bad:?}\n"));
         let ran = add.run(server.port, &["xcode", "add", &path]);
         assert_eq!(

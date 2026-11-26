@@ -226,7 +226,9 @@ pub struct Maintain {
     pub return_secs: u64,
     /// For `xcode`: the Xcodes of the coordinator's store the host is to have, the versions to
     /// remove and the default ([`crate::maintenance_xcode`]); none when the host's group keeps no
-    /// Xcode, the store holds none, or the turn holds no `xcode`.
+    /// Xcode, the store holds none, or the turn holds no `xcode`. For a `probe` turn of a run that
+    /// names an archive (`xcode_sha256`): that archive alone, with nothing to remove and no
+    /// default, when the store holds it.
     pub xcode: Option<XcodeOrder>,
 }
 

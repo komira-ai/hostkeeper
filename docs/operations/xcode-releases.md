@@ -198,16 +198,19 @@ What changes from the steps above:
     has the steps the Mac reported under `farm`, the Mac's macOS under `macos`, and the version
     and build under `expansion`. The parts the Mac does not make (`programs`, `signature`,
     `tamper`, `toc`) are `null`. Then `checked on <mac> (run <id>): pass` and the Macs (step 9),
-    exit 0. A later run of the same bytes uses the record and schedules nothing.
+    exit 0. A later run of bytes the store holds, with that record, checks nothing again; bytes
+    the store no longer holds are uploaded again, with the record's version and build, and checked
+    again.
   - **A check that fails** (`xcode_archive_not_apple`, `xcode_expand_failed`,
     `xcode_build_mismatch`, `xcode_signature_invalid`, or a stage that finds the store's bytes are
     not its record's or are an encrypted archive) writes the record with its `fail: ...` verdict and
     removes the archive from the store (`Xcode.Remove`, audited, with a reason naming the Mac, the
     run and the check). It prints `refused: <verdict>` and exits 1, so no Mac is ever due it.
   - **A check that could not be made** leaves the archive stored and unchecked, writes no record,
-    says why and exits 1, with `hk xcode verify --mac <node-id> <archive>` to try again. The cases:
-    a refusal of the run (`nothing_due`: not such a Mac; `host_in_maintenance`: it is in another
-    run); a deferred stage (no room, the store not reached), which `hk` cancels so the Mac is not
+    says why and exits 1, with `hk xcode verify --mac <node-id> <archive>` to try again; a refusal
+    of the run exits as a refused call does (2 for `nothing_due`, not such a Mac, and for
+    `host_in_maintenance`, it is in another run; 1 for `unknown_host`). The cases: a refusal of the
+    run; a deferred stage (no room, the store not reached), which `hk` cancels so the Mac is not
     offered it again; a halted turn, which leaves the Mac drained until an operator acts, as any
     halted turn does; a daemon or a coordinator of a release before this one, which makes a plain
     probe (`hk` cancels the run at once when the coordinator's answer does not name the archive).
@@ -216,7 +219,8 @@ What changes from the steps above:
 
 `hk xcode verify --mac <node-id> <archive>` does the same check of an archive the store already holds
 (it uploads nothing; an archive the store does not hold ends with exit 1 and the `hk xcode add`
-line). It prints the record on stdout as on a Mac and exits 0 on a pass and 1 otherwise. It removes
+line). It prints the record on stdout as on a Mac and exits 0 on a pass and 1 otherwise, or when
+the record cannot be kept. It removes
 nothing; on a failing check it prints the `hk xcode remove` line. `--apple-root` has no use off macOS
 and is refused. On a Mac, `--mac` is refused: the checks run on that Mac.
 

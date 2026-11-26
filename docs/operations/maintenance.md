@@ -367,16 +367,20 @@ hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-
 | `pkgutil` | `/usr/sbin/pkgutil --check-signature` on the archive; its output is `signed Apple Software, its chain ending at Apple Root CA` when it is Apple's own signature | `xcode_archive_not_apple` |
 | `xip` | `/usr/bin/xip --expand` of the archive | `xcode_expand_failed` |
 | `app` | the apps the expansion made, by name | `xcode_expand_failed`, unless exactly one |
-| `version` | the app's version and build, from its `Contents/version.plist` | `xcode_build_mismatch`, unless the store's |
+| `version` | the app's version and build, from its `Contents/version.plist` | `xcode_build_mismatch` when it is missing or not the store's |
 | `codesign` | `/usr/bin/codesign --verify --deep --strict` on the app | `xcode_signature_invalid` |
-| `verdict` | `pass` (exit code 0); `<reason>: <detail>` (exit code 1) for an archive that fails; `xcode_check_unfinished: ...` or `xcode_staging_failed: ...` (no exit code) when a program could not start or was killed at its deadline, or the check's files could not be written | |
+| `verdict` | `pass` (exit code 0); `<reason>: <detail>` (exit code 1) for an archive that fails; `xcode_check_unfinished: ...`, `free_space_short: ...` or `xcode_staging_failed: ...` (no exit code) when a program could not start or was killed at its deadline, the volume lacks room for the expansion, or the check's files could not be read or written | |
 
-  Then the Mac removes `/Applications/.hostkeeper-check` and everything in it, and the turn goes on
-  as a probe's: check, put back, done. Nothing is installed, moved into `/Applications` or selected.
+  Before `xip` the volume must still have three times the archive's size free; short of it (the
+  drain may have filled it), the verdict is `free_space_short: ...` with no exit code, since it is
+  the Mac's lack and not the archive's. A `version.plist` that cannot be read is
+  `xcode_staging_failed: ...` with no exit code for the same reason. Then the Mac removes
+  `/Applications/.hostkeeper-check` and everything in it, and the turn goes on as a probe's:
+  check, put back, done. Nothing is installed, moved into `/Applications` or selected. A run that
+  ends between the stage and the apply (cancelled, its drain deferred) leaves the archive there
+  until the Mac's next probe, which removes it first.
   A daemon of a release before this one makes its reads instead, with no `verdict` step: `hk` says
   the archive was not checked.
-
-## Reading a run
 
 ## Reading a run
 
@@ -646,8 +650,10 @@ hk xcode add --mac mac-studio-01
   ([Probe: check an Xcode archive](#probe-check-an-xcode-archive)). `hk` schedules it, follows it
   to its end and writes the record of what the Mac found (`~/.hostkeeper/xcode/<sha256>.json`, the
   record of `hk xcode verify`). An archive that fails a check is removed from the store
-  (`refused: ...`, exit 1). A check that could not run (the Mac is short of space, it is in
-  another run, its hostkeeper is older) leaves the archive stored, unchecked, and says so (exit 1).
+  (`refused: ...`, exit 1). A check that could not run (the Mac is short of space, its
+  hostkeeper is older) leaves the archive stored, unchecked, and says so (exit 1); a run the
+  coordinator refuses (the Mac is in another run, `host_in_maintenance`; it cannot check,
+  `nothing_due`) leaves it the same way and exits as a refused call does (2).
   `hk xcode verify --mac <node-id> <archive>` checks it again.
 - **Nothing installs.** The check fetches the archive into a directory of its own, removes
   everything it made before the Mac is put back, and leaves `/Applications` and the Mac's Xcodes

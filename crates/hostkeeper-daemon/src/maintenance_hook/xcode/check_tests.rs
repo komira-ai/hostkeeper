@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -130,11 +130,30 @@ fn spawn(mac: &Mac, program: &str, args: &[&str], cwd: PathBuf, secs: u64) -> Sp
 
 /// The runs of `sw_vers` and `uname`.
 fn recording_runs(mac: &Mac) -> Vec<Spawn> {
-    let root = mac.path("/");
+    let dir = mac.path(CHECK_DIR);
     vec![
-        spawn(mac, SW_VERS, &[], root.clone(), 60),
-        spawn(mac, UNAME, &["-sm"], root, 60),
+        spawn(mac, SW_VERS, &[], dir.clone(), 60),
+        spawn(mac, UNAME, &["-sm"], dir, 60),
     ]
+}
+
+/// Steps 1 and 2 when the check directory `dir` is not the check's: neither program runs.
+fn not_run(dir: &Path) -> Vec<MaintenanceProbeStep> {
+    let why = format!(
+        "not run: {} is not a directory only this process's user can write",
+        dir.display()
+    );
+    ["sw_vers", "uname"]
+        .map(|name| {
+            let (output, cut) = bounded(why.clone());
+            MaintenanceProbeStep {
+                name: name.to_owned(),
+                exit_code: None,
+                output,
+                cut,
+            }
+        })
+        .into()
 }
 
 /// The run of `pkgutil` on the checked archive.

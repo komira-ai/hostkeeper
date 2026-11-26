@@ -100,8 +100,8 @@ pub(crate) struct Verdict {
     pub(crate) text: String,
     /// The record, as the JSON that is written and printed.
     pub(crate) json: String,
-    /// Where the record is kept.
-    pub(crate) path: PathBuf,
+    /// Where the record is kept; `None` when it could not be written (said on stderr).
+    pub(crate) path: Option<PathBuf>,
 }
 
 /// What the Mac said of the archive, before the record is made of it.
@@ -180,15 +180,34 @@ pub(crate) fn mac_of(
         )));
     };
     let id = String::from_utf8_lossy(&id).into_owned();
-    crate::ssh::check_host_id(&id).map_err(|error| {
+    if !is_node_id(&id) {
         let source = if from_flag {
             "--mac"
         } else {
             "xcode_mac of ~/.hostkeeper/hk.toml"
         };
-        Stop::usage(format!("{source}: {error}"))
-    })?;
+        return Err(Stop::usage(format!(
+            "{source}: {id:?} is not a node id: 1 to {MAX_NODE_ID} lower-case letters, digits or \
+             '-', not starting or ending with '-'"
+        )));
+    }
     Ok(Some(id))
+}
+
+/// The longest node id the coordinator takes.
+const MAX_NODE_ID: usize = 63;
+
+/// Whether `id` is a node id as the coordinator reads one (`hostkeeper_wire::HostId`): 1 to 63
+/// lower-case letters, digits and `-`, not starting or ending with `-`; the coordinator refuses
+/// any other `invalid_request`, which would be said as a refusal of the archive.
+fn is_node_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_NODE_ID
+        && !id.starts_with('-')
+        && !id.ends_with('-')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 /// The line that cancels the run `run`.
@@ -575,7 +594,18 @@ pub(crate) fn check(
     };
     let rec = record::build(w.stamp, subject, &run, &found);
     let json = xcode_record::json(&rec)?;
-    let path = xcode_record::write(home, &subject.archive.sha256, &json)?;
+    // A record that cannot be kept does not undo the Mac's verdict: an archive that failed is
+    // still refused by the caller.
+    let path = match xcode_record::write(home, &subject.archive.sha256, &json) {
+        Ok(path) => Some(path),
+        Err(stop) => {
+            say(
+                w,
+                &format!("the record could not be kept: {}", read::why(&stop)),
+            );
+            None
+        }
+    };
     Ok(Outcome::Verdict(Verdict {
         run,
         pass: found.pass,

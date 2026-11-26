@@ -68,7 +68,10 @@ message MaintenanceReport {
 // What a `probe` read on the host: each program of the daemon's fixed list, run by the maintenance
 // hook on the drained host as the hook's own programs run (on a Mac: as root, in the launchd job
 // of the hook's `cutover`, in the System domain, with an empty environment and no standard input).
-// No program is named by the order, and none is given a password.
+// No program is named by the order, and none is given a password. When the order names an Xcode
+// archive to check (`Maintain.xcodes`), the steps are instead that check's: its programs, given the
+// archive's path, the steps `app` and `version` that run no program, and a last step `verdict`
+// (docs/operations/maintenance.md, "Probe: check an Xcode archive").
 message MaintenanceProbe {
   // The run that probed (`Maintain.run_id`), at most 64 bytes.
   string run_id = 1;
@@ -78,12 +81,14 @@ message MaintenanceProbe {
   repeated MaintenanceProbeStep steps = 3;
 }
 
-// One program of a `probe`, and what it gave.
+// One program of a `probe`, and what it gave; or, in an archive check, a step that runs no program
+// (`app`, `version`, `verdict`), and what it found.
 message MaintenanceProbeStep {
   // The step's name in the daemon's list (`console`, `fdesetup_status`), at most 32 bytes.
   string name = 1;
   // Its exit code; absent when it did not exit by itself (not started, killed at its deadline or
-  // by a signal).
+  // by a signal), and for a step that runs no program. For an archive check's `verdict`: 0 when
+  // the archive passed, 1 when a check refused it, absent when it could not be checked.
   optional int32 exit_code = 2;
   // What it wrote, at most 128 bytes: the non-empty lines of its standard output, then of its
   // standard error, each trimmed, joined by `; `; empty when it wrote nothing, or when it did not
@@ -223,7 +228,9 @@ enum MaintenanceKind {
   // (`MaintenanceReport.probe`), and the host is put back. It installs and changes nothing on the
   // host, is never due, and is ordered only alone, to hosts an operator names whose daemon lists
   // it in `MaintenanceReport.on_demand` (docs/operations/maintenance.md, "Probe: drain, read,
-  // put back").
+  // put back"). An order may name one Xcode archive of the store for it to check in place of its
+  // reads (`Maintain.xcodes`): the archive is fetched into a directory of its own while the host
+  // serves, checked drained, and that directory removed; nothing is installed.
   MAINTENANCE_KIND_PROBE = 5;
 }
 
