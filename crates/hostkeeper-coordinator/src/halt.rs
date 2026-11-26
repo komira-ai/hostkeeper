@@ -583,8 +583,9 @@ pub(crate) fn standing(state: &OpsState, group: Option<&GroupName>, service: &st
 pub(crate) struct HaltScope {
     /// An operator's halt: it holds every host, whatever version is desired.
     every: bool,
-    /// The versions the halt and the reports kept while it stood were for.
-    targets: BTreeSet<Version>,
+    /// The versions the halt and the reports kept while it stood were for, each once, in the
+    /// order of the reports (a version has no order of its own).
+    targets: Vec<Version>,
     /// The hosts that reported them, by node id.
     hosts: BTreeSet<String>,
 }
@@ -601,7 +602,9 @@ impl HaltScope {
             ..Self::default()
         };
         for (node, target) in reports {
-            scope.targets.insert(target.clone());
+            if !scope.targets.contains(target) {
+                scope.targets.push(target.clone());
+            }
             if !node.is_empty() {
                 scope.hosts.insert(node.clone());
             }
