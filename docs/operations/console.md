@@ -2,7 +2,8 @@
 
 What an operator does so that the coordinator's **Console** works: a Linux server's serial port
 through its BMC's Serial over LAN (SOL), and its power and boot device through the same BMC, from
-the web app's Console page and host page or from `hk console`. The design, and the reason for
+the web app's Console page and host page or from `hk console`; and a Mac's screen on the web app's
+Desktop page ([A Mac's Desktop](#a-macs-desktop)). The design, and the reason for
 every rule below, is [console-broker.md](../design/console-broker.md) (cited here as "the
 design"); the Console page is described in [ui-serving.md](../ui-serving.md), every `hk
 console` command in [cli.md](../cli.md#console), and the coordinator's package and its files in
@@ -18,6 +19,8 @@ The parts, and where each is set up:
 | The coordinator can run `ipmitool` | [`ipmitool` beside the coordinator](#ipmitool-beside-the-coordinator) |
 | The BMC carries the serial port at 115.2 kbit/s, and the firmware's screens reach it | [The BMC and the BIOS](#the-bmc-and-the-bios) |
 | The installed system's console, GRUB and login prompt are on `ttyS1` at 115200 baud, kept by the host's daemon | [The daemon keeps the serial baseline](#the-daemon-keeps-the-serial-baseline), and by hand [Moving a server to the serial baseline](#moving-a-server-to-the-serial-baseline) |
+| A Mac's screen: its address in the targets file, Screen Sharing on, the Mac's own login | [A Mac's Desktop](#a-macs-desktop) |
+| Seeing both work in a browser | [Checking it in a browser](#checking-it-in-a-browser) |
 
 The commands of `hk` below reach the coordinator's private listener, as in
 [enrollment.md](enrollment.md): `https://<private-listener>` is its address, `<ca.pem>` the CA
@@ -136,7 +139,8 @@ power = false
 **An address that overrides** (`console-targets-file`; optional; root's, readable by the group, no
 secret). Leave it out unless a BMC's address cannot be found
 ([Each BMC's address](#each-bmcs-address)): a BMC whose host runs no daemon, or a coordinator
-reached through the route of the alternative. One `[[target]]` for each such BMC: `mac` is the
+reached through the route of the alternative; a Mac's Desktop always needs an entry ([A Mac's
+Desktop](#a-macs-desktop)). One `[[target]]` for each such BMC: `mac` is the
 BMC MAC of the host's inventory record, and `address` an IP address or a DNS name, with no port (a
 BMC's is 623). A BMC the file names is reached at that address alone, so an address that moved is
 `address_mismatch` until the file is fixed. A Mac's screen is reached only at the address this file
@@ -492,6 +496,61 @@ own shell as in step 5. With `fromBoot` true, a `FIRMWARE_OUTPUT` finding says r
 and none says it is off. Without `fromBoot` the probe began after the kernel did, and says nothing
 of the firmware.
 
+## A Mac's Desktop
+
+A Mac has no BMC and no serial port. Its **Desktop** is its Screen Sharing (RFB on TCP 5900), which
+the coordinator dials and carries byte for byte to the noVNC viewer of the Desktop page; the
+coordinator reads nothing of it, and the Mac's own login, typed into the page, is the only check
+at the Mac (the design, sections 6.3 and 11.2). What it takes, in order:
+
+1. **The Mac's address in the targets file.** The coordinator finds no address for a Mac: it dials
+   only the address the targets file ([The three files](#the-three-files)) gives one of the data
+   MACs of the Mac's inventory record, on port 5900. Put the Mac's network interface's MAC on its
+   record as a data MAC (`hk enrollment update-record`, [enrollment.md](enrollment.md)), and a
+   `[[target]]` with that MAC and the Mac's address on the network the coordinator's host is on.
+   Use an address that does not move (a manual one, or the Mac's DNS name): the file is the only
+   source, and an address that moved reaches whatever answers there. Without an entry, `Open` is
+   refused `no_address`, and the Desktop page says the targets file gives none of the Mac's data
+   MACs.
+2. **Screen Sharing on, at the Mac.** Turned on from the command line, Screen Sharing shows a black
+   screen until it is approved once by a person at the Mac. With it off,
+   the stream closes `mac_screen_sharing_off` (4011).
+3. **The Mac awake.** A sleeping, off or unbooted Mac does not answer on 5900, and the coordinator
+   does not wake it: the stream closes `mac_unreachable_or_asleep` (4012).
+4. **The Mac's own login.** The lab's Macs offer Apple's security type first, so the page asks for
+   the Mac's user name and password, which go to the Mac encrypted by the viewer; the page keeps
+   no copy. A refused login is said as the Mac's refusal.
+
+The operators file decides who may open a Desktop, as for a Console; the Mac's power is not on the
+page. To check the coordinator's side without a viewer, `hk console open --host-id <mac>` answers
+`CONSOLE_KIND_SCREEN` and the address it will dial with the source `CONSOLE_ADDRESS_SOURCE_TARGETS_FILE`;
+`hk console close --host-id <mac>` gives the session back (an unattached session also ends by itself
+after `console-attach-s`). `hk console probe` reads serial consoles only, and refuses a Mac
+`no_bmc_mac`.
+
+## Checking it in a browser
+
+Two minutes, for an operator the operators file names, at the web app (`https://<private-listener>/ui/`).
+A server with the serial baseline and a Mac set up as above:
+
+1. **Sign in** with your user name and password. Home shows the lab.
+2. **List**, then **Console** on the server's row (a Linux server's row has it; a Mac's row has
+   **Desktop** instead). The page is titled `Console of <host>`, with **Serial console**, **Power and
+   boot** and **Open sessions**.
+3. Type a **Reason** and press **Open the console**. The status says "Connected to the serial port." with
+   a `connected` pill, and the terminal shows `<host> login:` within a few seconds: the page sends one
+   carriage return, which draws the waiting prompt again. Type nothing else. A blank terminal and,
+   after `console-quiet-s`, "No output yet: the host's serial port must be ttyS1." is the first row of
+   [When something does not work](#when-something-does-not-work).
+4. Press **Close**. **Open sessions** lists no session of the host.
+5. Back to Home's **List**, then **Desktop** on the Mac's row. Type a **Reason** and press **Open the
+   desktop**. The status says "Connected to the coordinator; waiting for the Mac.", then "The Mac asks
+   for its own login: type it below." with the fields **Mac user name** and **Mac password**. That is
+   the Mac's Screen Sharing answering through the coordinator. Signing in shows the Mac's screen
+   ("The screen of <host> is shown."); a black screen is step 2 of [A Mac's Desktop](#a-macs-desktop).
+6. Press **Close**. Each open and close is in the audit (`console_open`, `console_close` with cause
+   `client_left`).
+
 ## When something does not work
 
 | What you see | Why, and the fix |
@@ -507,3 +566,7 @@ of the firmware.
 | `bmc_busy` (4003) | The BMC's 16 sessions are taken; one a client left is freed by the BMC within a minute. |
 | `bmc_failed` | `ipmitool` is missing or failed. [`ipmitool` beside the coordinator](#ipmitool-beside-the-coordinator). |
 | `no_console_access`, `power_not_permitted` | The operators file. [The three files](#the-three-files). |
+| The Desktop page: "No address is known for this Mac" (`no_address`) | The targets file gives none of the data MACs on the Mac's inventory record. Step 1 of [A Mac's Desktop](#a-macs-desktop). |
+| `mac_screen_sharing_off` (4011) | Screen Sharing is off on the Mac, or the address reaches a host that refuses port 5900. Step 2 of [A Mac's Desktop](#a-macs-desktop). |
+| `mac_unreachable_or_asleep` (4012) | The Mac is asleep, off or not at the targets file's address. Step 3 of [A Mac's Desktop](#a-macs-desktop). |
+| The Mac's login accepted, then a black screen | Screen Sharing was turned on from the command line and not approved at the Mac. Step 2 of [A Mac's Desktop](#a-macs-desktop). |
