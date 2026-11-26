@@ -191,11 +191,14 @@ The Macs then install it from the store in their own drained turn (2.4), where t
 Apple session on any farm Mac; the cost is one command by a person per release.
 
 **From a box that is not a Mac (owner's direction, 2026-11-25).** The owner may download the archive in a browser on an operator's Linux
-box, where `pkgutil`, `xip` and `plutil` do not exist. The archive then reaches the store through the same `PUT`, with the version from
-the archive's name and the build the coordinator lists for that release (the alert's), and steps 2 and 3's checks are made by the Mac
-that stages it, before anything is installed: `pkgutil --check-signature` with the same rule as step 2, then `xip --expand` and the
-build (2.4, Built). A mislabelled or foreign archive is held in the store but never installed: every Mac's stage defers it, and an
-operator removes it (`hk xcode remove`). `docs/operations/mac-proof-owner-session.md` step 1 is this route.
+box, where `pkgutil`, `xip` and `plutil` do not exist. `hk xcode add` runs there too (Built,
+`crates/hostkeeper-hk/src/xcode_farm/`; xcode-one-action.md section 2.8). The archive reaches the store through the same `PUT`,
+with the version from the archive's name and the build the coordinator lists for that release (the alert's). Steps 2 and 3's checks
+are then made by a farm Mac the operator names, in one `probe` run that names the stored archive: the Mac fetches it while it
+serves, and checks it drained with the stage's own code (`pkgutil --check-signature` with the same rule as step 2, `xip --expand`,
+the build, `codesign`). It installs nothing, and `hk` removes an archive that fails from the store. Every Mac's stage still makes
+the same checks before it installs anything (2.4, Built), so an archive that was never checked is still never installed.
+`docs/operations/mac-proof-owner-session.md` step 1 is this route.
 
 **The alternative: the fetcher Mac (section 2.2).** A farm Mac holds the Apple session and logs its account in at boot; a person signs in
 on it when Apple has ended the session. It is kept only for the case where no operator's Mac can push.

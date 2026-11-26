@@ -332,6 +332,52 @@ The rules of a probe run:
   `min_serving`, the batch, a window, the drain deadline, Cancel, Retry and Put back, the audit
   entries and the alerts.
 
+## Probe: check an Xcode archive
+
+A probe run can check an archive of the Xcode store on a Mac, in place of its reads: what `hk
+xcode add` and `hk xcode verify` do from a box that is not a Mac
+([Bringing in a new Xcode](#bringing-in-a-new-xcode)). The run names the archive by its SHA-256:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    maintenance schedule --kinds probe --host-ids mac-studio-01 --xcode-sha256 <sha256> \
+    --take-last-host true --confirm true --reason "check Xcode 27.2"
+```
+
+- **The rules** are a probe run's, plus these. `--xcode-sha256` is 64 lower-case hex characters and
+  names an archive the store holds; with another kind, or naming one it does not hold, the run is
+  refused `invalid_request`. A Mac is in the run only when its group keeps Xcode (`xcode_keep` 1
+  or more), since only such a Mac may read the store; a run left with none is refused
+  `nothing_due`. The run's `xcodeSha256` names the archive.
+- **Stage, while the Mac serves**: the Mac fetches the archive from the store into
+  `/Applications/.hostkeeper-check` (made again, root's alone, mode 0700) and checks its size and
+  SHA-256 against the store's record, and that it is not an Apple Encrypted Archive. The volume
+  must have four times the archive's size free: the archive and its expansion. A stage that fails
+  defers the turn with its reason (`free_space_short`, `xcode_not_in_store`, `xcode_fetch_failed`,
+  `xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_staging_failed`), and nothing was
+  drained. A run with no window end offers a deferred host again; `hk xcode add` cancels it.
+- **Apply, on the drained Mac**: the probe's steps are the checks of the Mac's own Xcode stage, run
+  the same way (as root, by absolute path, with only `PATH` in their environment), each kept as a
+  step of the probe. They stop at the first that fails, and `verdict` is always last:
+
+| Step | What | Fails |
+|---|---|---|
+| `sw_vers` | `/usr/bin/sw_vers` | never: recorded |
+| `uname` | `/usr/bin/uname -sm` | never: recorded |
+| `pkgutil` | `/usr/sbin/pkgutil --check-signature` on the archive; its output is `signed Apple Software, its chain ending at Apple Root CA` when it is Apple's own signature | `xcode_archive_not_apple` |
+| `xip` | `/usr/bin/xip --expand` of the archive | `xcode_expand_failed` |
+| `app` | the apps the expansion made, by name | `xcode_expand_failed`, unless exactly one |
+| `version` | the app's version and build, from its `Contents/version.plist` | `xcode_build_mismatch`, unless the store's |
+| `codesign` | `/usr/bin/codesign --verify --deep --strict` on the app | `xcode_signature_invalid` |
+| `verdict` | `pass` (exit code 0); `<reason>: <detail>` (exit code 1) for an archive that fails; `xcode_check_unfinished: ...` or `xcode_staging_failed: ...` (no exit code) when a program could not start or was killed at its deadline, or the check's files could not be written | |
+
+  Then the Mac removes `/Applications/.hostkeeper-check` and everything in it, and the turn goes on
+  as a probe's: check, put back, done. Nothing is installed, moved into `/Applications` or selected.
+  A daemon of a release before this one makes its reads instead, with no `verdict` step: `hk` says
+  the archive was not checked.
+
+## Reading a run
+
 ## Reading a run
 
 The Maintenance page's **Runs** lists the last ten runs, read again every 10 seconds: each with its
@@ -580,16 +626,35 @@ it would be removed at once),
   to switch builds. Each code, its status and the exit codes are in
   [xcode-releases.md](xcode-releases.md#adding-a-release-from-your-mac-hk-xcode-add).
 
-**From a box that is not a Mac.** An archive downloaded in a browser on an operator's Linux box
-reaches the store through the same route, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
-([xcode-releases.md](xcode-releases.md#pushing-an-archive-put-v1xcodesha256versionversionbuildbuild)),
-sent with any HTTPS client that reads the bearer from a file (never from an argument): the version
-from the archive's name, `Xcode_<version>.xip`, and the build the coordinator lists for that
-release (`hk xcode list`, its `waiting`). Linux has no `pkgutil`, `xip` or `plutil`, so nothing
-checks Apple's signature, the version or the build before the upload; every Mac checks them in its
-stage before it installs anything (below), and an archive that fails is deferred on every Mac, never
-installed, until it is removed with `hk xcode remove`. This is how the Mac proof's owner session
-brings its archive in ([mac-proof-owner-session.md](mac-proof-owner-session.md), step 1).
+**From a box that is not a Mac.** On an operator's Linux box, with an archive downloaded there in
+a browser into `~/Downloads`, the same command brings it in. Linux has no `pkgutil`, `xip` or
+`codesign`, so the checks run on a farm Mac instead, which `hk` names with `--mac <node-id>`, or
+`xcode_mac` in the settings file:
+
+```
+hk xcode add --mac mac-studio-01
+```
+
+- **Before the upload**, `hk` checks what it can on Linux: the archive's kind and what the store
+  holds, as on a Mac. It reads the version from the archive's name (`Xcode_<version>.xip`) and
+  takes the build the coordinator lists for that release as waiting. A release the coordinator
+  does not list as waiting is refused before a byte is sent, since Linux cannot read the build
+  from the archive. `hk` downloads nothing on Linux: a version with no archive in `~/Downloads`
+  ends saying to download it in a browser.
+- **The upload** is the same, with the same resume.
+- **Then the checks, on the Mac named**: one probe run that checks the stored archive
+  ([Probe: check an Xcode archive](#probe-check-an-xcode-archive)). `hk` schedules it, follows it
+  to its end and writes the record of what the Mac found (`~/.hostkeeper/xcode/<sha256>.json`, the
+  record of `hk xcode verify`). An archive that fails a check is removed from the store
+  (`refused: ...`, exit 1). A check that could not run (the Mac is short of space, it is in
+  another run, its hostkeeper is older) leaves the archive stored, unchecked, and says so (exit 1).
+  `hk xcode verify --mac <node-id> <archive>` checks it again.
+- **Nothing installs.** The check fetches the archive into a directory of its own, removes
+  everything it made before the Mac is put back, and leaves `/Applications` and the Mac's Xcodes
+  as they were. Every Mac still checks the archive in its stage before it installs it (below).
+
+This is how the Mac proof's owner session brings its archive in
+([mac-proof-owner-session.md](mac-proof-owner-session.md), step 1).
 
 The alert clears when the store holds the release. Check with:
 
@@ -949,18 +1014,18 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 |---|---|
 | `unauthorized` | no credential, or not an operator's |
 | `forbidden` | a CI token |
-| `invalid_request` | a field breaks its rule: a host id, a group name, a run id; a reason missing from a call that changes something, over 256 bytes or with a control character; a kind named twice; `probe` with another kind or with `--host-group`; both or neither of `--host-ids` and `--host-group`; more than 32 hosts or one twice; a batch of 0 or above 10000; a window start without an end, or an end not after its start |
+| `invalid_request` | a field breaks its rule: a host id, a group name, a run id; a reason missing from a call that changes something, over 256 bytes or with a control character; a kind named twice; `probe` with another kind or with `--host-group`; `--xcode-sha256` that is not 64 lower-case hex, with a kind other than `probe` alone, or naming an archive the Xcode store does not hold; both or neither of `--host-ids` and `--host-group`; more than 32 hosts or one twice; a batch of 0 or above 10000; a window start without an end, or an end not after its start |
 | `unknown_group` | `Schedule` names a group the coordinator does not hold |
 | `unknown_host` | `Schedule` names a host that is not enrolled |
 | `unknown_run` | no run has the id |
-| `nothing_due` | no host of the `Schedule` has anything due of its kinds that could be ordered (every one with something due was skipped, or none has sent a report since the coordinator started); for `probe`, no host named lists it on demand |
+| `nothing_due` | no host of the `Schedule` has anything due of its kinds that could be ordered (every one with something due was skipped, or none has sent a report since the coordinator started); for `probe`, no host named lists it on demand, and with `--xcode-sha256` none of them is in a group that keeps Xcode |
 | `window_ended` | the window's end is at or before the coordinator's clock |
 | `last_host` | the run would take every host of a group, without `--take-last-host true` |
 | `host_in_maintenance` | a host of the `Schedule` holds a turn of another run that has not ended |
 | `run_ended` | `Cancel` or `RetryHost` of a run that is done, cancelled or past its window |
 | `not_in_run` | `RetryHost` or `PutBack` of a host the run does not hold |
 | `not_halted` | `RetryHost` or `PutBack` of a host whose turn is not halted |
-| `store_failed` | the run could not be read or written; nothing changed, and asking again is safe |
+| `store_failed` | the run could not be read or written, or, with `--xcode-sha256`, the Xcode store could not be read; nothing changed, and asking again is safe |
 | `audit_unavailable` | the audit entry could not be written; nothing changed, and asking again is safe |
 
 ## Not built yet
