@@ -70,30 +70,35 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 
 ## The heartbeat
 
-`beat_health` maps an observation to the `Health` and version of a `ServiceBeat`:
+`beat_health` (`hostkeeper-observe`) maps an observation to a `Health` and the version of a
+`ServiceBeat`. The daemon's heartbeat sends that health through `observation`
+(`crates/hostkeeper-daemon/src/link_adapters.rs`), which has no `HEALTH_UNSPECIFIED`: a
+coordinator reads a service's health as healthy, unhealthy or absent. The column `Sent` is what
+the heartbeat carries:
 
-| Observation | `Health` | Version |
-|---|---|---|
-| `absent` | `HEALTH_ABSENT` | empty |
-| `unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` | recorded |
-| `unmonitored`, healthy | `HEALTH_HEALTHY` | recorded |
-| `unmonitored`, unhealthy | `HEALTH_UNHEALTHY` | recorded |
-| `stopped`, `transitioning`, `unobserved` | `HEALTH_UNHEALTHY` | recorded |
-| `live` with `version_mismatch` | `HEALTH_UNHEALTHY` | recorded |
-| `live`, unhealthy | `HEALTH_UNHEALTHY` | recorded |
-| `live`, healthy | `HEALTH_HEALTHY` | recorded |
-| `live`, no `[health]`, version not contradicted | `HEALTH_HEALTHY` | recorded |
+| Observation | `beat_health` | Sent | Version |
+|---|---|---|---|
+| `absent` | `HEALTH_ABSENT` | `HEALTH_ABSENT` | empty |
+| `unmonitored`, no `[health]` | `HEALTH_UNSPECIFIED` | `HEALTH_HEALTHY` | recorded |
+| `unmonitored`, healthy | `HEALTH_HEALTHY` | `HEALTH_HEALTHY` | recorded |
+| `unmonitored`, unhealthy | `HEALTH_UNHEALTHY` | `HEALTH_UNHEALTHY` | recorded |
+| `stopped`, `transitioning`, `unobserved` | `HEALTH_UNHEALTHY` | `HEALTH_UNHEALTHY` | recorded |
+| `live` with `version_mismatch` | `HEALTH_UNHEALTHY` | `HEALTH_UNHEALTHY` | recorded |
+| `live`, unhealthy | `HEALTH_UNHEALTHY` | `HEALTH_UNHEALTHY` | recorded |
+| `live`, healthy | `HEALTH_HEALTHY` | `HEALTH_HEALTHY` | recorded |
+| `live`, no `[health]`, version not contradicted | `HEALTH_HEALTHY` | `HEALTH_HEALTHY` | recorded |
 
 `HEALTH_UNHEALTHY` means "does not, or the daemon cannot tell"; the reason token tells the cases
-apart.
+apart. A service the daemon cannot observe at all (no `current`, or a manifest that does not load)
+is sent `HEALTH_UNHEALTHY` with the detail `not_observed`.
 
-The daemon's heartbeat carries no `HEALTH_UNSPECIFIED`: a coordinator reads a service's health as
-healthy, unhealthy or absent. An `unmonitored` service with no `[health]` (a configuration package,
-which only places files: no run units, no health URL) is sent `HEALTH_HEALTHY`, as a `live`
-service with no `[health]` is, since nothing of it can fail to serve. Sent unhealthy, it would keep
-its host from ever counting as serving in a maintenance run (`min_serving`) and from baking after
-its turn (`docs/operations/maintenance.md`, "Who is taken, and when"). Its detail stays
-`unmonitored`.
+An `unmonitored` service with no `[health]` (a configuration package, which only places files: no
+run units, no health URL) is sent `HEALTH_HEALTHY`, as a `live` service with no `[health]` is,
+since nothing of it can fail to serve. Sent unhealthy, it would keep its host from ever counting
+as serving in a maintenance run (`min_serving`) and from baking after its turn
+(`docs/operations/maintenance.md`, "Who is taken, and when"). Its detail stays `unmonitored`.
+The Linux maintenance check reads `beat_health` itself and counts `HEALTH_UNSPECIFIED`, like
+`HEALTH_HEALTHY`, as no unhealthy service.
 
 `HEALTH_SILENT` is not in the table: no daemon sends it. The coordinator answers it in place of the
 health a host last reported, in a service's view of a host that is not live (the `health` of a
