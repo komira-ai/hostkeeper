@@ -379,6 +379,7 @@ fn a_gh_that_cannot_start_is_unavailable_a_gh_killed_at_the_deadline_is_timed_ou
             code: None,
             timed_out: true,
             stderr: b"killed".to_vec(),
+            ..Ran::default()
         })
     });
     assert_eq!(
@@ -391,6 +392,7 @@ fn a_gh_that_cannot_start_is_unavailable_a_gh_killed_at_the_deadline_is_timed_ou
             code: Some(0),
             timed_out: true,
             stderr: Vec::new(),
+            ..Ran::default()
         })
     });
     assert_eq!(
@@ -404,6 +406,7 @@ fn a_gh_that_cannot_start_is_unavailable_a_gh_killed_at_the_deadline_is_timed_ou
             code: Some(1),
             timed_out: false,
             stderr: long.clone().into_bytes(),
+            ..Ran::default()
         })
     });
     let want = format!("gh: ?bell {}", "y".repeat(150));
@@ -733,6 +736,21 @@ fn a_child_that_exits_is_reported_with_its_code_and_leaves_no_staging_file() {
     assert_eq!(staging_files(dir.path()), Vec::<String>::new());
 }
 
+/// A child's standard output is kept in `Ran::stdout`, apart from its standard error, and the
+/// staging file it was kept in is removed.
+#[test]
+fn a_childs_standard_output_is_kept() {
+    let dir = scratch("gh-run-stdout");
+    let clock = Arc::new(FakeClock::yielding(100));
+    let runner = SystemRunner::new(clock.clone());
+    let spawn = self_spawn(dir.path(), &["--list"], clock.stamp(u64::MAX / 2));
+    let ran = runner.run(&spawn).expect("the child ran");
+    let listed = String::from_utf8_lossy(&ran.stdout);
+    assert!(listed.contains("gh::tests::a_childs_standard_output_is_kept: test"));
+    assert!(ran.stderr.is_empty());
+    assert_eq!(staging_files(dir.path()), Vec::<String>::new());
+}
+
 /// A child that fails keeps its standard error and a non-zero code.
 /// Catches standard error not being captured or a failure reported as success.
 #[test]
@@ -844,6 +862,7 @@ fn a_deadline_that_has_passed_before_the_start_starts_nothing() {
                 code: None,
                 timed_out: true,
                 stderr: Vec::new(),
+                stdout: Vec::new(),
             }
         );
     }

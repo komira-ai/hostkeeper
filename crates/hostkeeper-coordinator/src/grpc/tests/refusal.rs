@@ -869,6 +869,11 @@ fn every_xcode_refusal_has_the_code_and_token_its_proto_comment_names() {
                 Unavailable,
                 "audit_unavailable",
             ),
+            (
+                XcodeRefusal::PartialLocked,
+                FailedPrecondition,
+                "partial_locked",
+            ),
         ],
         refusal::xcode,
     );

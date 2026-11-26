@@ -198,6 +198,7 @@ fn list_without_a_store_says_it_is_not_configured_and_still_names_the_waiting_re
             }),
             keep: 0,
             max_bytes: 0,
+            uploads: Vec::new(),
         })
     );
 }
@@ -241,6 +242,7 @@ fn list_answers_the_archives_newest_first_with_the_waiting_release_and_the_keep(
         }),
         keep,
         max_bytes: 1 << 20,
+        uploads: Vec::new(),
     };
     assert_eq!(
         farm.coordinator()

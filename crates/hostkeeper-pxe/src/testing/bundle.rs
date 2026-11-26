@@ -238,6 +238,7 @@ impl Runner for FakeGh {
                 code: Some(1),
                 timed_out: false,
                 stderr: format!("gh: verification failed: {flag}\n").into_bytes(),
+                ..Ran::default()
             },
         })
     }

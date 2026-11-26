@@ -332,7 +332,7 @@ pub(crate) fn xcode(refusal: XcodeRefusal) -> Status {
         XcodeRefusal::Unauthorized => Code::Unauthenticated,
         XcodeRefusal::Forbidden => Code::PermissionDenied,
         XcodeRefusal::InvalidRequest => Code::InvalidArgument,
-        XcodeRefusal::NoStore => Code::FailedPrecondition,
+        XcodeRefusal::NoStore | XcodeRefusal::PartialLocked => Code::FailedPrecondition,
         XcodeRefusal::UnknownArchive => Code::NotFound,
         XcodeRefusal::AuditUnavailable => Code::Unavailable,
     };

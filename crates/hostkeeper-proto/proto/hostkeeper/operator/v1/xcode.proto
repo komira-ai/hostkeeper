@@ -10,7 +10,10 @@
 // itself does not travel through this API: an operator's Mac uploads it with
 // `PUT /v1/xcode/<sha256>?version=<version>&build=<build>` on the same listener, and a host
 // reads it with `GET /v1/xcode/<sha256>` on the listener hosts use, with byte ranges; both are
-// plain HTTP with no generated command line.
+// plain HTTP with no generated command line. A `PUT` with `Content-Range: bytes <first>-<last>/<size>`
+// sends one part of the archive, which the store keeps as a partial upload until the last part
+// completes it, and `GET /v1/xcode/<sha256>/upload` on the first listener says how much of an
+// archive the store holds (docs/operations/xcode-releases.md).
 //
 // Authentication: `Xcode` takes the operator's credential only; no CI token reaches it (see
 // operator.proto). The upload takes the operator's token as a bearer and refuses a client
@@ -21,7 +24,8 @@
 // value's name without the prefix, in lower case; the status code is the one each value names. A
 // call refused for its credential or its request (`unauthorized`, `forbidden`,
 // `invalid_request`, `no_store`, `unknown_archive`) changes nothing, and so does one that cannot
-// write its audit line (`audit_unavailable`). A `Remove` whose files cannot be removed after its
+// write its audit line (`audit_unavailable`) and a `Remove` of a partial upload whose writer's lock
+// is fresh (`partial_locked`). A `Remove` whose files cannot be removed after its
 // audit line is written is `store_failed`: the line stands, and the archive may be partly
 // removed (its file gone, its record left).
 //
@@ -39,18 +43,22 @@ package hostkeeper.operator.v1;
 
 import "hostkeeper/operator/v1/entry.proto";
 
-// The Xcode store. `Remove` is audited as `xcode_remove` under the caller's name, with the
-// caller's reason, and the archive's version, build and SHA-256 as its subject; `List` changes
-// nothing and writes no audit entry.
+// The Xcode store. `Remove` is audited as `xcode_remove` (as `xcode_partial_remove` for a partial
+// upload) under the caller's name, with the caller's reason, and the version, build and SHA-256 as
+// its subject; `List` changes nothing and writes no audit entry.
 service Xcode {
   // The archives the store holds, newest release first, the release of the daily list of Xcode
   // releases that the store does not hold yet (the one the alert `xcode_release_waiting` names),
-  // how many releases the store keeps and the most bytes one upload may be. Changes nothing and
+  // how many releases the store keeps, the most bytes one upload may be, and the uploads in
+  // progress (`uploads`: the partial uploads the store keeps, oldest first). Changes nothing and
   // is not audited. A coordinator started without `--xcode-dir` answers `configured` false.
   rpc List(ListXcodeRequest) returns (ListXcodeResponse);
   // Removes one archive from the store, by its SHA-256, and writes the audit entry `xcode_remove`
   // first: when the entry cannot be written nothing is removed. The version the archive held is
-  // free for an upload of another build afterwards.
+  // free for an upload of another build afterwards. A SHA-256 the store holds no archive of but
+  // holds as a partial upload (one `List` gives in `uploads`) removes that upload instead, with the
+  // audit entry `xcode_partial_remove` written first the same way, and is refused `partial_locked`
+  // while the upload's lock is fresh; a SHA-256 the store holds neither way is `unknown_archive`.
   rpc Remove(RemoveXcodeRequest) returns (RemoveXcodeResponse);
 }
 
@@ -68,13 +76,17 @@ enum XcodeRefusal {
   // FAILED_PRECONDITION: `Remove` on a coordinator started without `--xcode-dir`; `List` answers
   // such a coordinator instead.
   XCODE_REFUSAL_NO_STORE = 4;
-  // NOT_FOUND: the store holds no archive with the SHA-256.
+  // NOT_FOUND: the store holds neither an archive nor a partial upload with the SHA-256.
   XCODE_REFUSAL_UNKNOWN_ARCHIVE = 5;
   // INTERNAL: the store could not be read, or the archive could not be removed. Asking again is
   // safe.
   XCODE_REFUSAL_STORE_FAILED = 6;
   // UNAVAILABLE: the audit entry could not be written. Nothing was removed.
   XCODE_REFUSAL_AUDIT_UNAVAILABLE = 7;
+  // FAILED_PRECONDITION: `Remove` of a SHA-256 the store holds only as a partial upload whose
+  // writer's lock is fresh (written within the last 30 seconds). Nothing was removed; asking again
+  // once the upload stops is safe.
+  XCODE_REFUSAL_PARTIAL_LOCKED = 8;
 }
 
 message ListXcodeRequest {}
@@ -119,6 +131,29 @@ message ListXcodeResponse {
   uint32 keep = 4;
   // The most bytes one upload may be (`--xcode-max-bytes`); 0 without a store.
   uint64 max_bytes = 5;
+  // The uploads in progress: the partial uploads the store keeps (each resumed from its last byte
+  // by `PUT` with `Content-Range`), oldest first. Empty without a store.
+  repeated XcodeUpload uploads = 6;
+}
+
+// A partial upload the store keeps: the bytes received so far of one archive, named by the
+// SHA-256 the whole must have. Removed when it is stored, when its final hash differs, by
+// `Remove` of its SHA-256, or when it is not written for 24 hours.
+message XcodeUpload {
+  // The SHA-256 the whole archive must have, 64 lower-case hex characters.
+  string sha256 = 1;
+  // The release's version the upload names.
+  string version = 2;
+  // The release's build the upload names.
+  string build = 3;
+  // The bytes received so far.
+  uint64 received_bytes = 4;
+  // The archive's whole size in bytes.
+  uint64 size_bytes = 5;
+  // The name of the operator whose request started it.
+  string started_by = 6;
+  // When bytes were last written to it, in unix seconds.
+  uint64 last_write_unix = 7;
 }
 
 message RemoveXcodeRequest {

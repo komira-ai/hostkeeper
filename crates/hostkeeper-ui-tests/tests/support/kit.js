@@ -64,7 +64,7 @@ export const TEST_ZONE_OFFSET = -18000;
 export function recorder(client, params, answers, now, zone) {
   const seen = {
     reports: [], refreshes: 0, navigations: [], questions: [], shown: [], repeats: [], sockets: [], terminals: [],
-    viewers: [],
+    viewers: [], copies: [],
   };
   const left = (answers || []).slice();
   const leavers = [];
@@ -85,6 +85,17 @@ export function recorder(client, params, answers, now, zone) {
     },
     localOffset(unix) {
       return zone === undefined ? TEST_ZONE_OFFSET : zone(unix);
+    },
+    // The page's own address, which a test sets on the context before a page reads it.
+    origin: "",
+    // The clipboard: each text a page asks to copy is kept in `seen.copies`; it is refused (the
+    // promise rejects) while a test has set `ctx.copyRefused` to true.
+    copyRefused: false,
+    async copy(text) {
+      seen.copies.push(text);
+      if (ctx.copyRefused === true) {
+        throw new Error("the clipboard refused");
+      }
     },
     // A socket the test drives: nothing arrives by itself. The test calls `handlers.open()`,
     // `handlers.message(frame)` (a string, or a Uint8Array) and `handlers.close(closed)` itself;

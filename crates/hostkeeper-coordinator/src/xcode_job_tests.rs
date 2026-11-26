@@ -34,7 +34,7 @@ const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/xcode/data.json");
 const FEED: &str = "https://origin.test/data.json";
 
 /// The message of the alert for Xcode 27.2 (27B52) when the store holds nothing as new.
-const WAITING_27_2: &str = "Xcode 27.2 (27B52), which requires macOS 26.6 or later, is released and the coordinator's Xcode store holds no release as new: push it from a Mac signed in to the Apple developer account with `hk xcode-push 27.2`";
+const WAITING_27_2: &str = "Xcode 27.2 (27B52), which requires macOS 26.6 or later, is released and the coordinator's Xcode store holds no release as new: add it from a Mac signed in to the Apple developer account with `hk xcode add 27.2`";
 
 /// The Xcode `number` of `build`.
 fn id(number: &str, build: &str) -> XcodeId {

@@ -543,16 +543,19 @@ requires and the command to run. That is the prompt; nothing downloads Xcode by 
 
 An operator brings it in from **their own Mac**, the one signed in to the organisation's Apple
 developer account (the shared engineering account; its address is in the private operator runbook,
-not here). On that Mac, with `xcodes` installed and an operator token in a private file:
+not here). On that Mac, with `xcodes` installed and the settings file written once
+(`hk settings init --endpoint <private-listener> --ca-file <ca.pem> --token-file <token-file>`, an
+operator token in a private file):
 
 ```
-hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push 27.2
+hk xcode add 27.2
 ```
 
-or, with an archive downloaded in a browser from Apple's developer site:
+or, with an archive downloaded in a browser from Apple's developer site, `hk xcode add` alone takes
+the newest `Xcode_*.xip` in `~/Downloads`, and a path names one:
 
 ```
-hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode-push ~/Downloads/Xcode_27.2.xip
+hk xcode add ~/Downloads/Xcode_27.2.xip
 ```
 
 - **The two-factor code goes to a person.** `xcodes` signs in with the session it keeps in that
@@ -560,12 +563,14 @@ hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-
   code arrives on the account's trusted device; whoever holds it types it at the prompt. hostkeeper
   never holds the Apple Account, its password or its session, and no farm Mac signs in to Apple:
   everything a farm Mac does with the archive runs as root with no Apple sign-in. This is why
-  `xcode-push` takes `--token-file` only: standard input is the terminal `xcodes` prompts on.
-- **What it checks before it uploads**: Apple's own signature on the archive (`pkgutil
+  `hk xcode add` takes `--token-file` only: standard input is the terminal `xcodes` prompts on.
+- **What it checks before it uploads**: the archive's kind (an `.xip`), what the store holds (an
+  archive it holds already ends the run with exit 0), Apple's own signature on the archive (`pkgutil
   --check-signature`, status `signed Apple Software`, a chain ending at Apple Root CA), then the
-  version and build inside it (for a version given, they must be it). A failed check uploads
-  nothing. The expansion that reads them needs about an installed Xcode's free space beside the
-  archive.
+  version and build inside it (for a version given, they must be it) and `codesign` on the expanded
+  app. A failed check uploads nothing. The expansion that reads them needs three times the archive's
+  size free beside it, and is skipped when a record of an earlier run of the same bytes says what
+  they are. The upload shows its progress on stderr.
 - **The upload** is the archive unmodified, with the operator token as the bearer and nowhere
   else. The coordinator answers before the body is sent when it would refuse it (`not_listed`: the
   list has no such release; `already_held`; `not_kept`: older than the releases the store keeps, so
@@ -573,7 +578,18 @@ it would be removed at once),
   and stores it only when its SHA-256 matches. A second build of a version the store holds is
   answered `xcode_version_taken` and raises the alert of that name; remove the held archive first
   to switch builds. Each code, its status and the exit codes are in
-  [xcode-releases.md](xcode-releases.md#pushing-a-release-from-your-mac-hk-xcode-push).
+  [xcode-releases.md](xcode-releases.md#adding-a-release-from-your-mac-hk-xcode-add).
+
+**From a box that is not a Mac.** An archive downloaded in a browser on an operator's Linux box
+reaches the store through the same route, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
+([xcode-releases.md](xcode-releases.md#pushing-an-archive-put-v1xcodesha256versionversionbuildbuild)),
+sent with any HTTPS client that reads the bearer from a file (never from an argument): the version
+from the archive's name, `Xcode_<version>.xip`, and the build the coordinator lists for that
+release (`hk xcode list`, its `waiting`). Linux has no `pkgutil`, `xip` or `plutil`, so nothing
+checks Apple's signature, the version or the build before the upload; every Mac checks them in its
+stage before it installs anything (below), and an archive that fails is deferred on every Mac, never
+installed, until it is removed with `hk xcode remove`. This is how the Mac proof's owner session
+brings its archive in ([mac-proof-owner-session.md](mac-proof-owner-session.md), step 1).
 
 The alert clears when the store holds the release. Check with:
 
@@ -589,7 +605,9 @@ release still waiting, if any.
 `xcode_keep` is at least 1 and that lacks it: the Mac counts toward its group's `updates_due`, and
 its host page lists it. **Update** the group, or **Schedule** it in a window with only "Xcode"
 ticked (`--kinds xcode`); a Mac that is also due macOS installs that first. While the store's
-directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
+directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits. `hk xcode add`
+ends with this list for the release it stored, and the `hk maintenance schedule` line that stores
+the run for each group no run takes yet ([xcode-releases.md](xcode-releases.md)).
 
 ### The private store, `xcode_keep` and `xcode_default`
 
@@ -620,14 +638,15 @@ A group's two Xcode keys ([The group's settings](#the-groups-settings)):
 The `maintain` order of a Mac's turn with `xcode` carries the kept releases (version, build, size
 and SHA-256), the versions to remove (each installed as `Xcode-<version>.app` and older than every
 kept release) and the default. The turn stages each release it lacks while the Mac still
-serves (fetched from the store, its size and SHA-256 checked, expanded with `xip --expand` in
+serves (fetched from the store, its size and SHA-256 checked, Apple's own signature checked with
+`pkgutil --check-signature` as `xcode-push` checks it, expanded with `xip --expand` in
 `/Applications/.hostkeeper-staging/`, its build and code signature checked); then, drained, moves
 it to `/Applications/Xcode-<version>.app`, accepts the licence, runs the first launch, points
 `xcode-select` at the default, and removes the releases older than the group keeps. An Xcode whose
 directory is not `Xcode-<version>.app` (one a person or the App Store put there) is never removed.
 A stage that fails defers (`xcode_order_invalid`, `xcode_installed_unreadable`,
 `free_space_unreadable`, `free_space_short`, `xcode_not_in_store`, `xcode_fetch_failed`,
-`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_expand_failed`, `xcode_build_mismatch`,
+`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_archive_not_apple`, `xcode_expand_failed`, `xcode_build_mismatch`,
 `xcode_signature_invalid`, `xcode_staging_failed`); an apply or a check that fails halts
 (`xcode_order_invalid`, `xcode_installed_unreadable`, `xcode_build_mismatch`, `xcode_not_staged`,
 `xcode_install_taken`, `xcode_move_failed`, `xcode_license_failed`,
@@ -875,7 +894,7 @@ appear, and clear by themselves when their cause does.
 | `updates_due` | warning | a host of the group (one alert per group, `host_group` set, and one for the hosts in no group) reports something due, stale reports included | Update the group or its hosts, or Schedule them in a window; or leave it: it never pages |
 | `maintenance_halted` | critical | a host's turn is stored halted (one per host); it names the host, the run, its group and its daemon's reason, and adds that a retry or a put back is sent once one is queued | [A halted host](#a-halted-host): read the reason, then Retry or Put back |
 | `maintenance_not_back` | critical | a host stored rebooting stayed silent past its group's `return_secs` (one per host) | [A host that is not back](#a-host-that-is-not-back): look at its console; it goes on when it reports |
-| `xcode_release_waiting` | warning | the list of Xcode releases holds a release newer than any the store holds (one alert, the newest; it names the version, the build and the macOS it requires) | [Bringing in a new Xcode](#bringing-in-a-new-xcode): `hk xcode-push <version>` from your Mac |
+| `xcode_release_waiting` | warning | the list of Xcode releases holds a release newer than any the store holds (one alert, the newest; it names the version, the build and the macOS it requires) | [Bringing in a new Xcode](#bringing-in-a-new-xcode): `hk xcode add <version>` from your Mac |
 | `xcode_version_taken` | warning | a push of a second build of a version the store holds was refused (one per version; a coordinator restart forgets it) | remove the held archive with `hk xcode remove`, then push the other build |
 
 ## The group's settings

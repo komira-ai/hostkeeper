@@ -34,6 +34,8 @@
 //!   execs that binary while its start count lasts, and is settled failed once it cannot.
 //! - [`mac_config`]: the daemon config written from the managed preferences the device management installed,
 //!   which the start of a Mac's daemon does when its config is not there.
+//! - [`auto_install`]: a Mac's own automatic install of macOS updates, turned off at the start of
+//!   its daemon (`defaults`), because macOS updates are a maintenance run's.
 //! - [`keep_awake`]: a Mac's power settings, made at the start of its daemon so that the Mac never
 //!   sleeps (`pmset`), unless the daemon config's `keep_awake` is off.
 //! - [`remote_login_probe`]: a Mac's report of what its daemon can do of Remote Login without
@@ -153,6 +155,7 @@
 pub mod adapters;
 pub mod archive_versions;
 pub mod authorized_keys;
+pub mod auto_install;
 pub mod bmc;
 pub mod boot;
 pub mod builtin;

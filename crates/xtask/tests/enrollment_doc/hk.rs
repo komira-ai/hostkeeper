@@ -2,7 +2,7 @@
 //! (written by `hostkeeper_hk::markdown`), then a service and a method of the command table
 //! hk serves (`hostkeeper_hk::is_served`), then that method's flags; or one of the hand verbs
 //! of the ssh tunnel, `ssh <host-id>`, `ssh-proxy`, `ssh-revoke` and `ssh-status`, or
-//! `xcode-push <version>|<archive>`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
+//! `xcode-push <version>|<archive>` (until X7), `tailnet-wait` and `settings init`, which are not in the table (a word after `ssh` that is a method of the service `ssh` is that method, any
 //! other is a host id).
 //!
 //! The rules are those of hk's own parser (`crates/hostkeeper-hk/src/dispatch.rs`), each word in
@@ -386,7 +386,23 @@ pub(crate) const HAND_VERBS: &[&str] = &[
     "ssh-status",
     "xcode-push",
     "tailnet-wait",
+    "settings",
 ];
+
+/// The methods of a generated service that hk has by hand (`hostkeeper_hk`'s `hand.rs`): the
+/// service, the method and the flags of its own.
+pub(crate) const HAND_METHODS: &[(&str, &str, &[&str])] = &[
+    ("xcode", "add", &[]),
+    ("xcode", "verify", &["--apple-root"]),
+];
+
+/// The flags of its own of the hand method `method` of `service`, when it is one.
+pub(crate) fn hand_method(service: &str, method: &str) -> Option<&'static [&'static str]> {
+    HAND_METHODS
+        .iter()
+        .find(|(s, m, _)| *s == service && *m == method)
+        .map(|(.., flags)| *flags)
+}
 
 /// What `hk xcode-push` says when it is not given exactly one version or archive.
 const XCODE_PUSH_ONE: &str = "hk xcode-push takes one Xcode version (27.2) or the path of an \
@@ -419,6 +435,9 @@ pub(crate) fn hand_flags(verb: &str) -> &'static [&'static str] {
 fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, String> {
     if verb == "tailnet-wait" {
         return tailnet_wait(line, words);
+    }
+    if verb == "settings" {
+        return settings(line, words);
     }
     let own = hand_flags(verb);
     let mut host: Option<&str> = None;
@@ -494,6 +513,124 @@ fn hand(line: &mut Line<'_>, verb: &str, words: &[String]) -> Result<Parsed, Str
     }
     line.call_needs()?;
     Ok(Parsed::Call(verb.to_owned()))
+}
+
+/// What `words` (the words after `settings`) ask for: the one word `init`, the global flags, the
+/// three of `--endpoint`, `--ca-file` and `--token-file`, and no other credential and no
+/// `--response-file`; in hk's words.
+fn settings(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut rest: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk settings has no flag {flag}")),
+            }
+        } else {
+            rest.push(word);
+            at += 1;
+        }
+    }
+    if rest != ["init"] {
+        return Err(
+            "settings takes the one word init; 'hk settings --help' says what it does".to_owned(),
+        );
+    }
+    let has = |name: &str| line.given.iter().any(|g| g == name);
+    if has("token-stdin") || has("github-oidc-audience") || has("response-file") {
+        return Err(
+            "hk settings init takes --token-file only: --token-stdin, --github-oidc-audience and \
+             --response-file are not for it"
+                .to_owned(),
+        );
+    }
+    if !(has("endpoint") && has("ca-file") && has("token-file")) {
+        return Err("hk settings init needs --endpoint, --ca-file and --token-file".to_owned());
+    }
+    if !is_endpoint(&line.endpoint) {
+        return Err("--endpoint takes https://<host>[:<port>]".to_owned());
+    }
+    Ok(Parsed::Call("settings".to_owned()))
+}
+
+/// What `words` (the words after `xcode add`) ask for: at most one version or archive path, and the
+/// global flags, of which the token file is the only credential and none is needed (the settings
+/// file gives what the line lacks); in hk's words.
+fn xcode_add(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut paths = 0;
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk xcode add has no flag {flag}")),
+            }
+        } else {
+            paths += 1;
+            at += 1;
+        }
+    }
+    if paths > 1 {
+        return Err(
+            "hk xcode add takes at most one Xcode version (27.2) or the path of an \
+                    archive (~/Downloads/Xcode_27.2.xip)"
+                .to_owned(),
+        );
+    }
+    let has = |name: &str| line.given.iter().any(|g| g == name);
+    if has("token-stdin") || has("github-oidc-audience") || has("response-file") {
+        return Err(
+            "hk xcode add takes --token-file only: --token-stdin, --github-oidc-audience and \
+             --response-file are not for it (stdin is the terminal xcodes asks a two-factor code \
+             on)"
+            .to_owned(),
+        );
+    }
+    Ok(Parsed::Call("xcode add".to_owned()))
+}
+
+/// What `words` (the words after `xcode verify`) ask for: one archive, `--apple-root` once with
+/// a value, and the global flags, none of which it needs; in hk's words.
+fn xcode_verify(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let mut paths = 0;
+    let mut root = false;
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if flag == "--apple-root" {
+            let (_, took) = arg(flag, &words[at..])?;
+            if std::mem::replace(&mut root, true) {
+                return Err("--apple-root is given twice".to_owned());
+            }
+            at += took;
+        } else if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk xcode verify has no flag {flag}")),
+            }
+        } else {
+            paths += 1;
+            at += 1;
+        }
+    }
+    if paths != 1 {
+        return Err(
+            "hk xcode verify takes the path of one archive (~/Downloads/Xcode_27.2.xip)".to_owned(),
+        );
+    }
+    Ok(Parsed::Call("xcode verify".to_owned()))
 }
 
 /// What `words` (the words after `tailnet-wait`) ask for: `--attempts` and `--interval-secs`,
@@ -616,6 +753,13 @@ pub(crate) fn parse(
         if service == "ssh" {
             // Not a method of the service `ssh`: a host id.
             return hand(&mut line, service, &words[at..]);
+        }
+        if hand_method(service, method).is_some() {
+            return if method == "add" {
+                xcode_add(&mut line, &words[at + 1..])
+            } else {
+                xcode_verify(&mut line, &words[at + 1..])
+            };
         }
         return Err(format!(
             "the service {service} has no method {method}; 'hk {service} --help' lists them"

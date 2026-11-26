@@ -9,13 +9,13 @@ use std::path::Path;
 use crate::rig::{Rig, STAMP, args};
 
 /// Proves: what `hk --help` and each level of help prints for the fixture protos, and the help of
-/// `hk xcode-push` and of `hk tailnet-wait`, is exactly the text in the golden files, so a change of a help text, a flag
+/// `hk settings`, `hk xcode-push` and of `hk tailnet-wait`, is exactly the text in the golden files, so a change of a help text, a flag
 /// rule, an exit code or a field's kind is a change of a file the review sees.
 #[test]
 fn the_help_of_the_fixture_protos_equals_its_golden_files() {
     let rig = Rig::new("golden");
     let golden = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
-    let cases: [(&str, &[&str]); 9] = [
+    let cases: [(&str, &[&str]); 10] = [
         ("top.txt", &["--help"]),
         ("service_widgets.txt", &["widgets", "--help"]),
         ("service_gadgets.txt", &["gadgets", "--help"]),
@@ -23,6 +23,7 @@ fn the_help_of_the_fixture_protos_equals_its_golden_files() {
         ("method_widgets_login.txt", &["widgets", "login", "--help"]),
         ("method_gadgets_tune.txt", &["gadgets", "tune", "--help"]),
         ("ssh.txt", &["ssh-proxy", "--help"]),
+        ("settings.txt", &["settings", "--help"]),
         ("xcode_push.txt", &["xcode-push", "--help"]),
         ("tailnet_wait.txt", &["tailnet-wait", "--help"]),
     ];

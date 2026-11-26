@@ -14,7 +14,7 @@ use crate::rig::{Rig, Server, TOKEN, closed_port};
     clippy::disallowed_methods,
     reason = "the tests of a process pass on the variable the coverage tool names, and nothing else"
 )]
-fn coverage_env() -> Vec<(String, std::ffi::OsString)> {
+pub fn coverage_env() -> Vec<(String, std::ffi::OsString)> {
     std::env::vars_os()
         .filter_map(|(name, value)| {
             let name = name.into_string().ok()?;
@@ -34,6 +34,7 @@ fn hk(rig: &Rig, program: &std::path::Path, args: &[&str], env: &[(&str, &str)])
 fn hk_os(rig: &Rig, program: &std::path::Path, args: &[OsString], env: &[(&str, &str)]) -> Output {
     let empty = rig.path("empty-path");
     let _ = std::fs::create_dir(&empty);
+    let _alone = crate::rig::alone();
     Command::new(program)
         .args(args)
         .env_clear()
@@ -294,6 +295,7 @@ fn the_runners_token_variables_reach_no_program_hk_starts() {
     let ca = rig.path("ca.pem").display().to_string();
     let token = rig.path("token").display().to_string();
     let home = rig.path("home").display().to_string();
+    let _alone = crate::rig::alone();
     let out = Command::new(&program)
         .args([
             "--endpoint",

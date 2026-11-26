@@ -2,8 +2,10 @@
 //! [flags]`. Global flags are taken at each; the service and the method are words of the command
 //! table; `--help` at each level prints that level's help; and the commands that are not
 //! gateway calls (`ssh`, `ssh-proxy`, `ssh-revoke`, `ssh-status`, `ssh-known-host`) are handed
-//! to the ssh module after the checks of their global flags, and `xcode-push` and `tailnet-wait`
-//! to their modules.
+//! to the ssh module after the checks of their global flags, and `xcode-push` (a second name of `xcode add`), `settings` and
+//! `tailnet-wait` to their modules. A method of a generated service that is written by hand
+//! (`xcode add`, `xcode verify`, [`crate::hand`]) is run by its own function. The verbs that use `--endpoint`, `--ca-file` and `--token-file`
+//! take what they lack from the settings file first ([`crate::settings::fill`]).
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
@@ -69,7 +71,8 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
     let tail = argv.get(at..).unwrap_or_default();
     match service.as_slice() {
         b"ssh-proxy" | b"ssh-revoke" | b"ssh-status" => return ssh_main(w, globals, service, tail),
-        b"xcode-push" => return crate::xcode_push::xcode_push(w, globals, tail),
+        b"xcode-push" => return crate::xcode_add::xcode_push(w, globals, tail),
+        b"settings" => return crate::settings::settings(w, globals, tail),
         b"tailnet-wait" => return crate::tailnet_wait::tailnet_wait(w, globals, tail),
         b"ssh-known-host" => {
             if tail.is_empty() {
@@ -109,6 +112,9 @@ pub(crate) fn dispatch(w: &mut World<'_>, argv: &[Vec<u8>]) -> Flow<()> {
         .iter()
         .find(|c| c.method_command.as_bytes() == method.as_slice());
     let Some(command) = found else {
+        if let Some(hand) = crate::hand::find(service, method) {
+            return (hand.run)(w, globals, after);
+        }
         if service == b"ssh" {
             // Not a method of the service `ssh`: a host id.
             return ssh_main(w, globals, service, tail.get(at..).unwrap_or_default());
@@ -209,6 +215,7 @@ fn run_method(
             ));
         }
     }
+    crate::settings::fill(w, &mut globals)?;
     call(w, &globals, command, &given, request.as_deref())
 }
 
@@ -238,6 +245,7 @@ fn ssh_main(w: &mut World<'_>, mut globals: Globals, word: &[u8], args: &[Vec<u8
              --response-file are not for it"
         )));
     }
+    crate::settings::fill(w, &mut globals)?;
     let (Some(endpoint), Some(ca_file), Some(token_file)) =
         (&globals.endpoint, &globals.ca_file, &globals.token_file)
     else {

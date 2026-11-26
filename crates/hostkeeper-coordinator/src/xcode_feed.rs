@@ -285,8 +285,8 @@ pub(crate) fn waiting_message(release: &XcodeRelease) -> String {
     let id = &release.id;
     format!(
         "Xcode {} ({}), which requires macOS {} or later, is released and the coordinator's \
-         Xcode store holds no release as new: push it from a Mac signed in to the Apple \
-         developer account with `hk xcode-push {}`",
+         Xcode store holds no release as new: add it from a Mac signed in to the Apple \
+         developer account with `hk xcode add {}`",
         id.version, id.build, release.requires_macos, id.version
     )
 }
@@ -597,10 +597,12 @@ impl Coordinator {
     /// The job `xcode-feed`: [`Self::read_xcode_feed`], whose failure is a log line and no alert;
     /// the next run is a period later. It then prunes the Xcode store
     /// ([`Self::prune_xcode_store`]), so that a group's lowered `xcode_keep` takes effect within a
-    /// day.
+    /// day, and removes the partial uploads not written for 24 hours
+    /// ([`Self::lapse_xcode_uploads`]).
     pub(crate) async fn xcode_feed_job(&self) {
         let read = self.read_xcode_feed().await;
         self.prune_xcode_store();
+        self.lapse_xcode_uploads();
         if let Err(why) = read {
             let url = self
                 .xcode

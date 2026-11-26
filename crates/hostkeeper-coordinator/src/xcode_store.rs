@@ -15,6 +15,10 @@
 //! files whose last write is older than [`STALE_UPLOAD`] (an upload a stopped coordinator left);
 //! a newer one may be another coordinator's upload in progress and stays.
 //!
+//! An upload that is sent in parts (`Content-Range`) is kept between requests as three more names
+//! beginning `.partial-<sha256>`: its bytes, its record and its writer's lock, which
+//! [`partial`] says, with the sweep that removes one not written for [`STALE_UPLOAD`].
+//!
 //! The store keeps the newest releases, as many as the largest `xcode_keep` of any group (at least
 //! one), plus each release a host reports installed, and removes the rest ([`kept`]). A version
 //! names one build on our hosts: a second build under a version the store holds is refused, and
@@ -34,6 +38,7 @@ use hostkeeper_release::grammar::is_sha256;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::audit_file::wall_clock;
 use crate::desired::{sync_dir, write_whole};
 use crate::enrollment::nonce::{Random, os_random};
 use crate::xcode_feed::{XcodeHeld, XcodeId, XcodeVersion};
@@ -55,10 +60,19 @@ const RECORD: &str = ".json";
 /// The start of the name of an upload in progress.
 const UPLOAD: &str = ".upload-";
 
-/// How old an upload file's last write must be for [`XcodeStore::open`] to remove it: far longer
-/// than any upload, so that a coordinator that starts never removes the upload another coordinator
-/// of the same directory has in progress.
+/// How old an upload file's last write must be for [`XcodeStore::open`] and the daily sweep
+/// ([`XcodeStore::lapse`]) to remove it, and a partial upload's: far longer than any upload, so
+/// that a coordinator that starts never removes the upload another coordinator of the same
+/// directory has in progress.
 pub(crate) const STALE_UPLOAD: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The partial uploads of the store: their files, their lock and the sweep of those that lapse.
+#[path = "xcode_partial.rs"]
+mod partial;
+
+#[cfg(test)]
+pub(crate) use partial::LOCK_STALE;
+pub(crate) use partial::{LockError, Upload, UploadLock, UploadRecord};
 
 /// The bytes of random the token of a store's upload names is made of.
 const TOKEN_BYTES: usize = 8;
@@ -143,6 +157,10 @@ pub(crate) struct XcodeStore {
     taken: Mutex<BTreeMap<String, Taken>>,
     /// The random token of this store's upload names, as hex.
     token: String,
+    /// The SHA-256s of the partial uploads a request of this store is writing now.
+    writers: Mutex<BTreeSet<String>>,
+    /// Seconds since the epoch, which the lock of a partial upload is stamped and judged by.
+    clock: partial::Clock,
     /// The number of the next upload's file.
     next: AtomicU64,
 }
@@ -226,29 +244,7 @@ impl XcodeStore {
             source,
         };
         let entries = fs::read_dir(dir).map_err(not_dir)?;
-        for entry in entries {
-            let entry = entry.map_err(|source| StoreError::Io {
-                path: dir.to_owned(),
-                source,
-            })?;
-            if entry.file_name().to_string_lossy().starts_with(UPLOAD) {
-                let path = entry.path();
-                let stale = entry
-                    .metadata()
-                    .and_then(|meta| meta.modified())
-                    .map(|written| {
-                        now.duration_since(written)
-                            .is_ok_and(|age| age > STALE_UPLOAD)
-                    })
-                    .map_err(|source| StoreError::Io {
-                        path: path.clone(),
-                        source,
-                    })?;
-                if stale {
-                    fs::remove_file(&path).map_err(|source| StoreError::Io { path, source })?;
-                }
-            }
-        }
+        partial::sweep(dir, entries, now)?;
         let mut bytes = [0u8; TOKEN_BYTES];
         if !random(&mut bytes) {
             return Err(StoreError::Io {
@@ -263,6 +259,8 @@ impl XcodeStore {
             uploading: Mutex::new(BTreeSet::new()),
             taken: Mutex::new(BTreeMap::new()),
             token: hex(&bytes),
+            writers: Mutex::new(BTreeSet::new()),
+            clock: partial::Clock(wall_clock()),
             next: AtomicU64::new(0),
         })
     }

@@ -1,4 +1,4 @@
-// The browser's entry: starts the app with the page's document, fetch, confirm and clock, its one
+// The browser's entry: starts the app with the page's document, fetch, confirm, clock, origin and clipboard, its one
 // socket opener, its terminal and the operator's time zone.
 import { startApp } from "./app.js";
 import { socketAddress } from "./socket_address.js";
@@ -55,6 +55,13 @@ startApp({
   now: () => Math.floor(Date.now() / 1000),
   // The operator's offset from UTC at an instant, in seconds east of UTC (UTC+01:00 is 3600).
   localOffset: (unix) => -new Date(unix * 1000).getTimezoneOffset() * 60,
+  // The page's own address, which a page shows an operator in a command (`hk settings init --endpoint`).
+  origin: window.location.origin,
+  // Writes `text` to the clipboard; rejects where the browser refuses (a page not in a secure
+  // context has no clipboard, and a refusal of permission rejects).
+  copy: async (text) => {
+    await navigator.clipboard.writeText(text);
+  },
   prefs,
   every: (run, milliseconds) => {
     const timer = window.setInterval(run, milliseconds);

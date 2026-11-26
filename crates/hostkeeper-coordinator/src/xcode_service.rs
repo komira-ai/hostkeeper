@@ -7,12 +7,17 @@
 //! other, `unauthorized`. `List` reads and writes no audit entry; without a store (`--xcode-dir`)
 //! it answers `configured` false. `Remove` is audited as `xcode_remove`, the entry written before
 //! the files are removed, so that a removal whose audit line cannot be appended is refused
-//! `audit_unavailable` and not made.
+//! `audit_unavailable` and not made. The SHA-256 of an upload the store holds only in part
+//! (docs/design/xcode-one-action.md, section 3) is removed the same way, audited
+//! `xcode_partial_remove`, and refused `partial_locked` while a writer holds its lock; `List`
+//! answers such uploads, the one written longest ago first.
 //!
 //! The store keeps as many of the newest releases as the largest `xcode_keep` of any group (at
 //! least one) and each release a host reports installed ([`crate::xcode_store::kept`]); the rest
 //! is removed after each stored upload and by the daily job `xcode-feed`
 //! ([`Coordinator::prune_xcode_store`]), each removal an `xcode_remove` entry by `coordinator`.
+//! The same job removes the partial uploads and upload files not written for 24 hours
+//! ([`Coordinator::lapse_xcode_uploads`]), each removal a log line and no audit entry.
 
 use std::collections::BTreeSet;
 
@@ -21,13 +26,13 @@ use hostkeeper_proto::hostkeeper::operator::v1::XcodeRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
 use crate::alerts::{Alert, Kind, Said, Subject};
-use crate::audit_actions::{XCODE_REMOVE, about};
+use crate::audit_actions::{XCODE_PARTIAL_REMOVE, XCODE_REMOVE, about};
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::Write;
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
 use crate::xcode_feed::{XcodeId, XcodeVersion};
-use crate::xcode_store::{Archive, Taken, kept};
+use crate::xcode_store::{Archive, LockError, Taken, Upload, kept};
 
 /// `archive` as the audit says it concerned: `Xcode 27.2 (27B52) <sha256>`.
 fn subject_of(archive: &Archive) -> String {
@@ -46,6 +51,19 @@ fn archive_proto(archive: &Archive) -> proto::XcodeArchive {
         size_bytes: archive.size,
         uploaded_by: archive.by.clone(),
         uploaded_at_unix: archive.at_unix,
+    }
+}
+
+/// `upload` as `Xcode.List` says it.
+fn upload_proto(upload: &Upload) -> proto::XcodeUpload {
+    proto::XcodeUpload {
+        sha256: upload.sha256.clone(),
+        version: upload.record.version.clone(),
+        build: upload.record.build.clone(),
+        received_bytes: upload.received,
+        size_bytes: upload.record.size,
+        started_by: upload.record.by.clone(),
+        last_write_unix: upload.last_write_unix,
     }
 }
 
@@ -98,10 +116,15 @@ impl Coordinator {
                 waiting,
                 keep: 0,
                 max_bytes: 0,
+                uploads: Vec::new(),
             });
         };
         let archives = store.archives().map_err(|why| {
             tracing::error!(%why, "the Xcode store could not be listed");
+            Refusal::StoreFailed
+        })?;
+        let uploads = store.uploads().map_err(|why| {
+            tracing::error!(%why, "the uploads in progress of the Xcode store could not be listed");
             Refusal::StoreFailed
         })?;
         Ok(proto::ListXcodeResponse {
@@ -110,18 +133,21 @@ impl Coordinator {
             waiting,
             keep: self.xcode_keep_largest().max(1),
             max_bytes: store.max_bytes(),
+            uploads: uploads.iter().map(upload_proto).collect(),
         })
     }
 
     /// `Xcode.Remove`: removes the archive `sha256` and its record, and with them the refusal of
-    /// a second build of its version. One `xcode_remove` entry, by the operator, with the
+    /// a second build of its version; or, when the store holds no archive of it, the partial upload
+    /// of it ([`Self::xcode_remove_upload`]). One `xcode_remove` entry, by the operator, with the
     /// operator's reason and the release and archive as its subject, is appended before any file
     /// is removed.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (not 64 lowercase hex characters, or a
     /// reason that is not 1 to 256 bytes with no control character), `no_store`,
-    /// `unknown_archive`, `store_failed`, `audit_unavailable`.
+    /// `unknown_archive`, `store_failed`, `audit_unavailable`, `partial_locked` (a partial upload
+    /// of the SHA-256 whose lock is fresh).
     pub(crate) fn xcode_remove(
         &self,
         caller: &Caller,
@@ -134,13 +160,13 @@ impl Coordinator {
         let reason = valid_reason(&request.reason).ok_or(Refusal::InvalidRequest)?;
         let store = self.xcode.store.as_ref().ok_or(Refusal::NoStore)?;
         let _changing = store.changing();
-        let archive = store
-            .archive(&request.sha256)
-            .map_err(|why| {
-                tracing::error!(%why, "an Xcode archive's record could not be read");
-                Refusal::StoreFailed
-            })?
-            .ok_or(Refusal::UnknownArchive)?;
+        let held = store.archive(&request.sha256).map_err(|why| {
+            tracing::error!(%why, "an Xcode archive's record could not be read");
+            Refusal::StoreFailed
+        })?;
+        let Some(archive) = held else {
+            return self.xcode_remove_upload(by, store, &request.sha256, reason);
+        };
         let mut entry = about(by, XCODE_REMOVE, &subject_of(&archive));
         entry.reason = Some(reason);
         let done = self.ops.change(Write::BeforeMemory, entry, |_| {})?;
@@ -157,6 +183,68 @@ impl Coordinator {
         Ok(proto::RemoveXcodeResponse {
             entry: Some(entry_proto(&done)),
         })
+    }
+
+    /// `Xcode.Remove` of a SHA-256 the store holds no archive of: when it holds a partial upload of
+    /// it, that is removed, after the entry `xcode_partial_remove` is appended, under the upload's
+    /// lock (a fresh lock another writer holds is `partial_locked`); else it is `unknown_archive`.
+    /// The caller holds the store's change lock.
+    fn xcode_remove_upload(
+        &self,
+        by: &crate::tokens::Operator,
+        store: &crate::xcode_store::XcodeStore,
+        sha256: &str,
+        reason: String,
+    ) -> Result<proto::RemoveXcodeResponse, Refusal> {
+        let upload = store
+            .upload(sha256)
+            .map_err(|why| {
+                tracing::error!(%why, "a partial Xcode upload's record could not be read");
+                Refusal::StoreFailed
+            })?
+            .ok_or(Refusal::UnknownArchive)?;
+        let _lock = store.lock_upload(sha256).map_err(|why| match why {
+            LockError::Held => Refusal::PartialLocked,
+            LockError::Store(why) => {
+                tracing::error!(%why, "a partial Xcode upload could not be locked");
+                Refusal::StoreFailed
+            }
+        })?;
+        let subject = format!(
+            "Xcode {} ({}) {}",
+            upload.record.version, upload.record.build, sha256
+        );
+        let mut entry = about(by, XCODE_PARTIAL_REMOVE, &subject);
+        entry.reason = Some(reason);
+        let done = self.ops.change(Write::BeforeMemory, entry, |_| {})?;
+        store.remove_upload(sha256).map_err(|why| {
+            tracing::error!(%why, "a partial Xcode upload could not be removed");
+            Refusal::StoreFailed
+        })?;
+        tracing::info!(
+            version = %upload.record.version,
+            build = %upload.record.build,
+            sha256 = %sha256,
+            received = upload.received,
+            "a partial Xcode upload was removed"
+        );
+        Ok(proto::RemoveXcodeResponse {
+            entry: Some(entry_proto(&done)),
+        })
+    }
+
+    /// Removes from the store's directory the upload files and partial uploads not written for
+    /// 24 hours, by the clock of the audit ([`crate::xcode_store::XcodeStore::lapse`]). Each
+    /// removal is a log line, and none is audited, since nothing of it was ever stored. A failure
+    /// is a log line, and the next run tries again. Without a store it does nothing.
+    pub(crate) fn lapse_xcode_uploads(&self) {
+        let Some(store) = &self.xcode.store else {
+            return;
+        };
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(self.ops.unix_now());
+        if let Err(why) = store.lapse(now) {
+            tracing::error!(%why, "the lapsed uploads of the Xcode store could not be removed");
+        }
     }
 
     /// The most Xcode releases any group keeps (`xcode_keep` of its maintenance table); 0 when no

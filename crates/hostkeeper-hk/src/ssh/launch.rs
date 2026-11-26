@@ -6,7 +6,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ssh::programs::System as Programs;
-use crate::ssh::{Coordinator, Env, Launch, Verb, run};
+use crate::ssh::run::{Stops, run_with};
+use crate::ssh::{Coordinator, Env, Launch, Verb};
 
 /// The state directory under the operator's home.
 const STATE_UNDER_HOME: &str = ".hostkeeper/ssh";
@@ -16,7 +17,7 @@ const KEEPALIVE_SECS: u64 = 30;
 
 /// Runs the verbs for real: `ssh`, `ssh-keygen` and `ssh-add` from the PATH with the agent socket
 /// the process inherits, standard input and output as the byte streams, the state in
-/// `<home>/.hostkeeper/ssh`.
+/// `<home>/.hostkeeper/ssh`; `ssh-proxy` closes its tunnel at SIGHUP and SIGTERM.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct System;
 
@@ -56,7 +57,7 @@ impl Launch for System {
             keepalive_secs: KEEPALIVE_SECS,
             name,
         };
-        let code = runtime.block_on(run(
+        let code = runtime.block_on(run_with(
             verb,
             &coordinator,
             &args,
@@ -64,6 +65,7 @@ impl Launch for System {
             tokio::io::stdin(),
             tokio::io::stdout(),
             stderr,
+            Stops::Process,
         ));
         // The blocking read of stdin may still be waiting for a byte; do not wait for it.
         runtime.shutdown_background();

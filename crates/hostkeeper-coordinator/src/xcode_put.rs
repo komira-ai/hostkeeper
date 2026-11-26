@@ -48,12 +48,17 @@
 //! ([`Coordinator::prune_xcode_store`]) and the answer is 201 with the JSON
 //! `{"sha256":..,"version":..,"build":..,"size":..}`.
 //!
+//! A request with a `Content-Range` is one part of an upload that resumes, and
+//! `GET /v1/xcode/<sha256>/upload` asks how much of an archive the store holds: both are
+//! [`range`]'s. The checks above run for a part as for a whole upload, with the size the range
+//! names for 5, and the commit is the same.
+//!
 //! The upload file is removed when the request ends by any way but the commit, including when the
 //! client goes away and the request is dropped. The token is never in a log line: the one line a
 //! stored archive logs names the release, the SHA-256, the size and who uploaded it.
 
 use std::fmt::Display;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bytes::{Buf, Bytes};
@@ -68,9 +73,14 @@ use crate::audit_actions::XCODE_PUT;
 use crate::http::{BoxError, Peer, bearer_in, error, json};
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
+use crate::tokens::Operator;
 use crate::wait::ConnectionWaits;
 use crate::xcode_feed::{Channel, XcodeId, XcodeVersion};
 use crate::xcode_store::{Archive, Digesting, Held, PREFIX, XcodeStore, kept, remove_quietly};
+
+/// The upload that resumes: the query of what the store holds, and a part of an upload.
+#[path = "xcode_put_range.rs"]
+mod range;
 
 /// A refusal: the status and the code of the JSON error.
 type Refusal = (StatusCode, &'static str);
@@ -85,9 +95,37 @@ const ALREADY_HELD: Refusal = (StatusCode::CONFLICT, "already_held");
 const VERSION_TAKEN: Refusal = (StatusCode::CONFLICT, "xcode_version_taken");
 const NOT_KEPT: Refusal = (StatusCode::CONFLICT, "not_kept");
 const IN_PROGRESS: Refusal = (StatusCode::CONFLICT, "upload_in_progress");
+const PARTIAL_LOCKED: Refusal = (StatusCode::CONFLICT, "partial_locked");
+const PARTIAL_DIFFERS: Refusal = (StatusCode::CONFLICT, "partial_differs");
 const DIGEST_MISMATCH: Refusal = (StatusCode::BAD_REQUEST, "digest_mismatch");
 const AUDIT_UNAVAILABLE: Refusal = (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable");
 const STORE_FAILED: Refusal = (StatusCode::INTERNAL_SERVER_ERROR, "store_failed");
+
+/// What ends a request that was not stored: a refusal, or the answer of a part that began at
+/// another byte than the partial upload holds.
+enum Stop {
+    /// The status and code of the JSON error.
+    Refused(Refusal),
+    /// 409 `offset_mismatch` with the bytes the store holds.
+    OffsetMismatch(u64),
+}
+
+impl From<Refusal> for Stop {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+/// What a request that was accepted did.
+enum Done {
+    /// The archive was committed: 201.
+    Stored(Archive),
+    /// A part was kept and bytes are still due: 202 with the bytes held.
+    Due(u64),
+}
+
+/// The end of the path of the query of what the store holds of an archive.
+const UPLOAD_PATH: &str = "/upload";
 
 /// The most bytes of a build the request may name: as the list of releases takes.
 const MAX_BUILD_BYTES: usize = 32;
@@ -256,52 +294,20 @@ where
     Ok(digest)
 }
 
-/// Stores the upload of `request`, or says why not.
-async fn put<B>(
+/// Commits the upload at `path`, whose SHA-256 is `wanted`'s and which has `size` bytes, as the
+/// archive: under the store's change lock what the store holds is read again (a second upload of
+/// another build of the version, or of these bytes, that was committed meanwhile is refused as in
+/// 7, and a newer release committed meanwhile that makes this one older than those the store
+/// keeps is refused as in 8), the upload is audited as `xcode_put`, then committed and the store
+/// pruned.
+fn commit(
     coordinator: &Coordinator,
     store: &XcodeStore,
-    peer: &Peer,
-    request: Request<B>,
-    patience: Duration,
-) -> Result<Archive, Refusal>
-where
-    B: Body,
-    B::Error: Into<BoxError>,
-{
-    let (parts, body) = request.into_parts();
-    if parts.method != Method::PUT {
-        return Err(NOT_PUT);
-    }
-    if peer.is_some() {
-        return Err(FORBIDDEN);
-    }
-    let operator = coordinator
-        .operator(bearer_in(&parts.headers))
-        .map_err(|_| UNAUTHORIZED)?;
-    let wanted = wanted(&parts.uri).ok_or(BAD_REQUEST)?;
-    if declared(&parts.headers).is_some_and(|length| length > store.max_bytes()) {
-        return Err(TOO_LARGE);
-    }
-    listed(coordinator, &wanted.id)?;
-    unheld(store, &wanted)?;
-    stays(coordinator, store, &wanted)?;
-    let _reserved = store
-        .reserve(wanted.id.version.as_str())
-        .ok_or(IN_PROGRESS)?;
-    let _held = parts
-        .extensions
-        .get::<ConnectionWaits>()
-        .map(ConnectionWaits::hold);
-
-    let (path, file) = store.upload_file(&wanted.sha256).map_err(store_failed)?;
-    let partial = Partial(path);
-    let mut out = tokio::fs::File::from_std(file);
-    let digest = receive(body, &mut out, store.max_bytes(), patience).await?;
-    out.sync_all().await.map_err(store_failed)?;
-    let size = digest.bytes();
-    if digest.finish() != wanted.sha256 {
-        return Err(DIGEST_MISMATCH);
-    }
+    operator: &Operator,
+    wanted: &Wanted,
+    size: u64,
+    path: &Path,
+) -> Result<Archive, Refusal> {
     let archive = Archive {
         sha256: wanted.sha256.clone(),
         id: wanted.id.clone(),
@@ -311,9 +317,9 @@ where
     };
     {
         let _changing = store.changing();
-        unheld(store, &wanted)?;
-        stays(coordinator, store, &wanted)?;
-        let mut entry = AuditEntry::new(&operator, XCODE_PUT);
+        unheld(store, wanted)?;
+        stays(coordinator, store, wanted)?;
+        let mut entry = AuditEntry::new(operator, XCODE_PUT);
         entry.reason = Some(format!(
             "Xcode {} ({}), sha256 {}, {size} bytes",
             archive.id.version, archive.id.build, archive.sha256
@@ -325,13 +331,87 @@ where
                 tracing::error!(%why, "an Xcode upload could not be audited");
                 AUDIT_UNAVAILABLE
             })?;
-        store.commit(&partial.0, &archive).map_err(store_failed)?;
+        store.commit(path, &archive).map_err(store_failed)?;
     }
     coordinator.prune_xcode_store();
     Ok(archive)
 }
 
-/// Answers the request `request` of `peer` to upload an archive to `store`.
+/// Stores the upload of `request`, or says why not.
+async fn put<B>(
+    coordinator: &Coordinator,
+    store: &XcodeStore,
+    peer: &Peer,
+    request: Request<B>,
+    patience: Duration,
+) -> Result<Done, Stop>
+where
+    B: Body,
+    B::Error: Into<BoxError>,
+{
+    let (parts, body) = request.into_parts();
+    if parts.method != Method::PUT {
+        return Err(NOT_PUT.into());
+    }
+    if peer.is_some() {
+        return Err(FORBIDDEN.into());
+    }
+    let operator = coordinator
+        .operator(bearer_in(&parts.headers))
+        .map_err(|_| UNAUTHORIZED)?;
+    let wanted = wanted(&parts.uri).ok_or(BAD_REQUEST)?;
+    let part = range::content_range(&parts.headers)?;
+    // A part is judged by the size of the archive it is a part of, and must be as long as its
+    // range says.
+    let size = part.map_or_else(|| declared(&parts.headers), |part| Some(part.size));
+    if size.is_some_and(|length| length > store.max_bytes()) {
+        return Err(TOO_LARGE.into());
+    }
+    if part.is_some_and(|part| declared(&parts.headers) != Some(part.len())) {
+        return Err(BAD_REQUEST.into());
+    }
+    listed(coordinator, &wanted.id)?;
+    unheld(store, &wanted)?;
+    stays(coordinator, store, &wanted)?;
+    let Some(_reserved) = store.reserve(wanted.id.version.as_str()) else {
+        // A part of an archive that this coordinator is receiving a part of already is the
+        // partial upload's lock, not another upload of the version.
+        let refusal = if part.is_some() && store.is_writing(&wanted.sha256) {
+            PARTIAL_LOCKED
+        } else {
+            IN_PROGRESS
+        };
+        return Err(refusal.into());
+    };
+    let _held = parts
+        .extensions
+        .get::<ConnectionWaits>()
+        .map(ConnectionWaits::hold);
+
+    if let Some(part) = part {
+        return range::part(coordinator, store, &operator, &wanted, part, body, patience).await;
+    }
+    let (path, file) = store.upload_file(&wanted.sha256).map_err(store_failed)?;
+    let partial = Partial(path);
+    let mut out = tokio::fs::File::from_std(file);
+    let hashed = receive(body, &mut out, store.max_bytes(), patience).await?;
+    out.sync_all().await.map_err(store_failed)?;
+    let size = hashed.bytes();
+    if hashed.finish() != wanted.sha256 {
+        return Err(DIGEST_MISMATCH.into());
+    }
+    Ok(Done::Stored(commit(
+        coordinator,
+        store,
+        &operator,
+        &wanted,
+        size,
+        &partial.0,
+    )?))
+}
+
+/// Answers the request `request` of `peer` to upload an archive to `store`, or, for a `GET` of
+/// `/v1/xcode/<sha256>/upload`, what the store holds of it.
 pub(crate) async fn answer<B>(
     coordinator: &Coordinator,
     store: &XcodeStore,
@@ -344,8 +424,11 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
+    if request.method() == Method::GET && request.uri().path().ends_with(UPLOAD_PATH) {
+        return range::query(coordinator, store, peer, &request);
+    }
     match put(coordinator, store, peer, request, patience).await {
-        Ok(archive) => {
+        Ok(Done::Stored(archive)) => {
             tracing::info!(
                 version = %archive.id.version,
                 build = %archive.id.build,
@@ -364,7 +447,15 @@ where
                 }),
             )
         }
-        Err((status, code)) => error(status, code),
+        Ok(Done::Due(received)) => json(
+            StatusCode::ACCEPTED,
+            &serde_json::json!({ "received": received }),
+        ),
+        Err(Stop::Refused((status, code))) => error(status, code),
+        Err(Stop::OffsetMismatch(received)) => json(
+            StatusCode::CONFLICT,
+            &serde_json::json!({ "error": "offset_mismatch", "received": received }),
+        ),
     }
 }
 

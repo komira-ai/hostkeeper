@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -292,7 +292,7 @@ impl Server {
 }
 
 /// The TLS configuration of a test server with the certificate of `pki`.
-fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
+pub fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
     let chain = vec![CertificateDer::from_pem_slice(pki.cert_pem.as_bytes()).expect("a cert")];
     let key = PrivateKeyDer::from_pem_slice(pki.key_pem.as_bytes()).expect("a key");
     Arc::new(
@@ -320,8 +320,12 @@ pub struct Early {
 }
 
 impl Early {
-    /// A server that refuses its one request with `status` and `body` from its head alone.
-    pub fn refusing(pki: &Pki, status: u16, body: &str) -> Early {
+    /// A server that refuses its one request with `status` and `body` from its head alone, after
+    /// `lists` requests that are read whole and answered `200` with `first` (what `Xcode.List` is
+    /// asked before an upload), and the one query of what the store holds (`GET .../upload`),
+    /// which the upload makes next and is answered `200` with the state `none`.
+    pub fn refusing_after(pki: &Pki, lists: usize, first: &str, status: u16, body: &str) -> Early {
+        let first = first.to_owned();
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
         let port = listener.local_addr().expect("its address").port();
         let config = server_config(pki);
@@ -332,8 +336,28 @@ impl Early {
         );
         let heard = Arc::new((Mutex::new(None), Condvar::new()));
         let record = Arc::clone(&heard);
+        let config_first = Arc::clone(&config);
         std::thread::spawn(move || {
             let serve = || -> Option<Heard> {
+                for _ in 0..=lists {
+                    let (stream, _) = listener.accept().ok()?;
+                    let conn = rustls::ServerConnection::new(Arc::clone(&config_first)).ok()?;
+                    let mut tls = rustls::StreamOwned::new(conn, stream);
+                    let asked = read_request(&mut tls)?;
+                    let first = if asked.target.ends_with("/upload") {
+                        "{\"state\":\"none\",\"received\":0,\"size\":0}"
+                    } else {
+                        first.as_str()
+                    };
+                    let reply = format!(
+                        "HTTP/1.1 200 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                         Connection: close\r\n\r\n{first}",
+                        first.len()
+                    );
+                    tls.write_all(reply.as_bytes()).ok()?;
+                    tls.conn.send_close_notify();
+                    let _ = tls.flush();
+                }
                 let (stream, _) = listener.accept().ok()?;
                 let conn = rustls::ServerConnection::new(config).ok()?;
                 let mut tls = rustls::StreamOwned::new(conn, stream);
@@ -451,12 +475,16 @@ pub struct Opts<'a> {
     pub roots: Vec<Vec<u8>>,
     pub home: Option<PathBuf>,
     pub no_home: bool,
+    /// The user id the run is as; the test's own when `None`.
+    pub uid: Option<u32>,
     pub ssh: Option<&'a Recorder>,
     /// The system and the programs of `hk xcode-push`; the real ones when `None`.
     pub mac: Option<&'a Mac>,
     /// The `tailscale` and the wait of `hk tailnet-wait`; when `None`, a `tailscale` that does
     /// not exist and a wait that returns at once, so no test runs the host's own.
     pub tailnet: Option<&'a Tailnet<'a>>,
+    /// Whether standard error is a terminal.
+    pub terminal: bool,
 }
 
 impl<'a> Opts<'a> {
@@ -470,9 +498,11 @@ impl<'a> Opts<'a> {
             roots: Vec::new(),
             home: None,
             no_home: false,
+            uid: None,
             ssh: None,
             mac: None,
             tailnet: None,
+            terminal: false,
         }
     }
 
@@ -515,8 +545,20 @@ impl<'a> Opts<'a> {
         self
     }
 
+    /// A run whose standard error is a terminal.
+    pub fn terminal(mut self) -> Self {
+        self.terminal = true;
+        self
+    }
+
     pub fn home(mut self, home: &Path) -> Self {
         self.home = Some(home.to_path_buf());
+        self
+    }
+
+    /// A run as the user `uid`, whoever the test is.
+    pub fn uid(mut self, uid: u32) -> Self {
+        self.uid = Some(uid);
         self
     }
 
@@ -593,6 +635,7 @@ impl Rig {
 
     /// [`Rig::run`] with arguments that need not be text.
     pub fn run_os(&self, opts: Opts<'_>, args: &[OsString]) -> Ran {
+        let _alone = alone();
         let mut stdin = std::io::Cursor::new(opts.stdin);
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let roots = opts.roots;
@@ -610,6 +653,7 @@ impl Rig {
             wait: &|_| {},
         };
         let tailnet = opts.tailnet.unwrap_or(&default_tailnet);
+        let own = std::fs::metadata(self.path("")).expect("the scratch").uid();
         let mut world = World {
             table: opts.table,
             stamp: opts.stamp,
@@ -621,6 +665,8 @@ impl Rig {
             } else {
                 opts.home.or_else(|| Some(self.path("home")))
             },
+            uid: opts.uid.unwrap_or(own),
+            stderr_terminal: opts.terminal,
             oidc_url: opts.oidc.map(|(url, _)| url.as_bytes().to_vec()),
             oidc_token: opts.oidc.map(|(_, token)| token.as_bytes().to_vec()),
             web_roots: &web_roots,
@@ -647,4 +693,15 @@ pub fn call(rig: &Rig, port: u16, words: &[&str]) -> Vec<String> {
     let mut all = rig.globals(port);
     all.extend(args(words));
     all
+}
+
+/// Held by whatever starts a program in a test or runs `hk` in this process, for as long as it
+/// does. A run of `hk xcode add` holds an `flock` on its lock file, and a program started by
+/// another thread of this process holds the same lock (the child shares the file until it
+/// executes) while it is being started; with one such thing at a time no run is ever refused by
+/// a child that another test is starting.
+pub fn alone() -> std::sync::MutexGuard<'static, ()> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ONE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
