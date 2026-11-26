@@ -360,6 +360,24 @@ made at each start of the daemon, not watched in between; the heartbeat does not
 A configuration profile is the other way to hold power settings on a managed Mac; the daemon is
 what ships, so a Mac needs nothing but hostkeeper.
 
+### macOS installs no update by itself
+
+macOS keeps its own setting for installing macOS updates by itself, `AutomaticallyInstallMacOSUpdates`
+in `/Library/Preferences/com.apple.SoftwareUpdate.plist` (System Settings, "Install macOS updates"),
+and sets it to 1 by default. On, macOS installs an update and restarts the Mac with no drain, in the
+middle of a build; a Mac's macOS updates are a maintenance run's alone
+([design/maintenance-updates.md](design/maintenance-updates.md) 5.8). So at each start the daemon
+(`crates/hostkeeper-daemon/src/auto_install.rs`), right after it keeps the Mac awake, reads the key
+with `defaults read` and, unless it reads `0`, sets it off with
+`defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false`.
+The change is logged once (`auto_install: AutomaticallyInstallMacOSUpdates was 1, set to 0`, or
+`was unset`); a Mac that has it off already gets no write; a `defaults` that fails is logged as an
+error and the start goes on. There is no setting to keep it on: no Mac hostkeeper updates should
+install macOS by itself. The other keys of that file (automatic download, checks, security
+responses) are left as they are. Device management's own key of that name is a conflict the daemon
+reports instead ([Maintenance facts](#maintenance-facts)). A maintenance probe's `auto_install` step
+shows the key as the daemon left it.
+
 ### Full Disk Access
 
 Full Disk Access is a privacy grant that an administrator gives the daemon with a configuration

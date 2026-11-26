@@ -296,6 +296,8 @@ with an empty environment and no standard input, exactly as the Mac's update ste
 | `sw_vers` | `/usr/bin/sw_vers` | the macOS it ran on |
 | `fdesetup_status` | `/usr/bin/fdesetup status` | FileVault, as the update path reads it |
 | `fdesetup_supportsauthrestart` | `/usr/bin/fdesetup supportsauthrestart` | the authenticated restart, as the update path reads it |
+| `auto_install` | `/usr/bin/defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates` | macOS's own setting for installing macOS updates by itself: `0` once the daemon has turned it off at its start ([macos.md](../macos.md#macos-installs-no-update-by-itself)) |
+| `managed_settings_mode` | `/usr/bin/stat -f "%Sp %Su %Sg" "/Library/Managed Preferences/dev.hostkeeper.config.plist"` | the mode, owner and group of the file that carries the Blueprint's hostkeeper settings, so who on the Mac can read a key put there; a Mac with no such file says so |
 
 Read the run until the Mac is done, then the probe, which the Mac's next heartbeat carries in its
 maintenance report and keeps there until its next probe:
@@ -309,7 +311,7 @@ jq '(.host // .).maintenance.probe' probe-host.json
 ```
 
 ```
-{"runId":"run-1796000000-1","probedUnix":"1796000300","steps":[{"name":"console","exitCode":0,"output":"root"},{"name":"who","exitCode":0},{"name":"id","exitCode":0,"output":"uid=0(root) gid=0(wheel) groups=0(wheel),..."},{"name":"managername","exitCode":0,"output":"System"},{"name":"env","exitCode":0},{"name":"sw_vers","exitCode":0,"output":"ProductName:\t\tmacOS; ProductVersion:\t\t27.2.1; BuildVersion:\t\t26B131"},{"name":"fdesetup_status","exitCode":0,"output":"FileVault is Off."},{"name":"fdesetup_supportsauthrestart","exitCode":0,"output":"true"}]}
+{"runId":"run-1796000000-1","probedUnix":"1796000300","steps":[{"name":"console","exitCode":0,"output":"root"},{"name":"who","exitCode":0},{"name":"id","exitCode":0,"output":"uid=0(root) gid=0(wheel) groups=0(wheel),..."},{"name":"managername","exitCode":0,"output":"System"},{"name":"env","exitCode":0},{"name":"sw_vers","exitCode":0,"output":"ProductName:\t\tmacOS; ProductVersion:\t\t27.2.1; BuildVersion:\t\t26B131"},{"name":"fdesetup_status","exitCode":0,"output":"FileVault is Off."},{"name":"fdesetup_supportsauthrestart","exitCode":0,"output":"true"},{"name":"auto_install","exitCode":0,"output":"0"},{"name":"managed_settings_mode","exitCode":0,"output":"<mode> <owner> <group>"}]}
 ```
 
 Each step keeps its exit code (absent when the program did not exit by itself: it did not start, or
@@ -575,6 +577,17 @@ it would be removed at once),
   to switch builds. Each code, its status and the exit codes are in
   [xcode-releases.md](xcode-releases.md#pushing-a-release-from-your-mac-hk-xcode-push).
 
+**From a box that is not a Mac.** An archive downloaded in a browser on an operator's Linux box
+reaches the store through the same route, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
+([xcode-releases.md](xcode-releases.md#pushing-an-archive-put-v1xcodesha256versionversionbuildbuild)),
+sent with any HTTPS client that reads the bearer from a file (never from an argument): the version
+from the archive's name, `Xcode_<version>.xip`, and the build the coordinator lists for that
+release (`hk xcode list`, its `waiting`). Linux has no `pkgutil`, `xip` or `plutil`, so nothing
+checks Apple's signature, the version or the build before the upload; every Mac checks them in its
+stage before it installs anything (below), and an archive that fails is deferred on every Mac, never
+installed, until it is removed with `hk xcode remove`. This is how the Mac proof's owner session
+brings its archive in ([mac-proof-owner-session.md](mac-proof-owner-session.md), step 1).
+
 The alert clears when the store holds the release. Check with:
 
 ```
@@ -620,14 +633,15 @@ A group's two Xcode keys ([The group's settings](#the-groups-settings)):
 The `maintain` order of a Mac's turn with `xcode` carries the kept releases (version, build, size
 and SHA-256), the versions to remove (each installed as `Xcode-<version>.app` and older than every
 kept release) and the default. The turn stages each release it lacks while the Mac still
-serves (fetched from the store, its size and SHA-256 checked, expanded with `xip --expand` in
+serves (fetched from the store, its size and SHA-256 checked, Apple's own signature checked with
+`pkgutil --check-signature` as `xcode-push` checks it, expanded with `xip --expand` in
 `/Applications/.hostkeeper-staging/`, its build and code signature checked); then, drained, moves
 it to `/Applications/Xcode-<version>.app`, accepts the licence, runs the first launch, points
 `xcode-select` at the default, and removes the releases older than the group keeps. An Xcode whose
 directory is not `Xcode-<version>.app` (one a person or the App Store put there) is never removed.
 A stage that fails defers (`xcode_order_invalid`, `xcode_installed_unreadable`,
 `free_space_unreadable`, `free_space_short`, `xcode_not_in_store`, `xcode_fetch_failed`,
-`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_expand_failed`, `xcode_build_mismatch`,
+`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_archive_not_apple`, `xcode_expand_failed`, `xcode_build_mismatch`,
 `xcode_signature_invalid`, `xcode_staging_failed`); an apply or a check that fails halts
 (`xcode_order_invalid`, `xcode_installed_unreadable`, `xcode_build_mismatch`, `xcode_not_staged`,
 `xcode_install_taken`, `xcode_move_failed`, `xcode_license_failed`,
