@@ -6,13 +6,13 @@
 //! typed orders.
 
 use hostkeeper_wire::Platform;
-use hostkeeper_wire::wire::ServiceReply;
+use hostkeeper_wire::wire::{DeferredReport, Health, Heartbeat, ServiceBeat, ServiceReply, Token};
 use serde_json::json;
 
 use crate::decide::{Gate, Skip, Why};
 use crate::group_decision_support::{Farm, policy, stages};
 use crate::index_set_support::{index_text, sha};
-use crate::marks_support::update;
+use crate::marks_support::{hold, runs, scope_host, update};
 use crate::ops::{AuditEntry, Exclusion, Halt, HaltOrigin, Write};
 use crate::orders::Order;
 use crate::releases_tests::targets;
@@ -218,6 +218,110 @@ async fn an_earlier_package_that_is_halted_or_excluded_holds_the_later_ones_back
     assert_eq!(farm.why("a2", "base"), Some(Why::Skip(Skip::NotAMember)));
     assert_eq!(farm.why("a2", "app"), INSTALL_ORDER);
     assert_eq!(verb(farm.order("a1", &[])), install("base"));
+}
+
+/// What a host reports of `package` it was ordered to install at `target` and has not run: absent
+/// at `target`, with the deferral of `target` its daemon reports while its wait lasts when
+/// `declined`, as a service whose first install cannot go on without its config package's files
+/// does (`join_token_missing`).
+fn absent(package: &str, target: &str, declined: bool) -> ServiceBeat {
+    let mut one = runs(package, target);
+    one.health = Health::Absent;
+    one.deferred = declined.then(|| DeferredReport {
+        target: version(target),
+        reason: Token::parse("join_token_missing").expect("a token"),
+        retry_after_secs: 300,
+    });
+    one
+}
+
+/// The heartbeat of a daemon that takes installs and lists hostkeeper and `running`, each healthy
+/// at the version given, and `other` as it is given.
+fn beat_and(farm: &Farm, running: &[(&str, &str)], other: ServiceBeat) -> Heartbeat {
+    let mut beat = farm.beat_with(running);
+    beat.services.as_mut().expect("services").push(other);
+    beat
+}
+
+/// Proves: a group that lists a service then its config package orders the config package on a
+/// host where the service's install was ordered and the host declined it: while the host waits
+/// out its deferral of the service (`deferred`), and while the config package's own order keeps
+/// the host busy for the service (`busy_elsewhere`), the config package is not held
+/// `install_order`; once its wait is over the service is ordered again, and the host that now has
+/// its config package runs it.
+///
+/// Catches: a service its host reports absent, because it cannot start without its config
+/// package, holding that config package back for good, which keeps the service's install
+/// ordered again and again and its rollout live.
+#[tokio::test]
+async fn a_config_package_is_installed_where_its_service_declined_its_install() {
+    let farm = Farm::new("io-declined");
+    farm.flag(4);
+    farm.group("alpha", &["svc", "cfg"], Some(wide()));
+    farm.host("a1", "alpha");
+    farm.deploy("", "svc", "2.0", 1).await;
+    farm.deploy("", "cfg", "2.0", 2).await;
+    assert_eq!(verb(farm.order("a1", &[])), install("svc"));
+
+    let declined = || beat_and(&farm, &[], absent("svc", "2.0", true));
+    assert_eq!(verb(farm.order_on("a1", declined())), install("cfg"));
+    assert_eq!(farm.why("a1", "svc"), Some(Why::Gate(Gate::BusyElsewhere)));
+    assert_ne!(farm.why("a1", "cfg"), INSTALL_ORDER);
+
+    let configured = || beat_and(&farm, &[("cfg", "2.0")], absent("svc", "2.0", true));
+    assert_eq!(verb(farm.order_on("a1", configured())), None);
+    assert_eq!(farm.why("a1", "svc"), Some(Why::Skip(Skip::Deferred)));
+
+    farm.world.rig.at(2_301);
+    let waited = beat_and(&farm, &[("cfg", "2.0")], absent("svc", "2.0", false));
+    assert_eq!(verb(farm.order_on("a1", waited)), install("svc"));
+    assert_eq!(
+        verb(farm.order("a1", &[("svc", "2.0"), ("cfg", "2.0")])),
+        None
+    );
+}
+
+/// Proves: an earlier package the host reports absent holds the later ones back unless the host
+/// declined its install at its desired version and nothing else holds it: one absent with no
+/// deferral (`b1`), one the host declined and an operator holds on the host (`b2`), and one the
+/// host declined at a version the group no longer wants (`b3`, ordered the new version) each
+/// leave the later package told `install_order` (on `b1` and `b3` once the install order of the
+/// service just given no longer keeps the host busy).
+///
+/// Catches: every absent package counted as installed, which would order a config package to a
+/// host before its service's install was ever tried; a hold of the service read past; and a
+/// deferral of an older version taken for one of the version wanted.
+#[tokio::test]
+async fn an_absent_package_not_declined_at_its_desired_version_holds_the_later_ones_back() {
+    let farm = Farm::new("io-not-declined");
+    farm.flag(4);
+    farm.group("alpha", &["svc", "cfg"], Some(wide()));
+    for host in ["b1", "b2", "b3"] {
+        farm.host(host, "alpha");
+    }
+    farm.deploy("", "svc", "2.0", 1).await;
+    farm.deploy("", "cfg", "2.0", 2).await;
+
+    let never_run = beat_and(&farm, &[], absent("svc", "2.0", false));
+    assert_eq!(verb(farm.order_on("b1", never_run)), install("svc"));
+
+    assert_eq!(verb(farm.order("b2", &[])), install("svc"));
+    hold(&farm.world.rig, "svc", scope_host("b2")).expect("held");
+    let declined = beat_and(&farm, &[], absent("svc", "2.0", true));
+    assert_eq!(verb(farm.order_on("b2", declined)), None);
+    assert_eq!(farm.why("b2", "svc"), Some(Why::Gate(Gate::Held)));
+    assert_eq!(farm.why("b2", "cfg"), INSTALL_ORDER);
+
+    assert_eq!(verb(farm.order("b3", &[])), install("svc"));
+    farm.deploy("", "svc", "3.0", 3).await;
+    let declined_older = beat_and(&farm, &[], absent("svc", "2.0", true));
+    assert_eq!(verb(farm.order_on("b3", declined_older)), install("svc"));
+
+    // The install orders of `svc` given to `b1` and `b3` keep each host busy for `cfg` until they
+    // are older than an order counts for.
+    farm.world.rig.at(2_000 + crate::fleet::ORDER_AGE.as_secs());
+    assert_eq!(farm.why("b1", "cfg"), INSTALL_ORDER);
+    assert_eq!(farm.why("b3", "cfg"), INSTALL_ORDER);
 }
 
 /// Proves: a package taken out of a group is uninstalled from each host that ran it paced by the
