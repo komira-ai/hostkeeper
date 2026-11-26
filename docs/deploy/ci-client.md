@@ -265,12 +265,11 @@ group is held back from the next. A call with `wait` false, or a first job that 
 nothing.
 
 This repository's own callers, `release.yml` and `hello-desired.yml`, and the template of
-[A service's caller](service-caller.md) stay pinned to the revision of `set-desired.yml` they
-call now, which declares no `host_group` input, so they pass none: their set is one deployment to
-each group that lists the service. `hostkeeper` is listed in every group, so a release of
-hostkeeper is one deployment per group, each rolled by its own group's policy. Chaining the groups
-in order lands when that pin moves to a revision that has the input, and the callers pass
-`hostkeeper_version` and `hostkeeper_commit` of a release whose hk has `--host-group`.
+[A service's caller](service-caller.md) pin a revision of `set-desired.yml` that declares the
+`host_group` input (v0.1.479), and pass none: their set is one deployment to each group that
+lists the service. `hostkeeper` is listed in every group, so a release of hostkeeper is one
+deployment per group, each rolled by its own group's policy. Chaining the groups in order is a
+change of those callers: one call per group, each passing its `host_group`.
 
 ## Inputs
 

@@ -28,7 +28,8 @@
 # like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
 # and `hostkeeper_commit` of that same release. The pin is the CI client's revision the workflow
 # lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client that takes
-# targets and the tailnet tag, one set and one held wait. The coordinator, its CA, the audience
+# targets and the tailnet tag, waits for the coordinator with hk tailnet-wait after the join,
+# then makes one set and one held wait. The coordinator, its CA, the audience
 # and the tailnet tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`, which the client checks at its first
 # step, with or without the join) are repository variables; the coordinator's allow-list entry
 # for this workflow names `hello` (docs/deploy/ci-client.md, "The allow-list entry"). As
