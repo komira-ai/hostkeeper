@@ -55,10 +55,9 @@ const fn listed(kind: Kind) -> usize {
     }
 }
 
-/// Catches a kind that lost or changed its log token, its severity or its wire value when its
-/// three matches moved to their own module, and one left out of the list: every kind, in the
-/// order `Alerts.List` answers them, has exactly the `alert=` token, the severity and the
-/// `operator.proto` value (by number and by name) it had in `alerts.rs`.
+/// Catches a kind whose log token, severity or wire value changed, and one left out of the list:
+/// every kind, in the order `Alerts.List` answers them, has exactly its `alert=` token, its
+/// severity and its `operator.proto` value, by number and by name.
 #[test]
 fn every_kind_keeps_its_token_severity_and_wire_value() {
     use proto::AlertSeverity::{Critical, Warning};
