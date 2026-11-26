@@ -30,6 +30,15 @@ pub fn command(group: &str) -> String {
     )
 }
 
+/// What a run that would be stored says before the line that stores it: the line of `no run takes
+/// it yet` (design section 1) and then [`command`].
+pub fn stores(group: &str) -> String {
+    format!(
+        "    no run takes it yet. Press Update on the Maintenance page, or:\n{}",
+        command(group)
+    )
+}
+
 /// The JSON the coordinator's gateway answers for `message`, the answer of the method `method` of
 /// `service`: the message is encoded, decoded as the method's output type from the real
 /// descriptors, and written with the options the gateway writes with (`SerializeOptions::new()`

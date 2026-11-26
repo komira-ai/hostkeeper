@@ -112,6 +112,9 @@ fn run_lines(group: &str, version: &str, batch: u32, preview: &Preview) -> Vec<S
             if !skipped.is_empty() {
                 lines.push(format!("    skipped: {}", skipped.join(", ")));
             }
+            lines.push(
+                "    no run takes it yet. Press Update on the Maintenance page, or:".to_owned(),
+            );
             lines.push(format!("    {}", schedule_line(group, version, "")));
             lines
         }

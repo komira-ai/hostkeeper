@@ -143,9 +143,10 @@ nothing:
    due Mac that no run takes, `Maintenance.Schedule` is asked with the kind `xcode`, the reason `Xcode
    <version>` and no `confirm`, which stores nothing: `hk` prints the hosts a run would take and its
    batch, the hosts it would skip with the coordinator's reason, a refusal of the whole run with its
-   reason (for `last_host`, the line with `--take-last-host true`), and the line that stores the run,
-   `hk maintenance schedule --host-group <group> --kinds xcode --reason "Xcode <version>" --confirm
-   true`. `hk xcode add` never stores the run: an install drains a build Mac. A call of the summary that
+   reason (for `last_host`, the line with `--take-last-host true`), and, for a run it would take, the
+   line `no run takes it yet. Press Update on the Maintenance page, or:` and then the line that
+   stores the run, `hk maintenance schedule --host-group <group> --kinds xcode --reason "Xcode
+   <version>" --confirm true`. `hk xcode add` never stores the run: an install drains a build Mac. A call of the summary that
    fails does not undo the upload: stderr says `summary unavailable: <why>; the archive is stored` and
    names `hk hosts list` and `hk maintenance list`, and the exit is 0. With no Mac known, stdout has
    nothing more and stderr says so.
