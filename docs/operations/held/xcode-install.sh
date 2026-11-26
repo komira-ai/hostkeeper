@@ -194,14 +194,14 @@ installed() {
 # facts <host json>: what the turn depends on, one line each.
 facts() {
     printf '%s' "$1" | jq -r '.host as $h | $h.maintenance as $m |
-        "  group \($h.hostGroup // "-"), live \($h.live // false), daemon \($h.heartbeat.agent.version // "-")",
+        "  group \($h.hostGroup // "-"), live \(.host.live // false), daemon \($h.heartbeat.agent.version // "-")",
         "  macOS \($m.host.osVersion // "-") (\($m.host.osBuild // "-")), free \($m.mac.dataFreeBytes // "-") bytes",
         "  look age \($h.maintenanceLookAgeSecs // "-") s, stale \($h.maintenanceStale // false), look failed \($m.lookFailed // "" | if . == "" then "no" else . end)",
         (if ($m.xcodes // []) == [] then "  xcodes: none" else
             ($m.xcodes[] | "  xcode \(.version) \(.build) \(.path)\(if .selected then " selected" else "" end)\(if .foreign then " foreign" else "" end)") end),
         (if ($m.due // []) == [] then "  due: nothing" else
             ($m.due[] | "  due \(.kind | sub("MAINTENANCE_KIND_"; "") | ascii_downcase) \(.from // "-") -> \(.to // "-") \(.label // "")") end),
-        (if $m.run then "  in run \($m.run.runId) at \($m.run.step)" else empty end)'
+        (if .host.maintenance.run then "  in run \(.host.maintenance.run.runId) at \(.host.maintenance.run.step)" else empty end)'
 }
 
 # ready <mac> <tag>: reads the Mac and the coordinator's preview; 0 ready, 1 not, 3 installed.
