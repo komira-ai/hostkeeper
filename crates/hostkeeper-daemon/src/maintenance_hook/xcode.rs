@@ -8,6 +8,7 @@
 //! `unsupported_kind`.
 
 pub mod apply;
+mod signature;
 pub mod stage;
 pub mod store;
 

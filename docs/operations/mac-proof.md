@@ -10,7 +10,9 @@ Nothing here is a test of this repository. It is run by hand, once, by a person 
 steps that need the owner's own hands (MP-E9). Reads are fine on any Mac; every change is made only on the proof Mac. Never run a step on a
 Mac that takes builds. The steps that need the Mac out of builds and no owner run inside a hostkeeper maintenance run, which drains the
 Mac through js-agent and puts it back, from one operator command (MP-E13); no one cordons the Mac by hand for them ("Which steps need
-the Mac out of builds" in section 1).
+the Mac out of builds" in section 1). What is left for the owner is one short session, with what the lead does before and after each
+step: [mac-proof-owner-session.md](mac-proof-owner-session.md); design section 10.1.3 says why each owner step of this runbook went,
+stayed or changed.
 
 ## Who runs what, and in what order
 
@@ -278,6 +280,10 @@ Decides:
 
 ### MP-E9 Steps that need the owner's hands
 Settles: none; what design 2.0, 5.5 and question 4 must not assume can be done remotely. Runs: the owner at the Mac. Needs: MP-E6.
+This is the list as it was first written. What is left of it, in order, is the owner's session,
+[mac-proof-owner-session.md](mac-proof-owner-session.md): steps 1 and 2 are not needed (no run orders `macos` on a Mac with FileVault
+not off), step 3 is not needed (a Mac that stops on a screen raises `maintenance_not_back`), step 4 is a browser download on an
+operator's box, and step 5 is that page's steps 2 and 3 (design 10.1.3).
 ```sh
 # 1. FileVault on: after a restart, type the volume owner's password at the pre-boot screen; note the three times (restart, screen, first heartbeat)
 # 2. FileVault on or off: System Settings, or in the owner's root shell: fdesetup enable | fdesetup disable (prompts; no password in an argument)

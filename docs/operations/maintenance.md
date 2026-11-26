@@ -575,6 +575,17 @@ it would be removed at once),
   to switch builds. Each code, its status and the exit codes are in
   [xcode-releases.md](xcode-releases.md#pushing-a-release-from-your-mac-hk-xcode-push).
 
+**From a box that is not a Mac.** An archive downloaded in a browser on an operator's Linux box
+reaches the store through the same route, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
+([xcode-releases.md](xcode-releases.md#pushing-an-archive-put-v1xcodesha256versionversionbuildbuild)),
+sent with any HTTPS client that reads the bearer from a file (never from an argument): the version
+from the archive's name, `Xcode_<version>.xip`, and the build the coordinator lists for that
+release (`hk xcode list`, its `waiting`). Linux has no `pkgutil`, `xip` or `plutil`, so nothing
+checks Apple's signature, the version or the build before the upload; every Mac checks them in its
+stage before it installs anything (below), and an archive that fails is deferred on every Mac, never
+installed, until it is removed with `hk xcode remove`. This is how the Mac proof's owner session
+brings its archive in ([mac-proof-owner-session.md](mac-proof-owner-session.md), step 1).
+
 The alert clears when the store holds the release. Check with:
 
 ```
@@ -620,14 +631,15 @@ A group's two Xcode keys ([The group's settings](#the-groups-settings)):
 The `maintain` order of a Mac's turn with `xcode` carries the kept releases (version, build, size
 and SHA-256), the versions to remove (each installed as `Xcode-<version>.app` and older than every
 kept release) and the default. The turn stages each release it lacks while the Mac still
-serves (fetched from the store, its size and SHA-256 checked, expanded with `xip --expand` in
+serves (fetched from the store, its size and SHA-256 checked, Apple's own signature checked with
+`pkgutil --check-signature` as `xcode-push` checks it, expanded with `xip --expand` in
 `/Applications/.hostkeeper-staging/`, its build and code signature checked); then, drained, moves
 it to `/Applications/Xcode-<version>.app`, accepts the licence, runs the first launch, points
 `xcode-select` at the default, and removes the releases older than the group keeps. An Xcode whose
 directory is not `Xcode-<version>.app` (one a person or the App Store put there) is never removed.
 A stage that fails defers (`xcode_order_invalid`, `xcode_installed_unreadable`,
 `free_space_unreadable`, `free_space_short`, `xcode_not_in_store`, `xcode_fetch_failed`,
-`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_expand_failed`, `xcode_build_mismatch`,
+`xcode_archive_mismatch`, `xcode_archive_encrypted`, `xcode_archive_not_apple`, `xcode_expand_failed`, `xcode_build_mismatch`,
 `xcode_signature_invalid`, `xcode_staging_failed`); an apply or a check that fails halts
 (`xcode_order_invalid`, `xcode_installed_unreadable`, `xcode_build_mismatch`, `xcode_not_staged`,
 `xcode_install_taken`, `xcode_move_failed`, `xcode_license_failed`,

@@ -189,6 +189,7 @@ impl Machine {
                 code: Some(1),
                 timed_out: false,
                 stderr: b"xip: error: the archive is not an Xcode archive\n".to_vec(),
+                ..Ran::default()
             };
         }
         let app = self.mac_path(&cwd.join("Xcode.app").to_string_lossy());
@@ -239,7 +240,8 @@ impl StdinRun for Installer {
     }
 }
 
-/// The programs the `xcode` kind's stage runs: `xip` and `codesign`, each recorded with its
+/// The programs the `xcode` kind's stage runs: `pkgutil --check-signature`, which reports Apple's
+/// own signature on any archive, `xip` and `codesign`, each recorded with its
 /// arguments, the scratch paths among them written as the Mac's. `codesign` always passes: a
 /// failed signature is not simulated here (the stage's own tests cover it).
 pub(super) struct HookRunner(pub(super) Arc<Machine>);
@@ -254,6 +256,11 @@ impl Runner for HookRunner {
             .collect();
         self.0.effect(line(&program, &args));
         match (program.as_str(), spawn.args.as_slice()) {
+            (PKGUTIL_PROGRAM, [flag, _]) if flag == "--check-signature" => Ok(Ran {
+                code: Some(0),
+                stdout: PKGUTIL_SIGNATURE.as_bytes().to_vec(),
+                ..Ran::default()
+            }),
             (XIP, [expand, archive]) if expand == "--expand" => {
                 Ok(self.0.expand(Path::new(archive), &spawn.cwd))
             }
