@@ -1,6 +1,7 @@
 # Adding an Xcode in one action
 
-Status: design. Built so far: `hk xcode verify` and its record (section 5, X2), as a hand-written method of the generated
+Status: design. Built so far: the settings file and `hk settings init` (section 2.1, X1, `crates/hostkeeper-hk/src/settings.rs`
+and `home.rs`); `hk xcode verify` and its record (section 5, X2), as a hand-written method of the generated
 service `xcode` (section 2.7 last paragraph); `hk xcode add` (X3, X4): sections 2.2 to 2.4 with resume, 2.6 and 2.7, and the
 summary of the Macs (2.5, in `xcode_add/summary/`), in `crates/hostkeeper-hk/src/xcode_add/` and `xcode_push/resume.rs`; the
 coordinator's side of resume (section 3: the query, `Content-Range`, the partial, its lock, removal, lapse, `Xcode.List.uploads`,
