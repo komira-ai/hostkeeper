@@ -285,7 +285,8 @@ async fn a_config_package_is_installed_where_its_service_declined_its_install() 
 /// declined its install at its desired version and nothing else holds it: one absent with no
 /// deferral (`b1`), one the host declined and an operator holds on the host (`b2`), and one the
 /// host declined at a version the group no longer wants (`b3`, ordered the new version) each
-/// leave the later package told `install_order`.
+/// leave the later package told `install_order` (on `b1` and `b3` once the install order of the
+/// service just given no longer keeps the host busy).
 ///
 /// Catches: every absent package counted as installed, which would order a config package to a
 /// host before its service's install was ever tried; a hold of the service read past; and a
@@ -303,7 +304,6 @@ async fn an_absent_package_not_declined_at_its_desired_version_holds_the_later_o
 
     let never_run = beat_and(&farm, &[], absent("svc", "2.0", false));
     assert_eq!(verb(farm.order_on("b1", never_run)), install("svc"));
-    assert_eq!(farm.why("b1", "cfg"), INSTALL_ORDER);
 
     assert_eq!(verb(farm.order("b2", &[])), install("svc"));
     hold(&farm.world.rig, "svc", scope_host("b2")).expect("held");
@@ -316,6 +316,11 @@ async fn an_absent_package_not_declined_at_its_desired_version_holds_the_later_o
     farm.deploy("", "svc", "3.0", 3).await;
     let declined_older = beat_and(&farm, &[], absent("svc", "2.0", true));
     assert_eq!(verb(farm.order_on("b3", declined_older)), install("svc"));
+
+    // The install orders of `svc` given to `b1` and `b3` keep each host busy for `cfg` until they
+    // are older than an order counts for.
+    farm.world.rig.at(2_000 + crate::fleet::ORDER_AGE.as_secs());
+    assert_eq!(farm.why("b1", "cfg"), INSTALL_ORDER);
     assert_eq!(farm.why("b3", "cfg"), INSTALL_ORDER);
 }
 
