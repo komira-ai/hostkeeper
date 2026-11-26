@@ -930,6 +930,35 @@ is left for the owner is one session, `docs/operations/mac-proof-owner-session.m
 farm Mac has the update account, which a run needs (`no_update_account`). The account waits for the owner's answer to the session's
 step 4.
 
+### 10.1.4 The first probe run on a farm Mac, 2026-11-26
+
+MP-E13 (`mac-proof.md`), one `Maintenance.Schedule` of the kind `probe` for the farm Mac 10.1.2 read, from the operator's side, with no cordon by
+hand, no root shell and no launchd harness: run `run-1795667883-1`, reason "Mac proof: launchd probes", scheduled 04:38:03Z. Read back
+with `hk maintenance get`, `hk hosts get` and `hk audit list`, read only.
+
+- **The run waited 17 hours, for a reason outside the probe.** It was held at every heartbeat by the serving count of 5.1
+  (`min_serving` 1): every Mac of `mac-build` reported its four configuration packages `HEALTH_UNHEALTHY`, so no Mac counted as
+  serving, and no group setting could lift it (the host itself must be serving). A configuration package has no run units and no
+  health URL, and the daemon sent that "nothing to observe" as unhealthy. Fixed by komira-ai/hostkeeper#592 (the daemon sends such
+  a service healthy; `docs/service-observation.md`), released in 0.1.480 at 22:11Z. Once all four Macs ran 0.1.480 the packages
+  read healthy, and the run started at the next heartbeat with nothing done by hand.
+- **The turn, from the audit log.** `maintenance_start` of the Mac at 22:18:32Z; `maintenance_step` `done` at 22:18:48Z. Its
+  stage (nothing), drain (js-agent's `[hook] drain`), apply (the probe), check and put back (js-agent's `resume`) took 16 seconds
+  together, inside one heartbeat, so the audit holds no row between start and done: the drain returned at once, so no job was
+  running on the Mac to wait for. The run is
+  `MAINTENANCE_STATE_DONE`, the host `done` with `applied` `probe`. The Mac's report carries the run record at step `done`, and its
+  boot id and boot time (16:53:56Z, 2026-11-23) did not change: nothing restarted. The job service lists all four Macs live after
+  the run, so `resume` lifted the cordon (the lead's read at 22:35Z).
+- **What the probe read** (probed 22:18:34Z; daemon 0.1.480; macOS 27.2.1, build 26B131), each program exit 0, in the maintenance
+  hook's `cutover` launchd job:
+  - `console` `root` and `who` empty: nobody was logged in, as 10.1.2 found from a shell. MP-E7 had nothing to do.
+  - `id` `uid=0(root) gid=0(wheel) groups=0(wheel),1(daemon),...` (cut at its 128-byte bound) and `managername` `System`: the
+    hook's programs run as root in the System domain. **MP-E8's probe shown.**
+  - `env` empty: every program the hook runs gets no environment. The eight ran with none.
+  - `fdesetup_status` `FileVault is Off.` and `fdesetup_supportsauthrestart` `true`, exit 0, the same as from the root shell
+    (10.1.2). **MP-A6 from launchd with FileVault off shown.** Decides: `maintenance_mac.rs` unchanged; `true` with FileVault off,
+    so the gate reads the FileVault state first, as built.
+
 ### 10.2 Each [V]
 
 Status `not run` means: not yet run on a Mac. The common reasons: no root shell on any farm Mac (10.1, until 10.1.2); no Mac drained in a group
@@ -948,7 +977,7 @@ Apple Business); a major upgrade, which cannot be undone, needs the owner's choi
 | An Xcode install, a swap and a removal, js-agent probing before and after | 2.4, MP | MP-I5 | not run: the same `xcode` run, which drains the Mac through js-agent | js-agent's probe reads `/Applications/Xcode*.app/Contents/version.plist` and runs nothing (komira-ai/jobscheduler); what it reports after each step decides whether J2's re-read in `resume` is enough |
 | `sysadminctl -addUser` and `-secureTokenOn` take both passwords on standard input (`-`), or need a pseudo-terminal | 5.5 | MP-A2, MP-A3 | not run | on a pipe: the Built stdin runner is enough; only from a terminal: the daemon gives it a pseudo-terminal it owns; a password reaches no argument in either case |
 | The Secure Token grant, and the account hidden | 5.5 | MP-A1, MP-A4, MP-A5 | MP-A1 shown (10.1.2): the reads before the account, and a hidden account's `dsAttrTypeNative:IsHidden: 1`, fixed; MP-A4, MP-A5 not run | read three ways (`sysadminctl -secureTokenStatus`, `diskutil apfs listCryptoUsers /`, `fdesetup list`); the built read uses the first (`maintenance_account.rs`) |
-| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8, MP-E13 | MP-A6 from a root shell with FileVault off shown (10.1.2); from launchd with FileVault off, not run: it is MP-E13's probe run, which needs no cordon, once the coordinator and the Mac run a release with the probe; with FileVault on, not needed: no run orders `macos` on a Mac whose FileVault is not off (10.1.3) | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
+| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8, MP-E13 | MP-A6 with FileVault off shown from a root shell (10.1.2) and from launchd, by MP-E13's probe run (10.1.4): `FileVault is Off.`, `true`, exit 0 both; with FileVault on, not needed: no run orders `macos` on a Mac whose FileVault is not off (10.1.3) | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
 | A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: no minor update pending on 2026-11-25 (10.1.2) and no update account on any farm Mac (10.1.3); MP-U4 and MP-U5 (FileVault on) not needed (10.1.3) | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
 | A major upgrade by `startosinstall --nointeraction --user --stdinpass`, FileVault off and on | 5.5 | MP-U6 to MP-U8 | not run: cannot be undone; every farm Mac runs the newest major, so none is possible until macOS 28 (10.1.3); then the owner's choice | as for the minor; one Mac can show only one of the two FileVault cases |
 | `startosinstall` restarts authenticated with FileVault on | 5.5 | MP-U8 | not needed: a major upgrade is never ordered with FileVault on (10.1.3) | if it stops at the pre-boot login, major upgrades are ordered only on Macs with FileVault off |
