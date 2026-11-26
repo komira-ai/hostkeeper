@@ -408,11 +408,85 @@ return { status: status(), sockets: seen.sockets.length, reopen: has("open-deskt
     assert_eq!(
         out,
         json!({
-            "status": "The desktop did not open: ALREADY_EXISTS console_busy.",
+            "status": "Someone already holds this Mac's console: open the Desktop page again to see who, with a Close for it.",
             "sockets": 0,
             "reopen": true,
         })
     );
+}
+
+/// Proves: each refusal of `Console/Open` an operator can act on is said in words on the Desktop
+/// page, in a Mac's terms where a Mac differs from a Linux server: `no_address` names the console
+/// targets file and the data MACs of the Mac's record (a Mac has no BMC, and the coordinator
+/// reaches its screen only at an address that file gives), and `console_busy` says where to see
+/// who holds it. The other words are the Console page's, and a refusal the page has no words for
+/// is still shown as its code and token. No refusal opens a socket.
+///
+/// Catches: a Mac's Desktop refused for a missing targets file entry shown as
+/// `FAILED_PRECONDITION no_address`, which tells the operator neither what is missing nor where,
+/// and a Desktop page that speaks of a BMC the Mac does not have.
+#[test]
+fn a_macs_open_refusals_are_said_in_a_macs_words() {
+    for (status, code, reason, said) in [
+        (
+            400,
+            "FAILED_PRECONDITION",
+            "no_address",
+            "No address is known for this Mac: the coordinator's console targets file gives none of the data MACs on the Mac's inventory record.",
+        ),
+        (
+            409,
+            "ALREADY_EXISTS",
+            "console_busy",
+            "Someone already holds this Mac's console: open the Desktop page again to see who, with a Close for it.",
+        ),
+        (
+            403,
+            "PERMISSION_DENIED",
+            "no_console_access",
+            "You are not named in the coordinator's console operators file, so you cannot open one.",
+        ),
+        (
+            503,
+            "RESOURCE_EXHAUSTED",
+            "too_many_sessions",
+            "The coordinator holds as many console sessions as it allows. Close one and try again.",
+        ),
+        (
+            404,
+            "NOT_FOUND",
+            "host_not_found",
+            "The coordinator knows no host of this id.",
+        ),
+        (
+            503,
+            "UNAVAILABLE",
+            "audit_unavailable",
+            "The coordinator could not write the audit entry. Nothing was done; try again.",
+        ),
+        (
+            400,
+            "FAILED_PRECONDITION",
+            "ambiguous_record",
+            "The desktop did not open: FAILED_PRECONDITION ambiguous_record.",
+        ),
+    ] {
+        let mut ui = Ui::start();
+        ui.reply(&m("Console/List"), json!({}));
+        ui.refuse(&m("Console/Open"), status, code, reason);
+        let out = run(
+            &mut ui,
+            r#"
+typeIn("desktop-reason", "look");
+await press("open-desktop");
+return { status: status(), sockets: seen.sockets.length, reopen: has("open-desktop") };"#,
+        );
+        assert_eq!(
+            out,
+            json!({ "status": said, "sockets": 0, "reopen": true }),
+            "the refusal {reason}"
+        );
+    }
 }
 
 /// Proves: when `Console/Open` answers a serial console (the host is not a Mac), or a session id of

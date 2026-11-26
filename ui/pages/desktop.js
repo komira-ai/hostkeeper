@@ -18,10 +18,29 @@
 
 import { h, action, describeError, field, fmtUnix, list, reasonProblem, redraw, trimmed } from "../view.js";
 import { getCsrf } from "../session.js";
-import { PROTOCOL, closeWords } from "./serialconsole.js";
+import { PROTOCOL, REFUSALS, closeWords } from "./serialconsole.js";
 
 // The path of a console session's stream.
 const STREAM = "/console/v1/stream/";
+
+// The words for a refusal of Console.Open that the operator can act on: the Console page's, but
+// where a Mac differs. A Mac has no BMC: the coordinator reaches its screen only at the address its
+// console targets file gives one of the data MACs of the Mac's inventory record, and refuses
+// `no_address` when it gives none. After a refusal the page no longer shows who holds the console,
+// so `console_busy` says where to see it. Any other refusal is shown as its code and token.
+export const DESKTOP_REFUSALS = {
+  ...REFUSALS,
+  console_busy: "Someone already holds this Mac's console: open the Desktop page again to see who, with a Close for it.",
+  no_address: "No address is known for this Mac: the coordinator's console targets file gives none of the data MACs on the Mac's inventory record.",
+};
+
+// The words for a refusal of Console.Open by the Desktop page.
+export function desktopRefusalWords(error) {
+  const reason = error && typeof error.reason === "string" ? error.reason : "";
+  return Object.prototype.hasOwnProperty.call(DESKTOP_REFUSALS, reason)
+    ? DESKTOP_REFUSALS[reason]
+    : `The desktop did not open: ${describeError(error)}.`;
+}
 
 // The open session of `nodeId` that Console.List names, `null` when none, or why it could not be read.
 async function holderOf(ctx, nodeId) {
@@ -186,7 +205,7 @@ export async function render(ctx) {
       if (live()) {
         view.conn = null;
         view.phase = "ended";
-        view.notice = `The desktop did not open: ${describeError(error)}.`;
+        view.notice = desktopRefusalWords(error);
         paintHead();
       }
       return undefined;
