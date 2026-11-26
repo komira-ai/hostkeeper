@@ -1,0 +1,16 @@
+hk settings init --endpoint URL --ca-file PATH --token-file PATH
+    Writes $HOME/.hostkeeper/hk.toml, the defaults of --endpoint, --ca-file and --token-file for
+    every command that takes them. In order:
+    1. The three flags are all required; the two paths must be absolute, since the file keeps
+       them. $HOME/.hostkeeper and $HOME/.hostkeeper/xcode are made with mode 0700 when they
+       are missing, whatever the umask; one that exists is checked (not a link, the user's own,
+       not writable by group or others) and keeps its mode.
+    2. A file that is there already is not replaced: hk says so and exits 2.
+    3. One Xcode.List call is made with the three values, checked as any call checks them (the
+       endpoint, the CA file, a token file only its owner may read). Nothing is written when it
+       fails: its refusal or error is said with the path that was not written.
+    4. $HOME/.hostkeeper/hk.toml is made with mode 0600, and one line on stdout names it.
+
+The file is read by every command that needs a flag it gives; see `hk --help`. It takes the
+global flags --endpoint, --ca-file, --token-file and --timeout-secs. --token-stdin,
+--github-oidc-audience and --response-file are not taken.

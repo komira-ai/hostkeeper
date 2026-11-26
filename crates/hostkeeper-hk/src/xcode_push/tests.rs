@@ -3,9 +3,9 @@
 //! push is in tests/cli/xcode_push.rs.
 
 use super::archive::{is_build, is_version};
-use super::command;
 use super::signature::{APPLE_ROOT_CA, APPLE_ROOT_CA_SHA256, Link, Report, parse, verdict};
 use super::upload::{error_code, exit_of_status};
+use super::{Mac, command};
 
 /// Proves: a version is decimal numbers joined by dots, and nothing else is one: not empty, no
 /// empty part, no letter, no sign, no space.
@@ -218,4 +218,41 @@ fn a_program_runs_without_the_runners_token_variables() {
             ("ACTIONS_ID_TOKEN_REQUEST_URL".to_owned(), None),
         ]
     );
+}
+
+/// Proves: the real system names Apple's programs by their paths, takes `xcodes` from the `PATH`,
+/// fetches Apple's root from the certificate authority page and holds the fingerprint the
+/// signature check holds; and its clock never goes back.
+#[test]
+fn the_system_names_apples_programs_and_a_clock_that_does_not_go_back() {
+    let mac = Mac::system();
+    assert_eq!(mac.xcodes, std::path::Path::new("xcodes"));
+    let paths: Vec<&std::path::Path> = [
+        &mac.pkgutil,
+        &mac.xip,
+        &mac.plutil,
+        &mac.codesign,
+        &mac.spctl,
+        &mac.xar,
+        &mac.sw_vers,
+        &mac.uname,
+        &mac.cp,
+        &mac.df,
+        &mac.archiveutil,
+        &mac.aa,
+        &mac.aea,
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::as_path)
+    .collect();
+    assert!(paths.iter().all(|path| path.is_absolute()));
+    assert_eq!(mac.cp, std::path::Path::new("/bin/cp"));
+    assert_eq!(mac.pkgutil, std::path::Path::new("/usr/sbin/pkgutil"));
+    assert_eq!(
+        mac.apple_root_url,
+        "https://www.apple.com/appleca/AppleIncRootCertificate.cer"
+    );
+    assert_eq!(mac.apple_root_sha256, APPLE_ROOT_CA_SHA256);
+    let first = (mac.clock)();
+    assert!((mac.clock)() >= first);
 }

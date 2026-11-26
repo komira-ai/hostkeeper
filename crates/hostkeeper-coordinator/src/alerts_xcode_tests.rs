@@ -131,8 +131,8 @@ fn xcode_release_waiting_is_one_warning_naming_the_release() {
                 ..Subject::of(Kind::XcodeReleaseWaiting)
             },
             message: "Xcode 27.2 (27B52), which requires macOS 26.6 or later, is released and \
-                      the coordinator's Xcode store holds no release as new: push it from a Mac \
-                      signed in to the Apple developer account with `hk xcode-push 27.2`"
+                      the coordinator's Xcode store holds no release as new: add it from a Mac \
+                      signed in to the Apple developer account with `hk xcode add 27.2`"
                 .to_owned(),
             said: Said::default(),
         }]

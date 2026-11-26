@@ -6,12 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "`hk`: the operator's command line for hostkeeper's coordinator, with the SSH tunnel built in: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins; and `hk xcode-push`, which uploads an Xcode archive to the coordinator's store from the operator's Mac."
+description = "`hk`: the operator's command line for hostkeeper's coordinator, with the SSH tunnel built in: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins; `hk xcode add` (and `hk xcode-push`, its second name for one release), which uploads an Xcode archive to the coordinator's store from the operator's Mac, and `hk xcode verify`, which checks an archive there and writes the record of what it found."
 
 # docs/design/ssh-through-coordinator.md section 8. A gateway call, and `hk ssh`, `hk ssh-proxy`,
 # `hk ssh-revoke` and `hk ssh-status` (the `ssh` module of this crate), read the operator's token
 # from the file a flag names (or stdin, or the runner), once per call, and never put it in an
-# argument, a file of their own or the environment of a program they run; nor does `hk xcode-push`.
+# argument, a file of their own or the environment of a program they run; nor does `hk xcode add`.
 [[bin]]
 name = "hk"
 path = "src/main.rs"
@@ -23,7 +23,8 @@ name = "hk-fake-openssh"
 path = "tests/bin/fake_openssh.rs"
 required-features = ["test-support"]
 
-# A stand-in for `xcodes`, `pkgutil`, `xip` and `plutil`, by the name it is run as, that records
+# A stand-in for `xcodes`, `pkgutil`, `xip`, `plutil`, `codesign`, `spctl`, `xar`, `sw_vers`, `uname`,
+# `cp` and `df`, by the name it is run as, that records
 # its arguments and environment; only the tests run it, with `test-support`.
 [[bin]]
 name = "hk-fake-mac-tool"
@@ -41,11 +42,20 @@ base64.workspace = true
 clap.workspace = true
 # The command table `hk` is generated from, and the `Ssh` client and its messages.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The user id `hk` runs as, which owns what `~/.hostkeeper` holds (`geteuid`, a safe call),
+# and the `flock` of `hk xcode add`'s lock, and the monotonic clock the seconds
+# of `hk xcode verify`'s expansion are read from.
+rustix = { workspace = true, features = ["fs", "process", "time"] }
 # The system's roots, which the runner's token request is trusted by.
 rustls-native-certs.workspace = true
 # The SHA-256 of an Xcode archive, which names it in the store.
 sha2.workspace = true
+# The record `hk xcode verify` writes, as JSON.
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+# The settings file `~/.hostkeeper/hk.toml`.
+toml.workspace = true
 # The runtime the ssh verbs run on, the byte streams of the tunnel, and the SIGHUP and SIGTERM
 # that `hk ssh-proxy` turns into a close of the tunnel.
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "signal", "sync"] }
@@ -55,6 +65,8 @@ tokio-stream = { workspace = true, features = ["signal"] }
 # The channel to the coordinator over TLS that trusts the CA file given, and the client side of
 # the tunnel's bidirectional stream.
 tonic = { workspace = true, features = ["channel", "tls-ring"] }
+# The subject of Apple's root certificate, which `hk xcode verify` records beside its fingerprint.
+x509-parser.workspace = true
 # The HTTPS client of a gateway call: rustls with the ring provider, the roots it is given.
 ureq.workspace = true
 
@@ -75,13 +87,13 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 http-body-util.workspace = true
 hyper.workspace = true
+# The umask a test of `hk xcode add` runs under (`fs::Mode`), and the SIGHUP and SIGTERM the
+# tests send to a running `hk ssh-proxy`: safe calls.
+rustix = { workspace = true, features = ["fs", "process"] }
 # Reads the recorded request bodies back as the fixture's and the real protos' messages.
 prost-reflect = { workspace = true, features = ["serde"] }
 rcgen.workspace = true
 rustls.workspace = true
-# Sends SIGHUP and SIGTERM to a running `hk ssh-proxy`, a safe call.
-rustix = { workspace = true, features = ["process"] }
-serde_json.workspace = true
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "time"] }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server", "tls-ring"] }

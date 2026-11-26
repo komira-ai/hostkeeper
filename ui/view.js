@@ -109,6 +109,7 @@ const ICONS = {
     ["line", { x1: 16, y1: 6, x2: 20, y2: 6 }]],
   maintenance: [["path", { d: "M20 12a8 8 0 1 1-2.34-5.66" }], ["polyline", { points: "20 4 20 9 15 9" }],
     ["polyline", { points: "12 8 12 12 15 14" }]],
+  xcode: [["path", { d: "M12 4v10" }], ["polyline", { points: "8 10 12 14 16 10" }], ["path", { d: "M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" }]],
   settings: [["line", { x1: 4, y1: 7, x2: 20, y2: 7 }], ["line", { x1: 4, y1: 17, x2: 20, y2: 17 }],
     ["circle", { cx: 9, cy: 7, r: 2.5 }], ["circle", { cx: 15, cy: 17, r: 2.5 }]],
   "theme-system": [["circle", { cx: 12, cy: 12, r: 8 }], ["path", { d: "M12 4a8 8 0 0 1 0 16z" }]],

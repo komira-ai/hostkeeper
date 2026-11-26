@@ -112,7 +112,7 @@ what the store holds (section 2) and what each Mac reports installed (section 1)
   only version, build, release type and required macOS from it, never a file. Apple's own developer releases RSS feed names the same
   version and build in each item's title; it is the fallback if the community list goes away (a second parser, written only then). The
   list's address is a flag (`--xcode-feed-url`; empty turns the job off).
-- **What it decides:** a release (not a beta or a release candidate) newer than any the store holds is brought in by the source of section 2.0. When no fetcher is configured (`--xcode-fetcher` empty), it raises the warning alert `xcode_release_waiting`, which clears when the store holds the release (`hk xcode-push`); with a fetcher, the fetcher fetches it and `xcode_signin_needed` is the alert when it cannot. Once the
+- **What it decides:** a release (not a beta or a release candidate) newer than any the store holds is brought in by the source of section 2.0. When no fetcher is configured (`--xcode-fetcher` empty), it raises the warning alert `xcode_release_waiting`, which clears when the store holds the release (`hk xcode add`); with a fetcher, the fetcher fetches it and `xcode_signin_needed` is the alert when it cannot. Once the
   coordinator holds it, a Mac of a group that keeps the newest Xcodes (`xcode_keep`, section 3) and lacks it has `xcode` due, like any
   other due item.
 - **Failure:** a fetch of the list that fails is a log line, retried the next day, never an alert.
@@ -165,14 +165,15 @@ do with the archive (2.4: expand it, check Apple's signature, move it into place
 runs as root with no sign-in.
 
 ```
-hk xcode-push 27.2            # downloads with xcodes in the operator's own session, then uploads
-hk xcode-push ~/Downloads/Xcode_27.2.xip
+hk xcode add 27.2             # downloads with xcodes in the operator's own session, then uploads
+hk xcode add ~/Downloads/Xcode_27.2.xip
 ```
 
-`xcode-push` is, like `hk ssh`, not a gateway call: it is a verb of the `hk` program (Rust)
-that calls `xcodes`, `pkgutil`, `xip` and `plutil` on the operator's Mac, hashes the archive itself and uploads it over its own HTTPS client
-(Built: `crates/hostkeeper-hk/src/xcode_push/`; macOS only **[V]**, section 10), and `docs/cli.md`'s list of commands that
-are not gateway calls gains it. In order:
+`hk xcode add` (named `hk xcode-push` until [xcode-one-action.md](xcode-one-action.md) X3, and still a second name of it for one release) is, like `hk ssh`, not a gateway call: it is a verb of the `hk` program (Rust)
+that calls `xcodes`, `pkgutil`, `xip`, `plutil` and `codesign` on the operator's Mac, hashes the archive itself and uploads it over its own HTTPS client
+(Built: `crates/hostkeeper-hk/src/xcode_add/` and `src/xcode_push/`; macOS only **[V]**, section 10), and `docs/cli.md`'s list of commands that
+are not gateway calls gains it. The steps below are the first form of it; its checks, record, lock and progress are
+[xcode-one-action.md](xcode-one-action.md) section 2. In order:
 
 1. **Download**, when given a version: `xcodes download <version>` in the operator's own session (their Keychain, so a two-factor prompt
    only when Apple has ended the session, answered by the person at the keyboard). Given a file (downloaded from Apple's developer site
@@ -345,7 +346,7 @@ heartbeat's 16 KiB and stored for free in the host's last beat (Built: `fleet_ho
 - **Update** (one button, on the host page, on a host's row of the Maintenance page and on a group's notice): a run of everything due, on
   that host or every due host of the group, now, with the group's batch and drain settings. It asks once to confirm ("drains, updates,
   restarts if needed, puts back"), takes a reason, and calls `Maintenance.Schedule` like the form.
-- **Maintenance page** (New, `ui/pages/maintenance.js`, in the Manage menu): per group, the hosts and what is due; the Xcode store, the release waiting for a push (with the `hk xcode-push <version>` line to copy) and, if a fetcher is configured, its state (with "sign in on the fetcher" and a link to its Desktop
+- **Maintenance page** (New, `ui/pages/maintenance.js`, in the Manage menu): per group, the hosts and what is due; the Xcode store, the release waiting for a push (with the `hk xcode add <version>` line to copy) and, if a fetcher is configured, its state (with "sign in on the fetcher" and a link to its Desktop
 page when it needs one); the
   runs, each with its hosts and their step (waiting, staging, draining since, applying, rebooting, checking, putting back, done, deferred,
   halted), refreshed by `ctx.every`. A rebooting host links its **Console** (Linux, Serial over LAN, Built: `ui/pages/serialconsole.js`)

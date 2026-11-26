@@ -1,12 +1,12 @@
-//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `xcode-push` and of `tailnet-wait`. All of it is
+//! The help texts: of `hk`, of a service, of a method, of the ssh commands, of `settings`, of `xcode add`, of `xcode-push`, of `xcode verify` and of `tailnet-wait`. All of it is
 //! written from the command table and says `hk`, whatever name the program is called by.
 
 use std::fmt::Write as _;
 
 use hostkeeper_proto::ctl::{Command, Input};
 
-use crate::PROGRAM;
 use crate::table::{GLOBALS, MEANINGS, field_flags, line, shape};
+use crate::{PROGRAM, hand};
 
 /// How `hk` turns a request field into input, said once in `--help` and `docs/cli.md`.
 pub(crate) const RULES: &str = "\
@@ -50,15 +50,45 @@ ssh-status <host-id>` shows the host keys pinned for a host and the certificate 
 certificates and the pins in `$HOME/.hostkeeper/ssh`, and read the token from its file. `hk \
 ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.
 
-`hk xcode-push <version> | <archive.xip>` is not a gateway call either: on macOS only, it brings \
-an Xcode release into the coordinator's Xcode store. Given a version, it downloads the archive \
-with `xcodes download <version>` in the operator's own session (a two-factor prompt is answered \
-at the terminal); given a file, it takes the file. Apple's signature must be on it \
+`hk xcode add [<version> | <archive.xip>]` is a method of the service `xcode` that is not a \
+gateway call: on macOS only, it brings an Xcode release into the coordinator's Xcode store. With \
+no argument it takes the newest `Xcode_<version>.xip` in `$HOME/Downloads` (or the release \
+waiting in the store, downloaded); given a version it takes that release's archive from \
+`$HOME/Downloads` or downloads it with `xcodes download <version>` in the operator's own \
+session (a two-factor prompt is answered at the terminal); given a file, it takes the file. An \
+archive the store holds ends the run with exit 0; Apple's signature must be on it \
 (`pkgutil --check-signature`: exit 0, `signed Apple Software`, a chain ending at Apple Root CA), \
-its version and build are read from the app `xip --expand` makes, and it is uploaded unmodified \
-and streamed, `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`; a step that fails \
-uploads nothing. It needs --endpoint, --ca-file and --token-file, and takes no other \
-credential; `hk xcode-push --help` says each step.
+its version and build are read from the app `xip --expand` makes (or from the record an earlier \
+run kept), and it is uploaded unmodified and streamed with its progress on stderr: `GET \
+/v1/xcode/<sha256>/upload` says how much of it the store holds, and the rest goes in one `PUT \
+/v1/xcode/<sha256>?version=<version>&build=<build>` with a `Content-Range`, so that a broken \
+connection, an `offset_mismatch` or a `partial_locked` is tried again from the offset the store \
+reports (five tries in all, after waits of 2, 4, 8 and 16 seconds), and a run that stops (`the \
+upload stopped at 7.31 of 11.92 GB; run hk xcode add again to continue`, exit 1) is continued by \
+the next run; a coordinator that cannot resume (its query answers 405) gets the whole archive in \
+one request; a step that fails uploads nothing. It needs \
+--endpoint, --ca-file and --token-file (or the settings file), and takes no other credential; \
+`hk xcode add --help` says each step. `hk xcode-push <version> | <archive.xip>` is a second name \
+for it for one release.
+
+`hk xcode verify [--apple-root FILE] <archive.xip>` is a method of the service `xcode` that is \
+not a gateway call: on macOS only, it runs every check of the Mac proof's operator steps on an \
+Xcode archive (the programs, the archive's kind, Apple's signature and published root, a damaged \
+copy and a file that is no archive, the table of contents, and the expansion with its version \
+and build), writes the record of what it found to `$HOME/.hostkeeper/xcode/<sha256>.json` and \
+to stdout, and exits 0 when its verdict is pass and 1 otherwise. It asks no coordinator; \
+`hk xcode verify --help` says each check.
+
+`hk settings init --endpoint URL --ca-file PATH --token-file PATH` writes the settings file \
+`$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their \
+default for every command that takes them (a call, the ssh commands and `xcode add`; not \
+`tailnet-wait`, which takes no token). A flag on the command line wins over the file; a flag \
+that neither gives is missing, as without a file. The file is a TOML table of the strings \
+`endpoint`, `ca_file` and `token_file`: an address and two paths, never a token. A key of \
+another name is ignored, with `hk: <path>: unknown key <name> ignored` on stderr. hk refuses a \
+file, or a `$HOME/.hostkeeper`, that is a link, that another user owns or that its group or \
+others may write, naming the path; `--token-stdin` and `--github-oidc-audience` leave the \
+file's token file unused. `hk settings --help` says what init does.
 
 `hk tailnet-wait [--attempts N] [--interval-secs S]` is not a gateway call either: run by a CI \
 job right after it joined the tailnet, it asks the coordinator's `GET /v1/version`, with no \
@@ -105,6 +135,7 @@ pub(crate) fn top_help(commands: &[&Command], stamp: &str) -> String {
 
 /// The help of the service of `first`, whose methods are `methods` (`first` is the first).
 pub(crate) fn service_help(first: &Command, methods: &[&Command]) -> String {
+    let service = first.service_command;
     let mut text = format!(
         "{PROGRAM} {}: the service `{}` of the package `{}`. {}\n\n\
          Usage: {PROGRAM} [global flags] {} <method> [flags]\n\nMethods:\n",
@@ -116,6 +147,9 @@ pub(crate) fn service_help(first: &Command, methods: &[&Command]) -> String {
     );
     for m in methods {
         let _ = writeln!(text, "  {}\n      {}", m.method_command, line(m.doc));
+    }
+    for m in hand::of(service) {
+        let _ = writeln!(text, "  {}\n      {}", m.method, line(m.doc));
     }
     text.pop();
     text
@@ -172,7 +206,7 @@ hk ssh-known-host <pins-file> %H %t %K %f
     Run by ssh itself, as the KnownHostsCommand of hk ssh: says whether a host key is pinned.
 
 These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required, and are built into hk. The token is read from the file; --token-stdin,
+last required (or given by the settings file), and are built into hk. The token is read from the file; --token-stdin,
 --github-oidc-audience and --response-file are not taken.";
 
 /// The help of `hk tailnet-wait`.
@@ -195,28 +229,150 @@ hk tailnet-wait [--attempts N] [--interval-secs S]
 the global flags --endpoint and --ca-file, both required, and --timeout-secs. It takes no token:
 --token-file, --token-stdin, --github-oidc-audience and --response-file are not taken.";
 
-/// The help of `hk xcode-push`.
-pub(crate) const XCODE_PUSH_HELP: &str = "\
-hk xcode-push <version> | <archive.xip>
+/// The help of `hk settings`.
+pub(crate) const SETTINGS_HELP: &str = "\
+hk settings init --endpoint URL --ca-file PATH --token-file PATH
+    Writes $HOME/.hostkeeper/hk.toml, the defaults of --endpoint, --ca-file and --token-file for
+    every command that takes them. In order:
+    1. The three flags are all required; the two paths must be absolute, since the file keeps
+       them. $HOME/.hostkeeper and $HOME/.hostkeeper/xcode are made with mode 0700 when they
+       are missing, whatever the umask; one that exists is checked (not a link, the user's own,
+       not writable by group or others) and keeps its mode.
+    2. A file that is there already is not replaced: hk says so and exits 2.
+    3. One Xcode.List call is made with the three values, checked as any call checks them (the
+       endpoint, the CA file, a token file only its owner may read). Nothing is written when it
+       fails: its refusal or error is said with the path that was not written.
+    4. $HOME/.hostkeeper/hk.toml is made with mode 0600, and one line on stdout names it.
+
+The file is read by every command that needs a flag it gives; see `hk --help`. It takes the
+global flags --endpoint, --ca-file, --token-file and --timeout-secs. --token-stdin,
+--github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk xcode add`.
+pub(crate) const XCODE_ADD_HELP: &str = "\
+hk xcode add [<version> | <archive.xip>]
     Brings an Xcode release into the coordinator's Xcode store, from the operator's own Mac
-    signed in to the Apple developer account; macOS only. In order, and nothing is uploaded when
-    a step fails:
-    1. Given a version (27.2): xcodes download <version> --directory
-       $HOME/Downloads/hk-xcode-push/<version>, in the operator's own session, with this
-       terminal (a two-factor prompt is answered here); the directory must then hold one .xip.
-       Given a path: that file.
-    2. pkgutil --check-signature <archive> must exit 0, with the status signed Apple Software
+    signed in to the Apple developer account; macOS only. One run at a time per Mac: the lock
+    $HOME/.hostkeeper/xcode/.lock is held to the end, and a second run exits 1 naming the first's
+    process id. In order, and nothing is uploaded when a step fails:
+    1. The archive. A path: that file. A version (27.2): the newest file named for it in
+       $HOME/Downloads or $HOME/Downloads/hk-xcode-push/<version>, else xcodes download
+       <version> --directory $HOME/Downloads/hk-xcode-push/<version> in this terminal's session
+       (a missing xcodes is said with the two ways out: install it, or download the archive in
+       a browser and run hk xcode add again). Nothing: the file directly in $HOME/Downloads
+       named for the highest version, then the newest; with none, the release waiting in the
+       store (as if its version were given), or, when none waits, `the store holds the newest
+       release; nothing to add` and exit 0. Only a name of Xcode, _ or -, a version and .xip
+       is picked up on its own (Xcode_27.2.xip); trailing .0 parts do not count.
+    2. The kind, from the first four bytes: xar! goes on; AA01 and AEA1 stop with
+       archive_kind_unsupported (exit 1); anything else is not_an_xip (exit 2).
+    3. The SHA-256 and size, read once in 8 MiB blocks (progress on a terminal).
+    4. Xcode.List: an archive of these bytes held prints `already in the store: Xcode 27.2
+       (27B52)` and the Macs of step 9, and exits 0, running nothing else; when a version was
+       given and the held archive is another, version_mismatch (exit 1). With nothing given, a
+       newer release waiting is named with the line that adds it.
+    5. pkgutil --check-signature <archive> must exit 0, with the status signed Apple Software
        and a chain ending at Apple Root CA (by its SHA-256 fingerprint).
-    3. The archive's SHA-256 and size; then its version (CFBundleShortVersionString) and
-       build (ProductBuildVersion), read with plutil from the app that xip --expand makes in
-       .hk-xcode-push-expansion beside the archive, which is removed before and afterwards.
-       Given a version, the archive's must be it.
-    4. PUT /v1/xcode/<sha256>?version=<version>&build=<build>: the archive unmodified and
-       streamed. The answer, the archive stored, is printed; a refusal prints
-       refused: <code> and exits 3 (401, 403), 2 (other 4xx) or 1. The answer is waited for
-       30 minutes at least once the archive is sent.
+    6. The version and build. $HOME/.hostkeeper/xcode/<sha256>.json is used, and the expansion
+       skipped, when it is the user's own with mode 0600, names this SHA-256 and size, has the
+       verdict pass and holds a version and a build; any other record is ignored and replaced.
+       Otherwise the archive's volume must have three times its size free (free_space_short),
+       then xip --expand makes the app in .hk-xcode-push-expansion beside the archive (removed
+       before and afterwards), plutil reads CFBundleShortVersionString and ProductBuildVersion,
+       codesign --verify --deep --strict must pass, and the record hk-xcode-add-v1 is written
+       (a passing record of hk xcode verify is never replaced). Given a version, the
+       archive's must be it (version_mismatch).
+    7. Xcode.List again: the same release from other bytes, or another build of the version, is
+       a stop naming the hk xcode remove line.
+    8. The upload. GET /v1/xcode/<sha256>/upload asks what the store holds of these bytes (none,
+       a part, or all of them: stored already). The rest of the archive goes in one PUT
+       /v1/xcode/<sha256>?version=<version>&build=<build> with Content-Range: bytes
+       <first>-<last>/<size> and Expect: 100-continue, unmodified and streamed, with progress
+       on stderr (one line rewritten in place on a terminal, otherwise one line per tenth; a
+       run that continues says where). A connection that breaks, offset_mismatch (it names the
+       offset to go on from) and partial_locked (another upload of these bytes holds the
+       store's lock) are tried again after a wait, from the offset the store reports: five
+       tries in all, the waits 2, 4, 8 and 16 seconds. Then the run stops with `the upload
+       stopped at 7.31 of 11.92 GB; run hk xcode add again to continue` (exit 1), and the next
+       run, from this Mac or another with the same archive, continues from what the store
+       kept (24 hours). A coordinator that answers the query 405 cannot resume: the whole
+       archive goes in one PUT, which says so. 404: the coordinator has no Xcode store (exit
+       1). stored: Xcode 27.2 (27B52), sha256 ..., N bytes goes on stdout. Any other refusal
+       is said in words, then refused: <code>, and exits 3 (401, 403), 2 (other 4xx,
+       partial_differs among them) or 1. The answer is waited for 30 minutes at least once the
+       archive is sent.
+    9. The Macs. After stored: and after already in the store: the Macs of platform darwin-arm64
+       are read (Hosts.List, HostGroups.List, Maintenance.List and Maintenance.Get of each open
+       run) and stdout says which are due the release, by group with the group's xcode_keep and
+       batch, by the coordinator's own rule: the group keeps it (it is among the newest
+       xcode_keep releases the store holds) and the Mac lacks it in Xcode-<version>.app with its
+       build, or has it and xcode-select names another while it is the group's default
+       (installed, not selected: due to be selected). A Mac that lacks a newer release too is
+       due: 27.3, then 27.2 in the same turn. A Mac of a group that keeps no Xcode or only newer
+       releases is left out with the reason; one that has it as the group wants is installed.
+       A Mac in an open run that takes xcode and has not started its turn is in run <id>, window
+       <start> to <end> (UTC) or in run <id>, now; in a run that does not take xcode, schedule
+       after it ends. For each group with a due Mac that no run takes, Maintenance.Schedule is
+       asked with the kind xcode, the reason Xcode <version> and no confirm (it stores nothing):
+       the hosts a run would take with the batch, those it would skip with the coordinator's
+       reason, a refusal with its reason (for last_host, with --take-last-host true), and the
+       line hk maintenance schedule --host-group <group> --kinds xcode --reason \"Xcode
+       <version>\" --confirm true that stores the run. Nothing is stored by hk xcode add. A
+       call that fails leaves the archive stored: stderr says summary unavailable: <why>; the
+       archive is stored and the commands hk hosts list and hk maintenance list, and the exit
+       is 0. With no Mac known stdout has nothing more and stderr says so.
+
+Exit codes: 0 stored, already held, or nothing to add; 1 a check failed, a program could not run,
+another run holds the lock, the upload stopped, the coordinator has no store; 2 usage, not_an_xip
+or a refusal of the store; 3 unauthorized or forbidden.
 
 It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required. The token is read from its file into memory and sent only as the request's
-bearer: never in an argument, the environment of a program it runs, or an output line.
---token-stdin, --github-oidc-audience and --response-file are not taken.";
+last required (or given by the settings file). The token is read from its file into memory and
+sent only as the request's bearer: never in an argument, the environment of a program it runs, or
+an output line. --token-stdin, --github-oidc-audience and --response-file are not taken.";
+
+/// The help of `hk xcode-push`, the second name of `hk xcode add` for one release.
+pub(crate) const XCODE_PUSH_HELP: &str = "\
+hk xcode-push <version> | <archive.xip>
+    A second name of hk xcode add, kept for one release, that takes exactly one version or path.
+    It writes `hk xcode-push is now hk xcode add` on stderr, then does what hk xcode add does
+    with the same argument; hk xcode add --help says each step.";
+
+/// The help of `hk xcode verify`.
+pub(crate) const XCODE_VERIFY_HELP: &str = "\
+hk xcode verify [--apple-root FILE] <archive.xip>
+    Checks an Xcode archive on the operator's own Mac, as the operator's user; macOS only. It
+    reads the archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside
+    it (removed afterwards) and its record; it asks no coordinator. In order, ending at the first
+    check that fails (the parts after it are null in the record):
+    1. The programs: sw_vers and uname -sm; each program's path must be a file (pkgutil, xip,
+       plutil, codesign, spctl, xar, sw_vers, uname, cp, df); xcodes version; the first lines
+       of xip --help; which of archiveutil, aa and aea exist.
+    2. The archive's kind, from its first four bytes: xar! (a .xip) goes on; AA01 (Apple
+       Archive) and AEA1 (Apple Encrypted Archive) fail.
+    3. pkgutil --check-signature must exit 0, say signed Apple Software and name a chain ending
+       at Apple Root CA by its SHA-256 fingerprint. Apple's published root certificate, from
+       --apple-root or fetched over HTTPS from https://www.apple.com/appleca/ and trusted by the
+       system's roots, must have the SHA-256 fingerprint the program holds; its fingerprint and
+       subject are recorded.
+    4. A copy-on-write clone of the archive (cp -c) with the byte at its middle changed, and a
+       16-byte file that is no archive: pkgutil --check-signature and xip --expand are run on
+       each and recorded; xip --expand must exit non-zero on both (pkgutil's answer is only
+       recorded). A volume that cannot clone records `not run, the volume cannot clone` for the
+       clone and does not fail. A package of the Command Line Tools is checked by pkgutil too,
+       when there is one, for the record.
+    5. For the record only: xip --list, xar -tf, xar --dump-toc and the Metadata member.
+    6. The expansion: xip --expand in the scratch directory, with the seconds it took (recorded,
+       never judged); exactly one .app; its version (CFBundleShortVersionString) and build
+       (ProductBuildVersion) read with plutil; codesign --verify --deep --strict must exit 0;
+       spctl --assess is recorded.
+    Before each expansion the volume of the archive must have three times the archive's size
+    free (df -Pk), else the check fails with free_space_short.
+
+The verdict is pass, or fail: <the first check that failed>. The record, JSON with the key
+\"record\": \"hk-xcode-verify-v1\", is written to $HOME/.hostkeeper/xcode/<sha256>.json (mode 0600)
+whatever the verdict, replacing the file that is there, and printed on stdout. The exit is 0 on
+pass and 1 otherwise.
+
+--apple-root FILE is Apple's root certificate (DER or PEM). The global flag --timeout-secs limits
+the fetch of that certificate; the other global flags are not used.";

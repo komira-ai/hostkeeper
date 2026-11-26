@@ -18,7 +18,7 @@ use super::targets::grpc;
 use crate::http::{Peer, Surface};
 use crate::testutil::{OPERATOR, Rig, ci_token};
 use crate::xcode_feed::{XcodeId, XcodeVersion};
-use crate::xcode_store::{Archive, Digesting, XcodeStore};
+use crate::xcode_store::{Archive, Digesting, UploadRecord, XcodeStore};
 
 const LIST: &str = "/hostkeeper.operator.v1.Xcode/List";
 const REMOVE: &str = "/hostkeeper.operator.v1.Xcode/Remove";
@@ -120,6 +120,7 @@ async fn list_over_grpc_answers_the_archives_newest_first_or_that_there_is_no_st
             waiting: None,
             keep: 0,
             max_bytes: 0,
+            uploads: Vec::new(),
         }
     );
 }
@@ -170,6 +171,83 @@ async fn remove_over_grpc_deletes_the_archive_and_audits_it_once() {
         (code, message.as_str()),
         (Code::NotFound, "unknown_archive")
     );
+    assert_eq!(audited(&world), before + 1);
+}
+
+/// Proves: over gRPC, `List` answers a partial upload in `uploads` (its SHA-256, version, build,
+/// the bytes received, the size and who started it), and `Remove` of its SHA-256 is
+/// `FAILED_PRECONDITION` `partial_locked` with the files and the audit untouched while a writer
+/// holds its lock, then removes it, with one `xcode_partial_remove` entry, once the lock is
+/// released.
+///
+/// Catches: an adapter that drops the uploads from the answer, tells a locked partial upload as
+/// another code or token than its proto comment names, or removes one under its writer.
+#[tokio::test]
+async fn a_partial_upload_is_listed_and_its_removal_is_refused_while_it_is_locked() {
+    let (world, store) = world("grpc-xcode-partial", true);
+    let store = store.expect("a store");
+    let sha256 = "cd".repeat(32);
+    store
+        .begin_upload(
+            &sha256,
+            &UploadRecord {
+                version: "27.2".to_owned(),
+                build: "27B52".to_owned(),
+                size: 100,
+                by: "alice".to_owned(),
+            },
+        )
+        .expect("begun");
+    store
+        .append_upload(&sha256)
+        .and_then(|mut file| {
+            file.write_all(b"0123456789")
+                .map_err(|why| crate::xcode_store::StoreError::Io {
+                    path: store.upload_file_of(&sha256),
+                    source: why,
+                })
+        })
+        .expect("ten bytes");
+    let before = audited(&world);
+
+    let (code, message, answer) =
+        grpc(&world, LIST, Some(OPERATOR), proto::ListXcodeRequest {}).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
+    let listed: proto::ListXcodeResponse = decode(&answer.expect("an answer"));
+    assert_eq!(listed.archives, vec![]);
+    assert_eq!(listed.uploads.len(), 1);
+    let upload = &listed.uploads[0];
+    assert_eq!(
+        (
+            upload.sha256.as_str(),
+            upload.version.as_str(),
+            upload.build.as_str(),
+            upload.received_bytes,
+            upload.size_bytes,
+            upload.started_by.as_str()
+        ),
+        (sha256.as_str(), "27.2", "27B52", 10, 100, "alice")
+    );
+
+    let writer = store.lock_upload(&sha256).expect("a writer's lock");
+    let (code, message, _) = grpc(&world, REMOVE, Some(OPERATOR), remove_of(&sha256, WHY)).await;
+    assert_eq!(
+        (code, message.as_str()),
+        (Code::FailedPrecondition, "partial_locked")
+    );
+    assert!(store.upload(&sha256).expect("read").is_some());
+    assert_eq!(audited(&world), before);
+
+    drop(writer);
+    let (code, message, answer) =
+        grpc(&world, REMOVE, Some(OPERATOR), remove_of(&sha256, WHY)).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
+    let removed: proto::RemoveXcodeResponse = decode(&answer.expect("an answer"));
+    assert_eq!(
+        removed.entry.expect("the entry").action,
+        "xcode_partial_remove"
+    );
+    assert_eq!(store.upload(&sha256).expect("read"), None);
     assert_eq!(audited(&world), before + 1);
 }
 

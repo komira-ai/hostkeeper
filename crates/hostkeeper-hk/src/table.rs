@@ -23,20 +23,23 @@ pub(crate) const GLOBALS: [Global; 9] = [
     Global {
         flag: "endpoint",
         value: "URL",
-        help: "The coordinator's private listener, as https://<host>[:<port>]. Needed for a call.",
+        help: "The coordinator's private listener, as https://<host>[:<port>]. Needed for a call, unless the \
+               settings file gives it.",
     },
     Global {
         flag: "ca-file",
         value: "PATH",
         help: "PEM certificates of the CA the coordinator's certificate must chain to; no other \
-               root is trusted for the coordinator. Needed for a call.",
+               root is trusted for the coordinator. Needed for a call, unless the settings file \
+               gives it.",
     },
     Global {
         flag: "token-file",
         value: "PATH",
         help: "Read the bearer token (an operator token) from this file, which only its owner may \
                read; one trailing newline is dropped. The token is never an argument, an \
-               environment variable or a line of output.",
+               environment variable or a line of output. The settings file's `token_file` is the default \
+               when no other credential is given.",
     },
     Global {
         flag: "token-stdin",

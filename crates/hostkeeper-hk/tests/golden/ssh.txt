@@ -13,5 +13,5 @@ hk ssh-known-host <pins-file> %H %t %K %f
     Run by ssh itself, as the KnownHostsCommand of hk ssh: says whether a host key is pinned.
 
 These take the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
-last required, and are built into hk. The token is read from the file; --token-stdin,
+last required (or given by the settings file), and are built into hk. The token is read from the file; --token-stdin,
 --github-oidc-audience and --response-file are not taken.

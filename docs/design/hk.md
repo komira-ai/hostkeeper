@@ -23,6 +23,8 @@ verifications.
   verified (the release's `SHA256SUMS`, then `gh attestation verify`, as
   [verify-a-release.md](../deploy/verify-a-release.md) says) and unpacked. It needs no bash, no `curl` and no `jq`
   installed to make a call.
+- `$HOME/.hostkeeper/hk.toml` may give the defaults of `--endpoint`, `--ca-file` and `--token-file`, and
+  `hk settings init` writes it (section 4a).
 - `hkctl` and `hkssh` are gone. Their commands are `hk` commands with the same flags; a script, a
   `ProxyCommand` line or a runbook that calls `hkctl` or `hkssh` must call `hk`. The tarball holds `hk` only.
 
@@ -85,6 +87,31 @@ the tunnel's keepalive is 30 seconds. The default audit reason of a certificate 
 `hk ssh-proxy`) in place of the former program's name. The design of the tunnel itself is
 [ssh-through-coordinator.md](ssh-through-coordinator.md) and is unchanged.
 
+## 4a. The settings file
+
+Built after the rest of this design, by [xcode-one-action.md](xcode-one-action.md) section 2.1 (X1). `hk` reads
+`$HOME/.hostkeeper/hk.toml`, a TOML table of three strings, `endpoint`, `ca_file` and `token_file`, each the default
+of the global flag of the same name. It is read by the verbs that use these flags (a gateway call, `ssh`,
+`ssh-proxy`, `ssh-revoke`, `ssh-status` and `xcode add`, with `xcode-push` its second name) when one of them is missing, and by no other verb:
+`--help`, `--version`, `ssh-known-host` and `tailnet-wait` (which takes no token) never read it.
+
+- A flag on the command line wins. A key neither gives leaves the flag required, with the usage error it had
+  before the file existed. `--token-stdin` and `--github-oidc-audience` leave the file's `token_file` unused, so
+  that a call by a runner is not given a second credential.
+- The file and `~/.hostkeeper` must be the user's own (the effective user id, which `main` reads with `geteuid`),
+  not links and not writable by group or others; one that is not is a usage error (exit 2) naming the path. The
+  token file keeps the check it had.
+- A key of another name is ignored with `hk: <path>: unknown key <name> ignored` on stderr, so an older `hk` reads
+  a file a later one wrote. A known key that is not a string, or a file that is not TOML, is a usage error.
+- `hk settings init --endpoint URL --ca-file PATH --token-file PATH` makes `~/.hostkeeper` and
+  `~/.hostkeeper/xcode` with mode 0700 when they are missing (whatever the umask; one that exists is checked and
+  keeps its mode), refuses to replace a file that is there, makes one `Xcode.List` call with the three values and
+  writes the file, mode 0600, only when that call is answered. A call that fails writes nothing. The two paths
+  must be absolute, since the file keeps them.
+- Every directory and file `hk` makes under `~/.hostkeeper` is made by `src/home.rs`: the later verbs that write
+  there (`xcode add`, `xcode verify`) use the same functions.
+- Configuration stays in flags and this file, never an environment variable.
+
 ## 5. Release assets
 
 Each release has, for `linux-x86_64`, `linux-arm64` (static, musl) and `macos-arm64`:
@@ -110,7 +137,8 @@ the attestation, unpacks the archive and runs `hk`. Its input `hostkeeper_versio
   published keep their `hkctl` and `hkssh` assets.
 - **A proxy in the environment** is not used, where `curl` would have used it. A coordinator reached only through
   a proxy is not reachable by `hk`.
-- **System roots** are not trusted for the coordinator, as before; a call needs `--ca-file`.
+- **System roots** are not trusted for the coordinator, as before; a call needs `--ca-file`, or the `ca_file` of
+  the settings file.
 - **The token file's mode** is judged as each program judged it: a gateway call refuses a file its group or
   others may read (as `hkctl` did), the ssh verbs a file with any group or other bit (as `hkssh` did).
 - **On macOS** the release checks the `hk` of the tarball by its code signature and its `--version`; the macOS
@@ -126,4 +154,5 @@ the attestation, unpacks the archive and runs `hk`. Its input `hostkeeper_versio
 Behaviour tests of `crates/hostkeeper-hk` run the program in process: the request bytes of every kind of flag,
 the answer and exit code of each gateway status, the refusal tokens, the token-file mode refusal, the OIDC
 token request, the version probe, the ssh verbs against a fake coordinator and fake programs,
+the settings file (what wins, what is refused, the modes it makes under two umasks, run as the built program)
 and `docs_cli_md_is_current`. They use loopback sockets on port 0 and scratch directories, and assert no timing.

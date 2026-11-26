@@ -5,7 +5,7 @@
 //! - Every `hk maintenance <verb>` the runbook names, on a fenced command line or in an inline
 //!   code span, is a method of the command table, and every method of the table's `maintenance`
 //!   service is called by a fenced command line: a renamed, added or misspelled verb fails here.
-//!   So are `hk xcode-push` and every method of the table's `xcode` service (`list`, `remove`).
+//!   So are `hk xcode add` and every method of the table's `xcode` service (`list`, `remove`).
 //! - The first column of each of its tables is exactly the names the code defines, each once: the
 //!   group's settings (`## The group's settings`) the fields of `MaintenancePolicy`, a run's states
 //!   and a host's steps the values of `MaintenanceState` and `MaintenanceHostStep`, the refusals
@@ -66,8 +66,8 @@ const RUNBOOK_ALERTS: [&str; 5] = [
     "xcode_version_taken",
 ];
 
-/// The calls the runbook must make that are not `hk maintenance`: the push and the store's.
-const XCODE_CALLS: [&str; 3] = ["xcode-push", "xcode list", "xcode remove"];
+/// The calls the runbook must make that are not `hk maintenance`: the add and the store's.
+const XCODE_CALLS: [&str; 3] = ["xcode add", "xcode list", "xcode remove"];
 
 /// The verbs of the command table's `maintenance` service, as `maintenance <verb>`.
 fn verbs() -> Vec<String> {
@@ -385,18 +385,18 @@ fn the_maintenance_runbook_check_refuses_each_defect() {
         edit("## Refusals\n", "## Refused\n"),
         ["no section `## Refusals`"]
     );
-    // An Xcode call no line makes: both pushes named by a verb hk does not have.
-    let push = "<token-file> xcode-push ";
-    assert_eq!(doc.matches(push).count(), 2);
-    let found = problems(&doc.replace(push, "<token-file> xcode-upload "));
+    // An Xcode call no line makes: both adds named by a method of `xcode` hk does not have.
+    let add = "\nhk xcode add ";
+    assert_eq!(doc.matches(add).count(), 2);
+    let found = problems(&doc.replace(add, "\nhk xcode upload "));
     assert_eq!(found.len(), 3, "{found:?}");
     for parse in &found[..2] {
         assert!(
-            parse.ends_with("no service xcode-upload; 'hk --help' lists them"),
+            parse.ends_with("the service xcode has no method upload; 'hk xcode --help' lists them"),
             "{found:?}"
         );
     }
-    assert_eq!(found[2], "no command line calls `hk xcode-push`");
+    assert_eq!(found[2], "no command line calls `hk xcode add`");
     // The store's removal left uncalled.
     let remove = "    xcode remove --sha256 <sha256>";
     let found = edit(remove, "    xcode list --sha256 <sha256>");
