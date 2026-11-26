@@ -313,6 +313,7 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
                 version: &version,
                 commit: &commit,
                 apt_url: &apt_url,
+                pause: &std::thread::sleep,
             },
         ),
         Verb::CheckRpm {

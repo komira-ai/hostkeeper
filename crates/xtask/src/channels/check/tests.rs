@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use super::*;
@@ -76,6 +77,9 @@ struct Machine<'a> {
     user: bool,
     /// A command line (joined) containing this text is refused.
     refuse: Option<&'static str>,
+    /// What each `apt-get update` says, in turn: the standard error of a failure, or `None` for
+    /// one that succeeds. Once they are used up, every update succeeds.
+    updates: RefCell<VecDeque<Option<&'static str>>>,
 }
 
 impl<'a> Machine<'a> {
@@ -94,6 +98,7 @@ impl<'a> Machine<'a> {
             running: false,
             user: true,
             refuse: None,
+            updates: RefCell::new(VecDeque::new()),
         }
     }
 
@@ -163,6 +168,14 @@ impl Host for Machine<'_> {
             });
         }
         match (name.as_str(), args.first().map(String::as_str)) {
+            ("apt-get", Some("update")) => match self.updates.borrow_mut().pop_front().flatten() {
+                Some(stderr) => Ok(Answer {
+                    ok: false,
+                    stdout: String::new(),
+                    stderr: stderr.to_owned(),
+                }),
+                None => answer(""),
+            },
             ("dpkg", _) => answer(&format!("{}\n", self.arch)),
             ("dpkg-query", _) => answer(self.dpkg_version),
             ("apt-get", Some("install")) if line.contains(&format!("{}=", self.package.name)) => {
@@ -200,8 +213,12 @@ fn apt<'a>(root: &'a Path, package: &'a Package) -> Apt<'a> {
         version: "1.2.3",
         commit: COMMIT,
         apt_url: URL,
+        pause: &no_pause,
     }
 }
+
+/// A pause no test waits out (the tests that hold the pauses record them).
+fn no_pause(_: Duration) {}
 
 fn program_names(machine: &Machine) -> Vec<String> {
     machine
@@ -656,4 +673,196 @@ fn the_install_check_matrix_is_every_package_on_each_of_its_architectures() {
         .collect();
     want.sort_unstable();
     assert_eq!(checked, want);
+}
+
+/// What `apt-get update` said on a hosted runner when security.ubuntu.com served an older
+/// `Packages.gz` than its `InRelease` names.
+const MIRROR_SYNC: &str = "E: Failed to fetch http://security.ubuntu.com/ubuntu/dists/noble-security/universe/binary-amd64/Packages.gz  File has unexpected size (1563110 != 1563114). Mirror sync in progress? [IP: 192.0.2.82 80]
+   Hashes of expected file:
+    - Filesize:1563114 [weak]
+    - SHA256:516e96ddd1615703858a543cf31e4a54212c7e7252c57285c14065709683c8ee
+   Release file created at: Thu, 26 Nov 2026 07:24:15 +0000
+E: Some index files failed to download. They have been ignored, or old ones used instead.
+";
+
+/// The same failure as apt words a hash mismatch, on two Ubuntu mirrors at once.
+const HASH_MISMATCH: &str = "E: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.gz  Hash Sum mismatch
+   Hashes of expected file:
+    - SHA256:516e96ddd1615703858a543cf31e4a54212c7e7252c57285c14065709683c8ee
+E: Failed to fetch http://security.ubuntu.com/ubuntu/dists/noble-security/main/binary-amd64/Packages.gz  File has unexpected size (10 != 14). Mirror sync in progress?
+W: Some warning apt gives that decides nothing
+E: Some index files failed to download. They have been ignored, or old ones used instead.
+";
+
+/// Runs the check of the daemon on a machine whose `apt-get update`s answer `updates` in turn:
+/// the machine's calls, the pauses waited out, and what the check returned.
+fn with_updates(
+    name: &str,
+    updates: &[Option<&'static str>],
+) -> (Vec<String>, Vec<Duration>, Result<Vec<String>, Error>) {
+    let dir = scratch(name);
+    let machine = Machine::new(&dir, daemon());
+    machine.updates.borrow_mut().extend(updates.iter().copied());
+    let pauses = RefCell::new(Vec::new());
+    let pause = |wait| pauses.borrow_mut().push(wait);
+    let checked = check_apt(
+        &machine,
+        &Apt {
+            pause: &pause,
+            ..apt(&dir, daemon())
+        },
+    );
+    (machine.calls(), pauses.into_inner(), checked)
+}
+
+fn updates_of(calls: &[String]) -> usize {
+    calls.iter().filter(|c| *c == "apt-get update").count()
+}
+
+#[test]
+fn an_ubuntu_mirror_out_of_sync_is_updated_again_after_each_pause_and_the_check_goes_on() {
+    let (calls, pauses, checked) =
+        with_updates("mirror-sync", &[Some(MIRROR_SYNC), Some(HASH_MISMATCH)]);
+    assert_eq!(pauses, [Duration::from_secs(30), Duration::from_secs(60)]);
+    assert_eq!(
+        calls[..5],
+        [
+            "dpkg --print-architecture",
+            "apt-get update",
+            "apt-get update",
+            "apt-get update",
+            "apt-get install -y --no-install-recommends ca-certificates curl",
+        ]
+    );
+    assert_eq!(updates_of(&calls), 4);
+    assert_eq!(
+        checked.expect("checked"),
+        [
+            "::notice title=check-apt::apt-get update found an Ubuntu mirror out of sync with its Release file; run again after 30s",
+            "::notice title=check-apt::apt-get update found an Ubuntu mirror out of sync with its Release file; run again after 60s",
+            "check-apt: hostkeeper 1.2.3 installed from the suite testing on amd64; it says \"hostkeeper 1.2.3+0123456789ab\"; its 6 files are there; the service is enabled and not running",
+        ]
+    );
+}
+
+#[test]
+fn the_update_after_the_repository_is_added_is_updated_again_too_and_its_pauses_start_over() {
+    let (calls, pauses, checked) = with_updates("second-update", &[None, Some(MIRROR_SYNC), None]);
+    assert_eq!(pauses, [Duration::from_secs(30)]);
+    assert_eq!(updates_of(&calls), 3);
+    let after_keyring = calls
+        .iter()
+        .position(|c| c.starts_with("curl "))
+        .expect("curl");
+    assert_eq!(
+        calls[after_keyring + 1..after_keyring + 4],
+        [
+            "apt-get update",
+            "apt-get update",
+            "apt-get install -y --no-install-recommends systemd",
+        ]
+    );
+    assert_eq!(checked.expect("checked").len(), 2);
+}
+
+#[test]
+fn a_mirror_out_of_sync_through_every_pause_fails_saying_how_many_times_it_ran() {
+    let (calls, pauses, checked) = with_updates("always-out-of-sync", &[Some(MIRROR_SYNC); 4]);
+    assert_eq!(pauses, UPDATE_PAUSES);
+    assert_eq!(updates_of(&calls), 4);
+    assert!(!calls.iter().any(|c| c.contains("install")));
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        format!(
+            "apt-get update failed (run 4 times): {}",
+            MIRROR_SYNC.trim_end()
+        )
+    );
+}
+
+#[test]
+fn a_failed_update_that_is_no_ubuntu_mirror_out_of_sync_fails_at_once_without_a_pause() {
+    for (case, stderr) in [
+        (
+            "the repository's own index out of sync is what the check is for",
+            "E: Failed to fetch https://packages.komira.ai/apt/dists/testing/main/binary-amd64/Packages.gz  Hash Sum mismatch\nE: Some index files failed to download. They have been ignored, or old ones used instead.",
+        ),
+        (
+            "the repository's index beside a mirror out of sync",
+            "E: Failed to fetch http://security.ubuntu.com/ubuntu/dists/noble-security/main/binary-amd64/Packages.gz  File has unexpected size (10 != 14). Mirror sync in progress?\nE: Failed to fetch https://packages.komira.ai/apt/dists/testing/main/binary-amd64/Packages.gz  File has unexpected size (10 != 14). Mirror sync in progress?",
+        ),
+        (
+            "a fetch that failed for another reason",
+            "E: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/noble/InRelease  Could not resolve 'archive.ubuntu.com'\nE: Some index files failed to download. They have been ignored, or old ones used instead.",
+        ),
+        (
+            "another error beside a mirror out of sync",
+            "E: Failed to fetch http://security.ubuntu.com/ubuntu/dists/noble-security/main/binary-amd64/Packages.gz  Hash Sum mismatch\nE: The repository 'https://packages.komira.ai/apt testing InRelease' is not signed.",
+        ),
+        (
+            "an error with no failed fetch",
+            "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 7 (apt-get)",
+        ),
+        (
+            "apt's closing line alone",
+            "E: Some index files failed to download. They have been ignored, or old ones used instead.",
+        ),
+        ("warnings alone", "W: Some warning apt gives"),
+        ("nothing said", ""),
+    ] {
+        let (calls, pauses, checked) = with_updates("final", &[Some(stderr)]);
+        assert!(pauses.is_empty(), "{case}");
+        assert_eq!(updates_of(&calls), 1, "{case}");
+        assert_eq!(
+            checked.unwrap_err().to_string(),
+            format!("apt-get update failed: {stderr}"),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn a_mirror_out_of_sync_then_another_failure_fails_with_the_last_answer() {
+    let (calls, pauses, checked) = with_updates(
+        "then-final",
+        &[Some(MIRROR_SYNC), Some("E: Could not get lock")],
+    );
+    assert_eq!(pauses, [Duration::from_secs(30)]);
+    assert_eq!(updates_of(&calls), 2);
+    assert_eq!(
+        checked.unwrap_err().to_string(),
+        "apt-get update failed (run 2 times): E: Could not get lock"
+    );
+}
+
+#[test]
+fn both_updates_out_of_sync_each_have_all_the_pauses() {
+    let (calls, pauses, checked) = with_updates(
+        "both-updates",
+        &[
+            Some(MIRROR_SYNC),
+            Some(MIRROR_SYNC),
+            None,
+            Some(MIRROR_SYNC),
+            Some(MIRROR_SYNC),
+            Some(MIRROR_SYNC),
+            None,
+        ],
+    );
+    assert_eq!(pauses, [30, 60, 30, 60, 120].map(Duration::from_secs));
+    assert_eq!(updates_of(&calls), 7);
+    assert_eq!(checked.expect("checked").len(), 6);
+}
+
+#[test]
+fn a_mirror_whose_url_only_starts_like_the_repository_is_another_mirror() {
+    let (calls, pauses, checked) = with_updates(
+        "prefix",
+        &[Some(
+            "E: Failed to fetch https://packages.komira.ai/apt-other/dists/testing/main/binary-amd64/Packages.gz  Hash Sum mismatch",
+        )],
+    );
+    assert_eq!(pauses, [Duration::from_secs(30)]);
+    assert_eq!(updates_of(&calls), 3);
+    checked.expect("checked");
 }
