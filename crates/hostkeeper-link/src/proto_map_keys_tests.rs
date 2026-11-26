@@ -28,6 +28,7 @@ fn beat(report: Option<KeysReport>) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 

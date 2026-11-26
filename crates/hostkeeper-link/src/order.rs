@@ -326,4 +326,24 @@ pub struct Reply {
     /// reply that carries it. It is not an [`Order`]: it runs no service's steps and has no
     /// verdict.
     pub maintain: Option<MaintainOrder>,
+    /// The `event_id`s of the host health records of the heartbeat that the coordinator wrote to
+    /// the host's hardware event log, over gRPC only; empty from a coordinator that wrote none or
+    /// does not advertise `host-health-v1`. The daemon that sends records drops these from the
+    /// ones it holds.
+    pub health_written: Vec<String>,
+}
+
+/// An answer as the log says it: the outcome, then the reason and the detail when it has them.
+pub(crate) fn answered(result: &OrderResult) -> String {
+    let mut text = result.outcome.as_str().to_owned();
+    if let Some(reason) = &result.reason {
+        text.push_str(": ");
+        text.push_str(reason.as_str());
+    }
+    if let Some(detail) = &result.detail {
+        text.push_str(" (");
+        text.push_str(detail);
+        text.push(')');
+    }
+    text
 }

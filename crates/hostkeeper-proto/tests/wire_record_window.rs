@@ -102,6 +102,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("platform", 15),
             ("host_group", 16),
             ("enrolled_host_id", 17),
+            ("installed_memory_bytes", 18),
+            ("memory_modules", 19),
         ],
     ),
     (

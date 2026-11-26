@@ -170,6 +170,9 @@ fn first_beat() -> Heartbeat {
             record_try: None,
             installer: Some("apt".to_owned()),
             drift: None,
+            health_reason: None,
+            health_body: None,
+            restarts: None,
         }],
         sent_unix: 0,
         renewal: Renewal::default(),
@@ -185,6 +188,7 @@ fn first_beat() -> Heartbeat {
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

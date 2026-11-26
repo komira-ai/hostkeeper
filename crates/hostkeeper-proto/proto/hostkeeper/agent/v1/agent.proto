@@ -98,6 +98,7 @@ syntax = "proto3";
 package hostkeeper.agent.v1;
 
 import "hostkeeper/options.proto";
+import "hostkeeper/agent/v1/host_health.proto";
 import "hostkeeper/agent/v1/maintenance.proto";
 import "hostkeeper/release/v1/release.proto";
 
@@ -165,9 +166,10 @@ message HeartbeatRequest {
   // host's login account's `authorized_keys` and reports `operator_keys`,
   // `prerequisites-v1`, which asks for `HeartbeatResponse.prerequisites`, makes sure of them on
   // the host and reports `prerequisites`, `ssh-v1`, which asks for `HeartbeatResponse.ssh`,
-  // sets up the host's sshd to trust the certificates it names and reports `ssh`, and
+  // sets up the host's sshd to trust the certificates it names and reports `ssh`,
   // `maintenance-v1`, which reports `maintenance` and takes `Maintain`, announced, like `ssh-v1`,
-  // only once advertised):
+  // only once advertised, and `host-health-v1`, which reports `health` and asks for
+  // `HeartbeatResponse.health_written`, announced, like `ssh-v1`, only once advertised):
   // at most 32, each 1 to 32 bytes of `[a-z0-9-]`, none twice; at most 16 to a coordinator that
   // does not advertise `ssh-v1` (a coordinator of a release before it drops a longer list
   // whole), so an agent announces `ssh-v1` only once the coordinator advertised it. An agent
@@ -265,6 +267,13 @@ message HeartbeatRequest {
   // memory, and shows it with the host; a report that breaks a rule of `SerialConsoleReport` is
   // dropped and the one kept stays, and a heartbeat without one leaves the one kept as it is.
   optional SerialConsoleReport serial_console = 20;
+  // The host's hardware health (host_health.proto): the hardware event records the coordinator
+  // has not yet written to the host's hardware event log, the host's capacity, its boot and the
+  // state of each source the daemon reads. Sent by a daemon that announces `host-health-v1`, only
+  // once the coordinator advertised it, over gRPC only; absent from any other daemon and from one
+  // that predates it. A `HostHealth` that breaks a bound is dropped whole, and its records are sent
+  // again in a later heartbeat. Counted toward the heartbeat's 16 KiB with the rest.
+  optional HostHealth health = 21;
 }
 
 // The LAN settings of a host's BMC, as the daemon read them from the BMC (Get LAN Configuration
@@ -572,6 +581,19 @@ message ServiceBeat {
   // refuses every order of the service (`halted`) until a halt generation above `generation`
   // comes. Read only over gRPC; a coordinator that predates it skips it.
   LocalHalt local_halt = 15;
+  // Why the health is what it is: the observer's reason token (`unit_failed`,
+  // `health_url_refused`, ...), 1 to 64 bytes of `[a-z0-9_]`; absent when it gives none, and from
+  // an agent that predates it. Read only over gRPC; a coordinator that predates it skips it.
+  optional string health_reason = 16;
+  // The first 160 bytes of the reply of the service's health URL when it was not 2xx (a job agent's
+  // `503 not placeable: <reason>`); absent when the URL answered 2xx, did not answer, or the
+  // service has none. Read only over gRPC; the first of a service's facts a heartbeat over its
+  // 16 KiB leaves out, with `restarts`.
+  optional string health_body = 17;
+  // How the service's units have restarted (host_health.proto); absent where the service manager
+  // gives no count, and from an agent that predates it. Read only over gRPC; left out with
+  // `health_body`.
+  optional ServiceRestarts restarts = 18;
 }
 
 // A halt the host holds of a service, as `ServiceBeat.local_halt` reports it.
@@ -767,6 +789,11 @@ message HeartbeatResponse {
   // answer until a heartbeat reports its generation (`SshReport.applied_generation`). Absent:
   // keep what it has, and for an agent that never received one, set up nothing.
   optional SshAccess ssh = 9;
+  // The `event_id`s of the records of this heartbeat's `health` that the coordinator has
+  // written to the host's hardware event log before this reply, at most 6: the daemon drops them
+  // from the records it holds and sends the others again. Only for an agent that announced
+  // `host-health-v1`; empty otherwise.
+  repeated string health_written = 10;
 }
 
 // The host prerequisites of a host group, as the coordinator's host prerequisites file holds

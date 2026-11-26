@@ -73,6 +73,9 @@ fn record() -> op::InventoryRecord {
         used_by_request_id: "ab".repeat(32),
         used_unix: 1_800_000_060,
         host_group: String::new(),
+        // Host health's (additions_host_health.rs).
+        installed_memory_bytes: 0,
+        memory_modules: 0,
     }
 }
 
@@ -93,6 +96,12 @@ fn alert() -> op::Alert {
         detail: "there is no configuration file".to_owned(),
         tries: 2,
         since_unix: 1_799_999_000,
+        // Host health's (additions_host_health.rs).
+        last_seen_unix: 0,
+        acknowledged: false,
+        likely_cause: String::new(),
+        events: Vec::new(),
+        finding: String::new(),
     }
 }
 

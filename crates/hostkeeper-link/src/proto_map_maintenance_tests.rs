@@ -28,6 +28,7 @@ fn beat(maintenance: Option<pb::MaintenanceReport>) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance,
+        health: None,
     }
 }
 

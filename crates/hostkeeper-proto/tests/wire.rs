@@ -6,7 +6,7 @@
 //! with the newest fields taken out, read with `prost-reflect`.
 //!
 //! Also the names on the wire, pinned (the feature strings in `features.rs`): the order's verbs and their numbers,
-//! every refusal token, the RPCs of the coordinator's services, the fields of the enrollment,
+//! every refusal token (the alert kinds' log tokens in `wire_alert_kinds.rs`), the RPCs of the coordinator's services, the fields of the enrollment,
 //! abort, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 
 use prost::Message as _;
@@ -437,6 +437,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("maintenance", 18),
             ("full_disk_access", 19),
             ("serial_console", 20),
+            ("health", 21),
         ],
     ),
     ("hostkeeper.agent.v1.BmcReport", &[("ip", 1), ("mac", 2)]),
@@ -452,6 +453,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 40] = [
             ("operator_keys", 7),
             ("prerequisites", 8),
             ("ssh", 9),
+            ("health_written", 10),
         ],
     ),
     (
@@ -738,7 +740,7 @@ fn wire_names_are_pinned() {
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 17] = [
+    let cases: [(&str, &str, &[&str]); 16] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -758,36 +760,6 @@ fn wire_names_are_pinned() {
             "hostkeeper.operator.v1.AlertsRefusal",
             "ALERTS_REFUSAL_",
             &["unauthorized", "forbidden", "store_failed"],
-        ),
-        (
-            "hostkeeper.operator.v1.AlertKind",
-            "ALERT_KIND_",
-            &[
-                "halt",
-                "waiting_for_operator",
-                "duplicate",
-                "duplicate_claim_pending",
-                "failed_canary",
-                "held_on_bad_version",
-                "abandoned_while_updating",
-                "silent_host",
-                "cert_near_expiry",
-                "store_unreachable",
-                "trusted_root",
-                "push_cert_near_expiry",
-                "mdm_tls_renewal_failed",
-                "mdm_dns_credential_rejected",
-                "mdm_identity_near_expiry",
-                "prerequisite_failed",
-                "xcode_release_waiting",
-                "xcode_version_taken",
-                "updates_due",
-                "failed_update",
-                "host_halt",
-                "maintenance_halted",
-                "maintenance_not_back",
-                "repeated_deferral",
-            ],
         ),
         (
             "hostkeeper.operator.v1.AlertSeverity",

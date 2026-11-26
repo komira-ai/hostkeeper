@@ -350,6 +350,7 @@ impl CoordinatorLink for InProcess {
             ssh: None,
             prerequisites: None,
             maintain: None,
+            health_written: Vec::new(),
         })
     }
 }
