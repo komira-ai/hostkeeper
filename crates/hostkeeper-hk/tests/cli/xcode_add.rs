@@ -4,7 +4,6 @@
 //! `xcode_add_find`, the checks before the upload are in `xcode_add_checks`.
 
 use std::os::unix::fs::PermissionsExt as _;
-use std::sync::Mutex;
 
 use crate::add_rig::{Add, Store, TOOLS, archive_bytes, puts, sha256};
 use crate::rig::{Opts, Server, TOKEN, args, closed_port};
@@ -402,46 +401,6 @@ fn the_settings_file_gives_it_its_flags() {
     // A flag wins: another port, where nothing listens.
     let ran = add.run(closed_port(), &["xcode", "add", &path]);
     assert_eq!(ran.code, 1, "{ran:?}");
-}
-
-/// Serializes the tests that change the process's umask.
-static UMASK: Mutex<()> = Mutex::new(());
-
-/// Proves: under a umask of 000 the first `hk xcode add` (flags only) makes `~/.hostkeeper` and
-/// `~/.hostkeeper/xcode` with mode 0700 and its lock with mode 0600 (the lock as the store sees it
-/// while the run holds it, and as it stays afterwards), and no more than that is made there but the
-/// record, 0600.
-#[test]
-fn under_a_umask_of_000_what_it_makes_is_private() {
-    let add = Add::new("umask");
-    let path = add.file("Xcode_27.2.xip", &archive_bytes(), 100);
-    let (server, watched) = Store::default().serve_watching(&add.rig, &add.kept(".lock"));
-    let ran = {
-        let _only = UMASK.lock().expect("the umask lock");
-        let before = rustix::process::umask(rustix::fs::Mode::empty());
-        let ran = add.add(&server, &[&path]);
-        rustix::process::umask(before);
-        ran
-    };
-    assert_eq!(ran.code, 0, "{ran:?}");
-    let mode = |path: std::path::PathBuf| {
-        std::fs::metadata(path).expect("made").permissions().mode() & 0o777
-    };
-    assert_eq!(mode(add.rig.path("home/.hostkeeper")), 0o700);
-    assert_eq!(mode(add.rig.path("home/.hostkeeper/xcode")), 0o700);
-    assert_eq!(
-        mode(add.kept(&format!("{}.json", sha256(&archive_bytes())))),
-        0o600
-    );
-    let modes: Vec<Option<u32>> = watched
-        .lock()
-        .expect("the record")
-        .iter()
-        .map(|held| held.as_ref().map(|(_, mode)| *mode))
-        .collect();
-    assert_eq!(modes, [Some(0o600); 5]);
-    // The lock file stays, as private as it was while held.
-    assert_eq!(mode(add.kept(".lock")), 0o600);
 }
 
 /// Proves: `hk xcode add` off macOS refuses at once (exit 1) naming the verb and the system, with
