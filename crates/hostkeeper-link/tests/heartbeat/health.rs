@@ -315,7 +315,7 @@ fn a_health_group_the_heartbeat_does_not_hold_is_passed_over() {
 
 /// Catches a group whose test of what the heartbeat holds reads only one of its parts, and a group
 /// that clears only some services: each part alone (memory devices without sources, sources
-/// without memory devices, a health body without restarts, restarts without a health body) makes
+/// without memory devices or with no baseline at all, a health body without restarts, restarts without a health body) makes
 /// its group dropped and listed, and the services' group clears every service's body and restarts.
 #[test]
 fn each_part_of_a_health_group_alone_makes_it_dropped() {
@@ -326,7 +326,9 @@ fn each_part_of_a_health_group_alone_makes_it_dropped() {
     };
     let groups = |fitted: &Fitted| fitted.dropped[..fitted.dropped.len() - 1].to_vec();
 
-    for health in [health(1, 2, 0), health(1, 0, 2)] {
+    let mut no_baseline = health(1, 0, 2);
+    no_baseline.baseline = None;
+    for health in [health(1, 2, 0), health(1, 0, 2), no_baseline] {
         let fitted = over(vec![required("js-agent", 0)], health.clone());
         assert_eq!(groups(&fitted), [OptionalFact::HostHealthDetail]);
         assert_eq!(fitted.beat.health, Some(without_detail(health)));

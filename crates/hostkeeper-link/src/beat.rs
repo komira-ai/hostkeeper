@@ -428,16 +428,15 @@ impl ServiceFacts {
         if let (Some(halt), Some(map)) = (&self.local_halt, facts.as_object_mut()) {
             map.insert("local_halt".to_owned(), halt.to_json());
         }
-        if let Some(map) = facts.as_object_mut() {
-            if let Some(reason) = &self.health_reason {
-                map.insert("health_reason".to_owned(), reason.clone().into());
-            }
-            if let Some(body) = &self.health_body {
-                map.insert("health_body".to_owned(), body.clone().into());
-            }
-            if let Some(restarts) = &self.restarts {
-                map.insert("restarts".to_owned(), restarts_json(restarts));
-            }
+        // `facts` is an object: indexing it by a new key inserts the key.
+        if let Some(reason) = &self.health_reason {
+            facts["health_reason"] = reason.clone().into();
+        }
+        if let Some(body) = &self.health_body {
+            facts["health_body"] = body.clone().into();
+        }
+        if let Some(restarts) = &self.restarts {
+            facts["restarts"] = restarts_json(restarts);
         }
         facts
     }
@@ -682,19 +681,17 @@ impl Heartbeat {
         let services = self.services.iter_mut();
         match fact {
             OptionalFact::RemoteLoginProbe => self.remote_login_probe = None,
-            OptionalFact::HostHealthDetail => {
-                if let Some(health) = &mut self.health {
-                    health.sources.clear();
-                    if let Some(baseline) = &mut health.baseline {
-                        baseline.memory_devices.clear();
-                    }
-                }
-            }
-            OptionalFact::HealthRecords => {
-                if let Some(health) = &mut self.health {
-                    health.events.pop();
-                }
-            }
+            // Each is dropped only from a heartbeat that holds it ([`Heartbeat::holds`], `fit`).
+            OptionalFact::HostHealthDetail => self.health.iter_mut().for_each(|health| {
+                health.sources.clear();
+                health
+                    .baseline
+                    .iter_mut()
+                    .for_each(|baseline| baseline.memory_devices.clear());
+            }),
+            OptionalFact::HealthRecords => self.health.iter_mut().for_each(|health| {
+                health.events.pop();
+            }),
             OptionalFact::ServiceHealthBody => services.for_each(|service| {
                 service.health_body = None;
                 service.restarts = None;
