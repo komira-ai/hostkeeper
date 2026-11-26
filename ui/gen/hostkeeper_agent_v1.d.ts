@@ -3,6 +3,17 @@
 // the descriptors make, and writes the current text beside its test binary.
 export namespace hostkeeper_agent_v1 {
   export interface AgentInfo { name?: string; version?: string; }
+  export interface Baseline {
+    memTotalKib?: string;
+    memoryDevices?: hostkeeper_agent_v1.MemoryDevice[];
+    cpusPresent?: number;
+    cpusOnline?: number;
+    smt?: string;
+    disks?: hostkeeper_agent_v1.BaselineDisk[];
+    nics?: hostkeeper_agent_v1.BaselineNic[];
+  }
+  export interface BaselineDisk { name?: string; sizeBytes?: string; serialDigest?: string; }
+  export interface BaselineNic { name?: string; speedMbps?: number; }
   export interface BmcReport { ip?: string; mac?: string; }
   export interface Claims { machineId?: string; dmiSerial?: string; productUuid?: string; addresses?: string[]; macSerial?: string; platformUuid?: string; bmcMac?: string; }
   export interface CommandLineToolsState { receipt?: boolean; files?: boolean; version?: string; }
@@ -14,6 +25,32 @@ export namespace hostkeeper_agent_v1 {
   export type FailurePhase = "FAILURE_PHASE_UNSPECIFIED" | "FAILURE_PHASE_BEFORE_COMMIT" | "FAILURE_PHASE_GATE_RELEASE" | "FAILURE_PHASE_GATE_ENVIRONMENT" | "FAILURE_PHASE_AFTER_COMMIT" | "FAILURE_PHASE_HALT";
   export type FileVaultState = "FILE_VAULT_STATE_UNSPECIFIED" | "FILE_VAULT_STATE_OFF" | "FILE_VAULT_STATE_ON" | "FILE_VAULT_STATE_ENCRYPTING" | "FILE_VAULT_STATE_DECRYPTING";
   export type FullDiskAccess = "FULL_DISK_ACCESS_UNSPECIFIED" | "FULL_DISK_ACCESS_GRANTED" | "FULL_DISK_ACCESS_NOT_GRANTED" | "FULL_DISK_ACCESS_NOT_APPLICABLE" | "FULL_DISK_ACCESS_UNDETERMINED";
+  export type HardwareComponent =
+    | "HARDWARE_COMPONENT_UNSPECIFIED"
+    | "HARDWARE_COMPONENT_MEMORY"
+    | "HARDWARE_COMPONENT_CPU"
+    | "HARDWARE_COMPONENT_PCIE"
+    | "HARDWARE_COMPONENT_DISK"
+    | "HARDWARE_COMPONENT_THERMAL"
+    | "HARDWARE_COMPONENT_POWER"
+    | "HARDWARE_COMPONENT_BOARD"
+    | "HARDWARE_COMPONENT_HOST";
+  export interface HardwareEvent {
+    eventId?: string;
+    timeUnix?: string;
+    ofPreviousBoot?: boolean;
+    component?: hostkeeper_agent_v1.HardwareComponent;
+    subject?: string;
+    severity?: hostkeeper_agent_v1.HardwareSeverity;
+    state?: hostkeeper_agent_v1.HardwareEventState;
+    source?: string;
+    code?: string;
+    message?: string;
+    raw?: string;
+    about?: string;
+  }
+  export type HardwareEventState = "HARDWARE_EVENT_STATE_UNSPECIFIED" | "HARDWARE_EVENT_STATE_EVENT" | "HARDWARE_EVENT_STATE_ASSERTED" | "HARDWARE_EVENT_STATE_DEASSERTED";
+  export type HardwareSeverity = "HARDWARE_SEVERITY_UNSPECIFIED" | "HARDWARE_SEVERITY_INFO" | "HARDWARE_SEVERITY_WARNING" | "HARDWARE_SEVERITY_CRITICAL";
   export type Health = "HEALTH_UNSPECIFIED" | "HEALTH_HEALTHY" | "HEALTH_UNHEALTHY" | "HEALTH_ABSENT" | "HEALTH_SILENT";
   export interface HeartbeatRequest {
     platform?: hostkeeper_agent_v1.Platform;
@@ -36,6 +73,15 @@ export namespace hostkeeper_agent_v1 {
     maintenance?: hostkeeper_agent_v1.MaintenanceReport;
     fullDiskAccess?: hostkeeper_agent_v1.FullDiskAccess;
     serialConsole?: hostkeeper_agent_v1.SerialConsoleReport;
+    health?: hostkeeper_agent_v1.HostHealth;
+  }
+  export interface HostHealth {
+    events?: hostkeeper_agent_v1.HardwareEvent[];
+    baseline?: hostkeeper_agent_v1.Baseline;
+    bootId?: string;
+    bootUnix?: string;
+    cleanPreviousShutdown?: boolean;
+    sources?: hostkeeper_agent_v1.SourceState[];
   }
   export interface InstalledXcode { version?: string; build?: string; path?: string; selected?: boolean; foreign?: boolean; }
   export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }
@@ -48,7 +94,14 @@ export namespace hostkeeper_agent_v1 {
     mdmConflicts?: string[];
   }
   export interface MaintenanceHost { osName?: string; osVersion?: string; osBuild?: string; hardwareSerial?: string; runningKernel?: string; newestKernel?: string; bootId?: string; bootUnix?: string; }
-  export type MaintenanceKind = "MAINTENANCE_KIND_UNSPECIFIED" | "MAINTENANCE_KIND_MACOS" | "MAINTENANCE_KIND_XCODE" | "MAINTENANCE_KIND_LINUX" | "MAINTENANCE_KIND_REBOOT" | "MAINTENANCE_KIND_PROBE";
+  export type MaintenanceKind =
+    | "MAINTENANCE_KIND_UNSPECIFIED"
+    | "MAINTENANCE_KIND_MACOS"
+    | "MAINTENANCE_KIND_XCODE"
+    | "MAINTENANCE_KIND_LINUX"
+    | "MAINTENANCE_KIND_REBOOT"
+    | "MAINTENANCE_KIND_PROBE"
+    | "MAINTENANCE_KIND_REPAIR";
   export interface MaintenanceProbe { runId?: string; probedUnix?: string; steps?: hostkeeper_agent_v1.MaintenanceProbeStep[]; }
   export interface MaintenanceProbeStep { name?: string; exitCode?: number; output?: string; cut?: boolean; }
   export interface MaintenanceReport {
@@ -77,6 +130,7 @@ export namespace hostkeeper_agent_v1 {
     | "MAINTENANCE_STEP_DONE"
     | "MAINTENANCE_STEP_DEFERRED"
     | "MAINTENANCE_STEP_HALTED";
+  export interface MemoryDevice { locator?: string; sizeBytes?: string; }
   export interface OperatorKeysRefusal { digest?: string; reason?: string; }
   export interface OperatorKeysReport { digest?: string; refused?: hostkeeper_agent_v1.OperatorKeysRefusal; failed?: string; }
   export type Outcome = "OUTCOME_UNSPECIFIED" | "OUTCOME_SUCCEEDED" | "OUTCOME_FAILED";
@@ -114,7 +168,13 @@ export namespace hostkeeper_agent_v1 {
     installer?: string;
     drift?: hostkeeper_agent_v1.DriftReport;
     localHalt?: hostkeeper_agent_v1.LocalHalt;
+    healthReason?: string;
+    healthBody?: string;
+    restarts?: hostkeeper_agent_v1.ServiceRestarts;
   }
+  export interface ServiceRestarts { count?: number; recent?: number; lastResult?: string; exitStatus?: number; }
+  export interface SourceState { source?: string; status?: hostkeeper_agent_v1.SourceStatus; reason?: string; }
+  export type SourceStatus = "SOURCE_STATUS_UNSPECIFIED" | "SOURCE_STATUS_OK" | "SOURCE_STATUS_UNSUPPORTED" | "SOURCE_STATUS_UNREADABLE";
   export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
   export interface StepRun { name?: string; attempt?: number; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";

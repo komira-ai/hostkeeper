@@ -23,6 +23,9 @@ fn facts(local_halt: Option<LocalHalt>) -> ServiceFacts {
         record_try: None,
         installer: None,
         drift: None,
+        health_reason: None,
+        health_body: None,
+        restarts: None,
     }
 }
 
@@ -54,6 +57,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 

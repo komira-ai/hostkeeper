@@ -173,6 +173,9 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
         record_try: None,
         installer: None,
         drift: None,
+        health_reason: None,
+        health_body: None,
+        restarts: None,
     }
 }
 
@@ -196,6 +199,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 
@@ -238,6 +242,7 @@ fn expected_reply() -> Reply {
         ssh: None,
         prerequisites: None,
         maintain: None,
+        health_written: Vec::new(),
     }
 }
 

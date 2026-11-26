@@ -232,6 +232,11 @@ enum MaintenanceKind {
   // reads (`Maintain.xcodes`): the archive is fetched into a directory of its own while the host
   // serves, checked drained, and that directory removed; nothing is installed.
   MAINTENANCE_KIND_PROBE = 5;
+  // A repair cordon (docs/design/host-health-alerts.md section 6): the coordinator's own, never an
+  // operator's: the host is drained and held, with no apply step, until an operator puts it back.
+  // Ordered only to a daemon that announced `host-health-v1`; never due, and refused
+  // `invalid_request` when an operator names it.
+  MAINTENANCE_KIND_REPAIR = 6;
 }
 
 // The state of the maintenance run a host holds, as its run record says.

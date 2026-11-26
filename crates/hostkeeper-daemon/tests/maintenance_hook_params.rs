@@ -168,8 +168,9 @@ fn a_field_this_release_does_not_know_is_passed_over() {
     assert_eq!(params.maintain().linux_scope, 2);
 }
 
-/// Proves: each kind's word, its wire value both ways (`probe` is 5), and that `UNSPECIFIED` and
-/// a value this release does not know are no kind.
+/// Proves: each kind's word, its wire value both ways (`probe` is 5), and that `UNSPECIFIED`,
+/// `repair` (6, the coordinator's repair cordon, which no daemon of this release takes) and a
+/// value this release does not know are no kind.
 ///
 /// Catches: a kind read as another, which would apply an update the order did not name.
 #[test]
@@ -189,7 +190,8 @@ fn each_kind_maps_to_its_wire_value_and_word() {
         assert_eq!(kind.name(), kind.to_string());
     }
     assert_eq!(Kind::from_wire(0), None);
-    assert_eq!(Kind::from_wire(6), None);
+    assert_eq!(Kind::from_wire(i32::from(WireKind::Repair)), None);
+    assert_eq!(Kind::from_wire(7), None);
 }
 
 /// Proves: a Mac holds `macos`, `xcode`, `reboot` and `probe`, a Linux host (systemd or OpenRC)

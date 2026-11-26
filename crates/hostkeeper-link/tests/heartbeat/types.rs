@@ -200,6 +200,9 @@ fn the_heartbeat_json_has_the_wire_names() {
             record_try: Some(3),
             installer: None,
             drift: None,
+            health_reason: None,
+            health_body: None,
+            restarts: None,
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
@@ -215,6 +218,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     };
     let mut expected = serde_json::json!({
         "platform": "darwin-arm64",

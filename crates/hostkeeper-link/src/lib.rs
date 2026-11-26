@@ -58,6 +58,7 @@ pub mod dial;
 pub mod fetch;
 pub mod full_disk_access;
 pub mod grpc;
+mod health;
 pub mod heartbeater;
 pub mod host_facts;
 pub mod host_ssh;
@@ -79,9 +80,10 @@ pub mod testing;
 mod wire_map;
 
 pub use beat::{
-    ANNOUNCED, FACTS, Feature, Features, Fitted, Health, Heartbeat, Liveness, LocalHalt,
-    MAINTENANCE, MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY,
-    Platform, REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts, TrustedRootFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Fitted, HOST_HEALTH, Health, Heartbeat, Liveness,
+    LocalHalt, MAINTENANCE, MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize,
+    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts,
+    TrustedRootFacts, fit,
 };
 pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};

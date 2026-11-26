@@ -107,6 +107,10 @@ yaml.org
 # tests), ending in `build` and `to`, which the IANA list delegates. Names, not hosts.
 =xcodes.build
 =due.to
+# Field paths host health's bound check names (hostkeeper-proto's `health` and its tests), ending
+# in `name`, which the IANA list delegates. Names, not hosts.
+=baseline.disks.name
+=baseline.nics.name
 # Protobuf type paths in hostkeeper-proto's operator.proto and tests, not hosts.
 =hostkeeper.agent.v1.health
 =hostkeeper.agent.v1.claims

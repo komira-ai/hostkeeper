@@ -28,6 +28,7 @@ fn beat(serial_console: Option<SerialConsoleReport>) -> Heartbeat {
         bmc: None,
         serial_console,
         maintenance: None,
+        health: None,
     }
 }
 

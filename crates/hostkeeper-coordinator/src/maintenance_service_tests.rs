@@ -485,7 +485,7 @@ fn a_hold_by_group_or_role_skips_and_a_run_of_skipped_hosts_has_nothing_due() {
 }
 
 /// Proves: each rule of the request is `invalid_request` and changes nothing and writes no
-/// audit entry: a kind unspecified, unknown or named twice; both or neither of the hosts and the
+/// audit entry: a kind unspecified, unknown, `repair` (the coordinator's own) or named twice; both or neither of the hosts and the
 /// group; 33 host ids, a host id twice, a host id that is not one; a group name that is not one;
 /// a window start without an end, an end equal to or before its start, an end or a drain
 /// deadline above the largest time a database keeps (2^63 - 1 seconds); a batch of 0 or 10001; a
@@ -503,6 +503,10 @@ fn each_rule_of_the_request_is_invalid_request() {
     let cases = [
         ("kind unspecified", changed(|r| r.kinds = vec![0])),
         ("kind unknown", changed(|r| r.kinds = vec![99])),
+        (
+            "kind repair, the coordinator's own",
+            changed(|r| r.kinds = vec![MaintenanceKind::Repair as i32]),
+        ),
         ("kind twice", changed(|r| r.kinds = vec![1, 3, 1])),
         ("neither target", changed(|r| r.host_group.clear())),
         (

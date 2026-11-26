@@ -31,6 +31,7 @@ fn beat(report: Option<PrerequisitesReport>) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 
