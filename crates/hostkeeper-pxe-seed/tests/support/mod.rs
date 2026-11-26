@@ -15,8 +15,10 @@ use hostkeeper_pxe_seed::inputs::{
     BootServer, DaemonConfigText, InstallDisk, IsoName, LinuxPlatform, Record, RepositoryFiles,
     SerialConsole,
 };
+use hostkeeper_pxe_seed::kernel::{KernelParameter, KernelParameters};
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::menu::{Install, MenuChoice, MenuRequest, Mode};
+use hostkeeper_pxe_seed::partitions::{ExtraPartition, ExtraPartitions};
 use hostkeeper_pxe_seed::seed::{Seed, SeedInputs, seed};
 
 /// A daemon config the daemon's parser accepts, with a comment, a `[bounds]` table and a
@@ -99,7 +101,7 @@ pub fn daemon_config() -> DaemonConfigText {
 }
 
 /// The seed of `record` with the defaults of the goldens: one key, the default disk, no serial
-/// console, the boot server on port 80.
+/// console, no extra partition, no kernel parameter, the boot server on port 80.
 pub struct Build {
     pub record: Record,
     pub platform: LinuxPlatform,
@@ -108,6 +110,8 @@ pub struct Build {
     pub disk: InstallDisk,
     pub console: Option<SerialConsole>,
     pub repositories: Option<RepositoryFiles>,
+    pub partitions: ExtraPartitions,
+    pub parameters: KernelParameters,
 }
 
 impl Build {
@@ -120,6 +124,8 @@ impl Build {
             disk: InstallDisk::default(),
             console: None,
             repositories: None,
+            partitions: ExtraPartitions::default(),
+            parameters: KernelParameters::default(),
         }
     }
 
@@ -134,9 +140,41 @@ impl Build {
             install_disk: &self.disk,
             serial_console: self.console.as_ref(),
             repositories: self.repositories.as_ref(),
+            extra_partitions: &self.partitions,
+            kernel_parameters: &self.parameters,
         })
     }
 }
+
+/// The extra partitions of `values`, each an `--extra-partition` value, in their order.
+pub fn partitions(values: &[&str]) -> ExtraPartitions {
+    ExtraPartitions::new(
+        values
+            .iter()
+            .map(|value| value.parse::<ExtraPartition>().expect(value))
+            .collect(),
+    )
+    .expect("partitions of distinct labels and mount points")
+}
+
+/// The kernel parameters of `words`, each a `--kernel-parameter` value, in their order.
+pub fn parameters(words: &[&str]) -> KernelParameters {
+    KernelParameters::new(
+        words
+            .iter()
+            .map(|word| word.parse::<KernelParameter>().expect(word))
+            .collect(),
+    )
+    .expect("parameters of distinct names")
+}
+
+/// The partitions of a combined node of tierstore's design (fetch-cache-serve.md, sections 11
+/// and 21.1): the node cache, 220 GiB, and the hot tier, 300 GiB, each its own xfs partition
+/// mounted `noatime`.
+pub const NODE_PARTITIONS: [&str; 2] = [
+    "tierstore-cache:220GiB:xfs:/var/lib/tierstore-cache:noatime",
+    "tierstore-hot:300GiB:xfs:/var/lib/ts-hot:noatime",
+];
 
 /// The install of `record` on `platform`, chosen as `pxe serve` chooses it: GRUB of
 /// `platform` asks for the menu of a MAC in the answer set, in proxy mode.

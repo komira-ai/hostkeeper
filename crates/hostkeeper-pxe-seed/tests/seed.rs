@@ -2,7 +2,8 @@
 //! without a role, with one SSH key and several, for each `--install-disk` form, with a serial
 //! console (`ttyS1` with GRUB's serial terminal, an Arm `ttyAMA` port without, and the getty
 //! held at 115200 baud on each), and on a port
-//! other than 80 (network-install.md section 11, "Seed generator"). Each
+//! other than 80 (network-install.md section 11, "Seed generator"); with extra partitions and
+//! kernel parameters in `seed/extras.rs`. Each
 //! user-data is also read back as YAML, and the whole list of its keys and values is asserted, so
 //! no field beyond the documented ones is in a seed.
 
@@ -629,3 +630,7 @@ fn repository_files_are_written_first_byte_for_byte() {
 /// The console runbook's move of an installed server to the serial baseline, against this seed.
 #[path = "seed/console_runbook.rs"]
 mod console_runbook;
+
+/// The seed of a node with extra partitions and kernel parameters.
+#[path = "seed/extras.rs"]
+mod extras;

@@ -1,0 +1,132 @@
+#cloud-config
+autoinstall:
+  version: 1
+  refresh-installer:
+    update: false
+  apt:
+    geoip: false
+    mirror-selection:
+      primary:
+        - uri: "http://192.0.2.10/no-mirror/"
+    fallback: offline-install
+  storage:
+    config:
+      - type: disk
+        id: disk-install
+        match:
+          serial: "S4EV*"
+          size: smallest
+        ptable: gpt
+        wipe: superblock-recursive
+        preserve: false
+      - type: partition
+        id: part-efi
+        device: disk-install
+        number: 1
+        size: 1073741824
+        flag: boot
+        grub_device: true
+        wipe: superblock
+        preserve: false
+      - type: format
+        id: format-efi
+        volume: part-efi
+        fstype: fat32
+        preserve: false
+      - type: partition
+        id: part-extra-1
+        device: disk-install
+        number: 2
+        size: 236223201280
+        partition_name: "tierstore-cache"
+        wipe: superblock
+        preserve: false
+      - type: format
+        id: format-extra-1
+        volume: part-extra-1
+        fstype: xfs
+        preserve: false
+      - type: partition
+        id: part-extra-2
+        device: disk-install
+        number: 3
+        size: 322122547200
+        partition_name: "tierstore-hot"
+        wipe: superblock
+        preserve: false
+      - type: format
+        id: format-extra-2
+        volume: part-extra-2
+        fstype: xfs
+        preserve: false
+      - type: partition
+        id: part-root
+        device: disk-install
+        number: 4
+        size: -1
+        wipe: superblock
+        preserve: false
+      - type: format
+        id: format-root
+        volume: part-root
+        fstype: ext4
+        preserve: false
+      - type: mount
+        id: mount-root
+        device: format-root
+        path: /
+      - type: mount
+        id: mount-efi
+        device: format-efi
+        path: /boot/efi
+      - type: mount
+        id: mount-extra-1
+        device: format-extra-1
+        path: /var/lib/tierstore-cache
+        options: "noatime"
+      - type: mount
+        id: mount-extra-2
+        device: format-extra-2
+        path: /var/lib/ts-hot
+        options: "noatime"
+  ssh:
+    install-server: true
+    allow-pw: false
+  late-commands:
+    - "curl --fail --silent --show-error --output /target/var/tmp/hostkeeper.deb http://192.0.2.10/deb/hostkeeper_amd64.deb"
+    - "curtin in-target -- dpkg -i /var/tmp/hostkeeper.deb"
+  user-data:
+    hostname: "node-a"
+    users:
+      - name: operator
+        lock_passwd: true
+        shell: /bin/bash
+        sudo: "ALL=(ALL) NOPASSWD:ALL"
+        ssh_authorized_keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB operator-laptop"
+    write_files:
+      - path: /etc/hostkeeper/hostkeeper.toml
+        owner: "root:root"
+        permissions: "0600"
+        encoding: b64
+        content: IyBUaGUgZmFybSdzIGRhZW1vbiBjb25maWcgZm9yIG5ldHdvcmstaW5zdGFsbGVkIGhvc3RzLgpjb29yZGluYXRvciAgICAgPSAiaHR0cHM6Ly8xOTIuMC4yLjE6ODQ0MyIKY2Ffc2hhMjU2ICAgICAgID0gIjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiCnJlbGVhc2VfY2hhbm5lbCA9ICJodHRwczovL3JlbGVhc2VzLmV4YW1wbGUiCgpbdHJ1c3RlZF9zaWduZXJzXQpvcmdhbmlzYXRpb24gID0gImtvbWlyYS1haSIKd29ya2Zsb3cgICAgICA9ICIuZ2l0aHViL3dvcmtmbG93cy9yZWxlYXNlLnltbCIKcmVmcyAgICAgICAgICA9IFsicmVmcy90YWdzLyoiXQpob3N0ZWRfcnVubmVyID0gdHJ1ZQoKW2JvdW5kc10KbWF4X2VudHJpZXMgPSAzMDAwMAo=
+      - path: /etc/cloud/cloud.cfg.d/99_hostkeeper.cfg
+        owner: "root:root"
+        permissions: "0644"
+        content: "datasource_list: [ NoCloud, None ]\n"
+      - path: /etc/default/grub.d/99_hostkeeper.cfg
+        owner: "root:root"
+        permissions: "0644"
+        content: "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX console=tty0 console=ttyS1,115200n8\"\nGRUB_TERMINAL=\"console serial\"\nGRUB_SERIAL_COMMAND=\"serial --unit=1 --speed=115200\"\n"
+      - path: /etc/systemd/system/serial-getty@ttyS1.service.d/99_hostkeeper.conf
+        owner: "root:root"
+        permissions: "0644"
+        content: "[Service]\nExecStart=\nExecStart=-/sbin/agetty -o '-p -- \\\\u' 115200 - $TERM\n"
+      - path: /etc/default/grub.d/98_hostkeeper_parameters.cfg
+        owner: "root:root"
+        permissions: "0644"
+        content: "GRUB_CMDLINE_LINUX=\"$GRUB_CMDLINE_LINUX fuse.enable_uring=1\"\n"
+    runcmd:
+      - [update-grub]
+      - [systemctl, daemon-reload]
+      - [systemctl, enable, --now, serial-getty@ttyS1.service]

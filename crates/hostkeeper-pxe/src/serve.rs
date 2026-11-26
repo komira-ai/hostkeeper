@@ -7,7 +7,9 @@
 //!
 //! 0. With `--notify-systemd`, the socket systemd named must be known ([`ServePorts`]): a start
 //!    without it is refused before anything is bound.
-//! 1. The files the flags name are read as the starting user (root on a host): the daemon
+//! 1. The extra partitions and the kernel parameters are checked as a whole: a GPT label, a
+//!    mount point or a parameter's name given twice, or too many of either, refuses the start.
+//!    The files the flags name are read as the starting user (root on a host): the daemon
 //!    config, with the daemon's own loader (a config the daemon would refuse is refused here,
 //!    before a seed is made), the repository directory `--repositories` names, if given, with
 //!    the daemon's loader of repository entries (see `crate::repositories`), the SSH keys file,
@@ -50,7 +52,9 @@ use std::time::Duration;
 use hostkeeper_config::trust::read_trusted;
 use hostkeeper_pxe_packets::dhcp::{Mode, Port};
 use hostkeeper_pxe_seed::inputs::{BootServer, DaemonConfigText};
+use hostkeeper_pxe_seed::kernel::KernelParameters;
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
+use hostkeeper_pxe_seed::partitions::ExtraPartitions;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::secret::open_token;
 use tokio::sync::watch;
@@ -124,6 +128,10 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         (true, socket) => socket,
         (false, _) => None,
     };
+    let extra_partitions =
+        ExtraPartitions::new(flags.extra_partition.clone()).map_err(|e| e.to_string())?;
+    let kernel_parameters =
+        KernelParameters::new(flags.kernel_parameter.clone()).map_err(|e| e.to_string())?;
     let shown =
         |path: &std::path::Path, why: &dyn std::fmt::Display| format!("{}: {why}", path.display());
     let config = read_trusted(&flags.daemon_config, owner)
@@ -171,6 +179,8 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         keys,
         install_disk: flags.install_disk.clone().unwrap_or_default(),
         serial_console: flags.serial_console.clone(),
+        extra_partitions,
+        kernel_parameters,
         repositories,
         reinstall: flags.reinstall.iter().cloned().collect(),
         tftp_timeout: Duration::from_millis(flags.tftp_timeout_ms),

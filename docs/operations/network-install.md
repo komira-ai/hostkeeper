@@ -268,6 +268,21 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
   `ExecStart=-/sbin/agetty -o '-p -- \\u' 115200 - $TERM` replaces the stock unit's
   `--keep-baud 115200,57600,38400,9600`, which drops the port to 9600 at the first Enter over
   Serial over LAN, after which the BMC's serial console shows NUL bytes.
+- `extra-partition`: partitions the installer makes on the install disk beside root, an array,
+  in their order on the disk; each `"<GPT label>:<size>:<file system>:<mount point>[:<mount
+  options>]"`. The size is `<n>MiB` or `<n>GiB`, the file system `xfs` or `ext4`, the mount point
+  an absolute path that is not `/boot` or below it, and the options a comma-separated list such as
+  `noatime`. With any, the disk gets a GPT table, a 1 GiB EFI system partition, these partitions,
+  and root (ext4) over the rest; without, the installer's `direct` layout, root over the whole
+  disk. The partitions are made only at an install: a host already installed keeps its layout
+  until it is reinstalled ([Reinstall](#reinstall-a-known-host)). Size them for the smallest disk
+  `install-disk` matches, with room for root: a disk too small fails the install, and the machine
+  stays at the installer. A label or a mount point given twice stops `serve`.
+- `kernel-parameter`: words added to the installed kernel's command line, an array, such as
+  `"fuse.enable_uring=1"`; each `<name>` or `<name>=<value>` with no space, quote, backslash, `$`
+  or backtick. The seed writes them to `/etc/default/grub.d/98_hostkeeper_parameters.cfg`, and the
+  first boot applies it with `update-grub`, so they are in force from the second boot. A name
+  given twice stops `serve`.
 - `dhcp-listen`, `proxy-listen`, `tftp-listen`, `http-listen`: `address:port` of each socket; by
   default the protocol ports 67, 4011, 69 and 80 on every address. Keep the HTTP port at 80: a
   port other than 80 is written into GRUB's device name, which Ubuntu's signed GRUB is not known
@@ -277,6 +292,31 @@ key or a value the flag refuses stops `serve` and `prepare` with one line naming
 - `repositories`: the directory of step 3a, optional; without it a seed writes no repository
   entry.
 - `reinstall`: host ids to reinstall ([Reinstall](#reinstall-a-known-host)).
+
+A farm whose nodes keep tierstore's cache and hot tier on their own partitions of the node's SSD
+(tierstore's fetch-cache-serve.md, sections 11 and 21.1), with the kernel parameter its FUSE front
+reads at boot:
+
+```toml
+# /etc/pxe/pxe.toml
+[serve]
+mode = "proxy"
+address = "192.0.2.10"
+interface = "eth1"
+daemon-config = "/etc/pxe/hostkeeper.toml"
+ssh-authorized-keys = "/etc/pxe/operator-ssh-keys"
+coordinator = "https://192.0.2.6:8443"
+ca-file = "/etc/pxe/ca.pem"
+token-file = "/etc/pxe/token"
+user-id = 65534
+group-id = 65534
+serial-console = "ttyS1"
+extra-partition = [
+  "tierstore-cache:220GiB:xfs:/var/lib/tierstore-cache:noatime",
+  "tierstore-hot:300GiB:xfs:/var/lib/ts-hot:noatime",
+]
+kernel-parameter = ["fuse.enable_uring=1"]
+```
 
 `[prepare]` is optional and sets what `prepare` downloads and checks with. A farm of one
 architecture names its own and keeps no ISO it never serves; without `platform` both platforms are

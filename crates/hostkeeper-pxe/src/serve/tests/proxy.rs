@@ -8,8 +8,10 @@ use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_pxe_seed::inputs::{
     BootServer, DaemonConfigText, InstallDisk, IsoName, LinuxPlatform, Record,
 };
+use hostkeeper_pxe_seed::kernel::{KernelParameter, KernelParameters};
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::menu::{LOCAL_DISK_MENU, MenuChoice, MenuRequest, Mode, install_menu};
+use hostkeeper_pxe_seed::partitions::{ExtraPartition, ExtraPartitions};
 use hostkeeper_pxe_seed::seed::{SeedInputs, seed};
 
 use super::kit::{
@@ -194,6 +196,8 @@ fn a_mac_leaves_the_answer_set_once_its_seed_is_fetched() {
         install_disk: &InstallDisk::default(),
         serial_console: None,
         repositories: None,
+        extra_partitions: &ExtraPartitions::default(),
+        kernel_parameters: &KernelParameters::default(),
     });
     assert_eq!(String::from_utf8(user.body).expect("text"), want.user_data);
     assert!(
@@ -230,13 +234,16 @@ fn a_mac_leaves_the_answer_set_once_its_seed_is_fetched() {
     assert!(!waiting(&firmware));
 }
 
-/// `--install-disk` and `--serial-console` reach the seed the run serves: with
-/// `--install-disk serial=S3A*` and `--serial-console ttyAMA0`, the `user-data` of the recorded
-/// MAC is exactly the seed the generator makes from those values, which matches the disk by its
-/// serial and sets the kernel console and getty of `ttyAMA0`, and not the default disk.
+/// `--install-disk`, `--serial-console`, `--extra-partition` and `--kernel-parameter` reach the
+/// seed the run serves: with `--install-disk serial=S3A*`, `--serial-console ttyAMA0`, two
+/// extra partitions and two kernel parameters, the `user-data` of the recorded MAC is exactly the
+/// seed the generator makes from those values, which matches the disk by its serial, sets the
+/// kernel console and getty of `ttyAMA0`, lays out the partitions in the order given in a storage
+/// config in place of `direct`, and writes the parameters in their order.
 ///
-/// Catches a run that parses the seed flags and then serves the default disk or no serial
-/// console, which would write the wrong disk or leave the BMC's console blank.
+/// Catches a run that parses the seed flags and then serves the default disk, no serial console,
+/// the layout `direct` or no kernel parameter, which would write the wrong disk, leave the BMC's
+/// console blank, or leave a node's cache without its partition.
 #[test]
 fn the_seed_flags_reach_the_seed_served() {
     let kit = Kit::new("proxy-seed-flags");
@@ -249,6 +256,14 @@ fn the_seed_flags_reach_the_seed_served() {
             "serial=S3A*",
             "--serial-console",
             "ttyAMA0",
+            "--extra-partition",
+            "tierstore-cache:220GiB:xfs:/var/lib/tierstore-cache:noatime",
+            "--kernel-parameter",
+            "fuse.enable_uring=1",
+            "--extra-partition",
+            "tierstore-hot:300GiB:xfs:/var/lib/ts-hot",
+            "--kernel-parameter",
+            "quiet",
         ],
     ));
     tftp_read(
@@ -279,6 +294,23 @@ fn the_seed_flags_reach_the_seed_served() {
     .expect("a boot server");
     let disk: InstallDisk = "serial=S3A*".parse().expect("a disk");
     let console: hostkeeper_pxe_seed::inputs::SerialConsole = "ttyAMA0".parse().expect("a console");
+    let partitions = ExtraPartitions::new(
+        [
+            "tierstore-cache:220GiB:xfs:/var/lib/tierstore-cache:noatime",
+            "tierstore-hot:300GiB:xfs:/var/lib/ts-hot",
+        ]
+        .iter()
+        .map(|value| value.parse::<ExtraPartition>().expect("a partition"))
+        .collect(),
+    )
+    .expect("two partitions");
+    let parameters = KernelParameters::new(
+        ["fuse.enable_uring=1", "quiet"]
+            .iter()
+            .map(|word| word.parse::<KernelParameter>().expect("a parameter"))
+            .collect(),
+    )
+    .expect("two parameters");
     let want = seed(&SeedInputs {
         install: &install,
         server,
@@ -288,6 +320,8 @@ fn the_seed_flags_reach_the_seed_served() {
         install_disk: &disk,
         serial_console: Some(&console),
         repositories: None,
+        extra_partitions: &partitions,
+        kernel_parameters: &parameters,
     });
     let served = String::from_utf8(user.body).expect("text");
     assert_eq!(served, want.user_data);
@@ -295,5 +329,17 @@ fn the_seed_flags_reach_the_seed_served() {
     assert!(!served.contains("ssd: true"), "{served}");
     assert!(served.contains("console=ttyAMA0,115200n8"), "{served}");
     assert!(served.contains("serial-getty@ttyAMA0"), "{served}");
+    assert!(!served.contains("name: direct"), "{served}");
+    let cache = served
+        .find("partition_name: \"tierstore-cache\"")
+        .expect("the cache partition");
+    let hot = served
+        .find("partition_name: \"tierstore-hot\"")
+        .expect("the hot partition");
+    assert!(cache < hot, "{served}");
+    assert!(
+        served.contains("$GRUB_CMDLINE_LINUX fuse.enable_uring=1 quiet\\\""),
+        "{served}"
+    );
     assert_eq!(run.stop().0, Ok(()));
 }

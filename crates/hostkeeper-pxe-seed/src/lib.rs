@@ -7,9 +7,10 @@
 //!   for and chooses the menu of its MAC from the answer set, the record's platform and the
 //!   [`menu::Mode`].
 //! - [`seed`]: [`seed::seed`], the NoCloud seed of one machine.
-//! - [`inputs`] and [`keys`]: the values both are made from, each checked once when it is made
-//!   (the daemon config by the daemon's own parser, the SSH keys file with any private key
-//!   refused), so neither generator can fail.
+//! - [`inputs`], [`keys`], [`partitions`] and [`kernel`]: the values both are made from, each
+//!   checked once when it is made (the daemon config by the daemon's own parser, the SSH keys
+//!   file with any private key refused, the extra partitions of the install disk and the extra
+//!   kernel parameters by their grammars), so neither generator can fail.
 //! - [`layout`]: the TFTP and HTTP paths the menus and seeds name, which `pxe serve`
 //!   serves.
 //!
@@ -17,7 +18,9 @@
 //! function of its inputs alone, and goldens in `tests/golden` pin each one byte for byte.
 
 pub mod inputs;
+pub mod kernel;
 pub mod keys;
 pub mod layout;
 pub mod menu;
+pub mod partitions;
 pub mod seed;
