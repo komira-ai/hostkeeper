@@ -67,6 +67,9 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 record_try: None,
                 installer: None,
                 drift: None,
+                health_reason: None,
+                health_body: None,
+                restarts: None,
             },
             ServiceFacts {
                 local_halt: None,
@@ -84,6 +87,9 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 record_try: Some(1),
                 installer: Some("tarball".to_owned()),
                 drift: None,
+                health_reason: None,
+                health_body: None,
+                restarts: None,
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,
@@ -100,6 +106,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 

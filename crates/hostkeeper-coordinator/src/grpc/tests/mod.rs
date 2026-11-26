@@ -23,6 +23,7 @@ mod hello_group;
 mod hook_detail;
 mod host_group_requests;
 mod host_groups;
+mod host_health;
 mod hosts;
 mod install;
 mod limits;

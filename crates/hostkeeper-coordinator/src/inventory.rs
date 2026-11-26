@@ -476,6 +476,9 @@ fn record_proto(
             .into(),
         host_group: group.to_owned(),
         enrolled_host_id: String::new(),
+        // No record holds its installed memory yet (docs/design/host-health-alerts.md 4.3).
+        installed_memory_bytes: 0,
+        memory_modules: 0,
     }
 }
 

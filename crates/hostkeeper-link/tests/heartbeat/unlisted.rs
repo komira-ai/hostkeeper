@@ -87,6 +87,9 @@ fn a_refused_install_is_sent_until_acknowledged_and_its_absent_entry_stays_until
             record_try: None,
             installer: None,
             drift: None,
+            health_reason: None,
+            health_body: None,
+            restarts: None,
         })
     };
     for at in [1, 2] {

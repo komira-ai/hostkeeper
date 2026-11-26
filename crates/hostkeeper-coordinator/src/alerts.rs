@@ -804,6 +804,7 @@ fn alert_proto(observed: Observed) -> proto::Alert {
         detail: alert.said.detail,
         tries: alert.said.tries,
         since_unix: alert.said.since_unix,
+        ..proto::Alert::default()
     }
 }
 

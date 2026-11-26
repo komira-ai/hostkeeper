@@ -92,13 +92,13 @@ fn a_maintenance_alert_reads_back_as_written() {
 
 /// Catches: a reader that does not know a kind's number, as a reader of the release before does
 /// not know 22 and 23, that refuses the alert, drops it or writes it back changed: the number is
-/// kept as the number (30 stands for a kind no release has yet) and the alert's other fields read
+/// kept as the number (90 stands for a kind no release has yet) and the alert's other fields read
 /// as written.
 #[test]
 fn a_reader_that_does_not_know_a_kind_keeps_its_number_and_the_alert() {
-    assert!(op::AlertKind::try_from(30).is_err(), "30 is no kind yet");
+    assert!(op::AlertKind::try_from(90).is_err(), "90 is no kind yet");
     let alert = op::Alert {
-        kind: 30,
+        kind: 90,
         severity: op::AlertSeverity::Critical.into(),
         host_id: "h1".to_owned(),
         message: "a later kind".to_owned(),
@@ -108,7 +108,7 @@ fn a_reader_that_does_not_know_a_kind_keeps_its_number_and_the_alert() {
     let bytes = alert.encode_to_vec();
     let read = op::Alert::decode(bytes.as_slice()).expect("decodes");
     assert_eq!(read, alert);
-    assert_eq!(read.kind, 30);
+    assert_eq!(read.kind, 90);
     assert_eq!(read.host_id, "h1");
     assert_eq!(read.encode_to_vec(), bytes, "written back byte for byte");
 }

@@ -5,8 +5,10 @@
 //! limit of `hostkeeper-proto`, and is at most [`MAX_HEARTBEAT_BYTES`] as JSON with the wire's
 //! names ([`Heartbeat::encoded_len`]). [`fit`] keeps it: a heartbeat with more services is
 //! refused, never cut short; one with too many bytes loses its optional facts, a group at a
-//! time in the order of [`DROP_ORDER`] (the Remote Login probe, then the health detail, then the
-//! deferral detail, then the observer's detail), and is refused when that is not enough. The
+//! time in the order of [`DROP_ORDER`] (the host health's memory devices and source states, then
+//! the services' health bodies and restarts, then the Remote Login probe, then the health detail,
+//! then the deferral detail, then the observer's detail), then sends fewer host health records,
+//! and is refused when that is not enough. The
 //! service, its version, its health, the update running and the last verdict are never
 //! dropped, nor are the host's clock and certificate facts ([`Heartbeat::sent_unix`],
 //! [`Heartbeat::renewal`]), whose one text is at most
@@ -26,15 +28,20 @@
 //! never dropped either. The host's BMC ([`Heartbeat::bmc`], as `bmc`: an address and a MAC) is
 //! counted and never dropped, and so is its serial console baseline ([`Heartbeat::serial_console`],
 //! as `serial_console`: a port, a state and a detail). The host's maintenance report ([`Heartbeat::maintenance`], as `maintenance`: the
-//! daemon's own message, at most about 5 KiB) is counted and never dropped.
+//! daemon's own message, at most about 5 KiB) is counted and never dropped. The host's hardware
+//! health ([`Heartbeat::health`], as `health`: the daemon's own message, at most
+//! [`hostkeeper_proto::health::MAX_HEALTH_BYTES`] encoded) is counted too: its memory devices and
+//! source states are the first group dropped, and its records the last thing given up, from the
+//! least severe and newest, each left for a later heartbeat; the rest of it is never dropped.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
-use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceReport;
+use hostkeeper_proto::hostkeeper::agent::v1::{HostHealth, MaintenanceReport, ServiceRestarts};
 use serde_json::{Map, Value, json};
 
 use crate::bmc::BmcReport;
 use crate::full_disk_access::FullDiskAccess;
+use crate::health::{health_json, restarts_json};
 use crate::host_ssh::SshReport;
 use crate::maintenance::maintenance_json;
 use crate::names::Reason;
@@ -127,6 +134,12 @@ pub enum Feature {
     /// it, reports what the source gives and hands the order to the sink ([`MAINTENANCE`]); it is
     /// not in [`ANNOUNCED`].
     MaintenanceV1,
+    /// `host-health-v1`: the daemon reports its host's hardware health ([`Heartbeat::health`])
+    /// and drops the records the coordinator names written (`HeartbeatResponse.health_written`,
+    /// [`crate::Reply::health_written`]). Announced, like `maintenance-v1`, only once the
+    /// coordinator advertised it, by a daemon that reads its host's health; no daemon of this
+    /// release does, and no coordinator of it advertises it. Not in [`ANNOUNCED`].
+    HostHealthV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -163,6 +176,9 @@ pub const SSH: Feature = Feature::SshV1;
 /// The feature a daemon with a [`crate::MaintenanceSource`] announces to a coordinator that
 /// advertises it, after [`SSH`].
 pub const MAINTENANCE: Feature = Feature::MaintenanceV1;
+/// The feature a daemon that reads its host's hardware health announces to a coordinator that
+/// advertises it, after [`MAINTENANCE`].
+pub const HOST_HEALTH: Feature = Feature::HostHealthV1;
 
 impl Feature {
     /// Its wire name.
@@ -186,6 +202,7 @@ impl Feature {
             Feature::SshV1 => "ssh-v1",
             Feature::PrerequisitesV1 => "prerequisites-v1",
             Feature::MaintenanceV1 => "maintenance-v1",
+            Feature::HostHealthV1 => "host-health-v1",
         }
     }
 
@@ -201,6 +218,7 @@ impl Feature {
                 PREREQUISITES,
                 SSH,
                 MAINTENANCE,
+                HOST_HEALTH,
             ])
             .find(|feature| feature.as_str() == name)
     }
@@ -339,6 +357,17 @@ pub struct ServiceFacts {
     /// over gRPC only (`ServiceBeat.local_halt`), and counted toward the bound on both, as the
     /// drift is.
     pub local_halt: Option<LocalHalt>,
+    /// The observer's reason token for the health; none when it gives none. Sent over gRPC only
+    /// (`ServiceBeat.health_reason`), and counted toward the bound on both.
+    pub health_reason: Option<String>,
+    /// The first bytes of a non-2xx reply of the service's health URL; none when there is none.
+    /// Sent over gRPC only (`ServiceBeat.health_body`), counted toward the bound on both, and
+    /// dropped with [`ServiceFacts::restarts`] in the first service group of [`DROP_ORDER`].
+    pub health_body: Option<String>,
+    /// How the service's units have restarted; none where the service manager gives no count. Sent
+    /// over gRPC only (`ServiceBeat.restarts`), counted toward the bound on both, and dropped with
+    /// [`ServiceFacts::health_body`].
+    pub restarts: Option<ServiceRestarts>,
 }
 
 /// A halt the host holds of a service, as the heartbeat reports it: the coordinator shows the
@@ -398,6 +427,17 @@ impl ServiceFacts {
         }
         if let (Some(halt), Some(map)) = (&self.local_halt, facts.as_object_mut()) {
             map.insert("local_halt".to_owned(), halt.to_json());
+        }
+        if let Some(map) = facts.as_object_mut() {
+            if let Some(reason) = &self.health_reason {
+                map.insert("health_reason".to_owned(), reason.clone().into());
+            }
+            if let Some(body) = &self.health_body {
+                map.insert("health_body".to_owned(), body.clone().into());
+            }
+            if let Some(restarts) = &self.restarts {
+                map.insert("restarts".to_owned(), restarts_json(restarts));
+            }
         }
         facts
     }
@@ -504,6 +544,11 @@ pub struct Heartbeat {
     /// daemon that has none, or to a coordinator that does not advertise the feature. Sent over
     /// gRPC only, and counted toward the bound on both.
     pub maintenance: Option<MaintenanceReport>,
+    /// The host's hardware health (`host-health-v1`); none from a daemon that reads none, or to a
+    /// coordinator that does not advertise the feature. Sent over gRPC only, and counted toward
+    /// the bound on both; [`fit`] drops its memory devices and source states first, and gives up
+    /// its records last.
+    pub health: Option<HostHealth>,
 }
 
 impl Heartbeat {
@@ -596,6 +641,9 @@ impl Heartbeat {
         if let Some(report) = &self.maintenance {
             beat.insert("maintenance".to_owned(), maintenance_json(report));
         }
+        if let Some(health) = &self.health {
+            beat.insert("health".to_owned(), health_json(health));
+        }
         Value::Object(beat)
     }
 
@@ -604,17 +652,56 @@ impl Heartbeat {
         self.to_json().to_string().len()
     }
 
-    fn drop_fact(&mut self, fact: OptionalFact) {
-        if fact == OptionalFact::RemoteLoginProbe {
-            self.remote_login_probe = None;
+    /// Whether the heartbeat holds anything of the group `fact`: the groups of the probe, of the
+    /// host health's detail and of the services' health bodies are passed over, not listed, when
+    /// it holds none; every other group is always dropped and listed.
+    fn holds(&self, fact: OptionalFact) -> bool {
+        match fact {
+            OptionalFact::RemoteLoginProbe => self.remote_login_probe.is_some(),
+            OptionalFact::HostHealthDetail => self.health.as_ref().is_some_and(|health| {
+                !health.sources.is_empty()
+                    || health
+                        .baseline
+                        .as_ref()
+                        .is_some_and(|baseline| !baseline.memory_devices.is_empty())
+            }),
+            OptionalFact::ServiceHealthBody => self
+                .services
+                .iter()
+                .any(|service| service.health_body.is_some() || service.restarts.is_some()),
+            OptionalFact::HealthDetail
+            | OptionalFact::DeferralDetail
+            | OptionalFact::ObserverDetail
+            | OptionalFact::HealthRecords => true,
         }
-        for service in &mut self.services {
-            match fact {
-                OptionalFact::RemoteLoginProbe => {}
-                OptionalFact::HealthDetail => service.health_detail = None,
-                OptionalFact::DeferralDetail => service.deferred = None,
-                OptionalFact::ObserverDetail => service.observed = None,
+    }
+
+    /// The heartbeat without the group `fact`; for [`OptionalFact::HealthRecords`], without the
+    /// last of its host health records.
+    fn drop_fact(&mut self, fact: OptionalFact) {
+        let services = self.services.iter_mut();
+        match fact {
+            OptionalFact::RemoteLoginProbe => self.remote_login_probe = None,
+            OptionalFact::HostHealthDetail => {
+                if let Some(health) = &mut self.health {
+                    health.sources.clear();
+                    if let Some(baseline) = &mut health.baseline {
+                        baseline.memory_devices.clear();
+                    }
+                }
             }
+            OptionalFact::HealthRecords => {
+                if let Some(health) = &mut self.health {
+                    health.events.pop();
+                }
+            }
+            OptionalFact::ServiceHealthBody => services.for_each(|service| {
+                service.health_body = None;
+                service.restarts = None;
+            }),
+            OptionalFact::HealthDetail => services.for_each(|service| service.health_detail = None),
+            OptionalFact::DeferralDetail => services.for_each(|service| service.deferred = None),
+            OptionalFact::ObserverDetail => services.for_each(|service| service.observed = None),
         }
     }
 }
@@ -622,6 +709,11 @@ impl Heartbeat {
 /// A group of optional facts a heartbeat loses, every service's at once, to fit its bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionalFact {
+    /// The memory devices of [`Heartbeat::health`]'s baseline and its source states, the host's
+    /// own: sent again in a later heartbeat.
+    HostHealthDetail,
+    /// [`ServiceFacts::health_body`] and [`ServiceFacts::restarts`].
+    ServiceHealthBody,
     /// [`Heartbeat::remote_login_probe`], the host's own.
     RemoteLoginProbe,
     /// [`ServiceFacts::health_detail`].
@@ -630,10 +722,18 @@ pub enum OptionalFact {
     DeferralDetail,
     /// [`ServiceFacts::observed`].
     ObserverDetail,
+    /// Records of [`Heartbeat::health`], given up one at a time from the last (the least severe,
+    /// then the newest, by the order the daemon sends them in) only once every group of
+    /// [`DROP_ORDER`] is dropped: they stay with the daemon until a heartbeat carries them and the
+    /// coordinator names them written. Listed once, however many were given up. Not in
+    /// [`DROP_ORDER`].
+    HealthRecords,
 }
 
 /// The order in which [`fit`] drops the optional facts.
-pub const DROP_ORDER: [OptionalFact; 4] = [
+pub const DROP_ORDER: [OptionalFact; 6] = [
+    OptionalFact::HostHealthDetail,
+    OptionalFact::ServiceHealthBody,
     OptionalFact::RemoteLoginProbe,
     OptionalFact::HealthDetail,
     OptionalFact::DeferralDetail,
@@ -658,8 +758,10 @@ pub struct Fitted {
 }
 
 /// `beat` within its bound: as it is, or without its optional facts, dropped a group at a time
-/// in the order of [`DROP_ORDER`] until it fits. The probe's group is dropped, and listed, only
-/// when the heartbeat holds a probe.
+/// in the order of [`DROP_ORDER`] until it fits, then with fewer host health records
+/// ([`OptionalFact::HealthRecords`]). The groups of the probe, of the host health's detail and of
+/// the services' health bodies are dropped, and listed, only when the heartbeat holds something of
+/// them.
 ///
 /// # Errors
 /// More services than [`MAX_SERVICES_PER_HEARTBEAT`], or more than [`MAX_HEARTBEAT_BYTES`] with
@@ -674,12 +776,25 @@ pub fn fit(mut beat: Heartbeat) -> Result<Fitted, Oversize> {
         if beat.encoded_len() <= MAX_HEARTBEAT_BYTES {
             return Ok(Fitted { beat, dropped });
         }
-        // A heartbeat without a probe has none to lose: the group is passed over, not listed.
-        if fact == OptionalFact::RemoteLoginProbe && beat.remote_login_probe.is_none() {
+        // A heartbeat that holds nothing of the group has none to lose: it is passed over, not
+        // listed.
+        if !beat.holds(fact) {
             continue;
         }
         beat.drop_fact(fact);
         dropped.push(fact);
+    }
+    // Then the host health records, one at a time from the last, listed once.
+    while beat.encoded_len() > MAX_HEARTBEAT_BYTES
+        && beat
+            .health
+            .as_ref()
+            .is_some_and(|health| !health.events.is_empty())
+    {
+        beat.drop_fact(OptionalFact::HealthRecords);
+        if !dropped.contains(&OptionalFact::HealthRecords) {
+            dropped.push(OptionalFact::HealthRecords);
+        }
     }
     let len = beat.encoded_len();
     if len <= MAX_HEARTBEAT_BYTES {

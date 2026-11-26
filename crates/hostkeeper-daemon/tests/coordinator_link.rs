@@ -275,6 +275,7 @@ fn bare_beat() -> Heartbeat {
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

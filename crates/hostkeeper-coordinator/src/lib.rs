@@ -168,6 +168,7 @@ pub(crate) mod health;
 pub mod holds;
 pub(crate) mod host_group_proto;
 pub(crate) mod host_groups;
+pub mod host_health;
 pub mod host_move;
 pub mod hosts;
 pub mod http;

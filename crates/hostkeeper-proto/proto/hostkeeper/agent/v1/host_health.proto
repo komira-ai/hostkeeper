@@ -1,0 +1,209 @@
+// hostkeeper.agent.v1: host health (docs/design/host-health-alerts.md sections 2 and 4.1): what a
+// host's daemon reports of its hardware in its heartbeat (`HeartbeatRequest.health`, `HostHealth`):
+// the hardware event records it holds that the coordinator has not yet written to the host's
+// hardware event log, the host's capacity now (`Baseline`), its boot, and whether each source it
+// reads could be read (`SourceState`). The rest of the package is agent.proto (`Heartbeat`,
+// `Enroll`, `Poll` and `Renew` of the `Coordinator` service), which imports this file; this file is
+// the same package and API, kept apart to shorten agent.proto. A daemon sends `health` only to a
+// coordinator that advertises `host-health-v1`, over gRPC only (the JSON route is frozen), and the
+// coordinator names the records it wrote in `HeartbeatResponse.health_written`.
+//
+// Served by: the coordinator, on its heartbeat listener, as agent.proto says.
+//
+// Authentication: as agent.proto says; this file declares no service.
+//
+// Refusals: none; this file declares no service. A `HostHealth` that breaks a bound given here is
+// refused whole by both sides (`hostkeeper_proto::health::check_health`), never cut.
+//
+// Units: as agent.proto says: times are Unix seconds, sizes bytes unless the field's name says
+// otherwise (`_kib`, `_mbps`). A text's bound is in bytes of UTF-8.
+//
+// Extending: as agent.proto says: add fields, messages and enum values; never renumber, rename,
+// retype or remove one, and never reuse a number. A reader treats an enum value it does not know
+// as UNSPECIFIED, and shows a record whose component, source or code it does not know by its
+// `message`.
+syntax = "proto3";
+
+package hostkeeper.agent.v1;
+
+// What the daemon reports of its host's hardware in one heartbeat. Every text and every list has a
+// bound, given with its field, and the whole message is at most 4096 bytes encoded
+// (`hostkeeper_proto::health`). When a heartbeat is over its 16 KiB, the daemon first leaves out
+// `baseline.memory_devices` and `sources`, then sends fewer `events`; the records left out wait for
+// the next heartbeat.
+message HostHealth {
+  // Records the coordinator has not yet acknowledged (`HeartbeatResponse.health_written`), at most
+  // 6 in one heartbeat: the most severe first, then the oldest. A record whose heartbeat was lost
+  // is sent again with the same `event_id`, and is written once.
+  repeated HardwareEvent events = 1;
+  // The host's capacity now: what the coordinator compares with the host's baseline and its
+  // inventory record. Absent while the daemon has not read it.
+  Baseline baseline = 2;
+  // The boot the host is in: Linux's `/proc/sys/kernel/random/boot_id`, or a Mac's
+  // `kern.bootsessionuuid`; at most 64 bytes.
+  string boot_id = 3;
+  // When that boot began.
+  uint64 boot_unix = 4;
+  // Whether the daemon found its clean-shutdown marker for the boot before this one: false after
+  // a crash, a power loss or a panic.
+  bool clean_previous_shutdown = 5;
+  // Each source the daemon reads, and whether it could: at most 12. A source the host does not
+  // have, or that fails, is listed with its reason, never left out, so that a source that reports
+  // nothing is never read as one that found nothing wrong.
+  repeated SourceState sources = 6;
+}
+
+// One record of a host's hardware event log, as the daemon makes it from one entry of a source
+// (docs/design/host-health-alerts.md section 2.1), less what the coordinator adds: the host, the
+// machine's serial, when the coordinator first had it, and the operator of a note.
+message HardwareEvent {
+  // A stable id, the same however often the source is read: the source and its own id (a SEL
+  // record id with the SEL's last erase time, a panic report's `incident_id`, ...). 1 to 64 bytes.
+  string event_id = 1;
+  // When the source says it happened, by the source's clock.
+  uint64 time_unix = 2;
+  // Whether the source says it happened before the boot the daemon read it in (`HostHealth.boot_id`).
+  bool of_previous_boot = 3;
+  // What part of the machine.
+  HardwareComponent component = 4;
+  // Which one: a memory slot (`DIMM D1`), a CPU (`CPU 1`), a PCIe device (`0000:3b:00.0`), a disk
+  // (`nvme1n1`), a sensor, a power supply (`PSU 2`), `board`. At most 32 bytes.
+  string subject = 5;
+  // How bad, by the table of its source.
+  HardwareSeverity severity = 6;
+  // Whether it happened, or a condition began or ended.
+  HardwareEventState state = 7;
+  // The source it was read from, a token: `rasdaemon`, `smart`, `journal`, `sel`, `sysfs` and
+  // `baseline` on Linux; `panic`, `shutdown`, `diskutil`, `thermal` and `baseline` on a Mac. At
+  // most 16 bytes.
+  string source = 8;
+  // The normalized fault, a token the same on both platforms where the fault is the same:
+  // `memory_uncorrectable`, `capacity_short`, `disk_failing`, `unexpected_reboot`, ... At most 32
+  // bytes.
+  string code = 9;
+  // One line a person reads, at most 120 bytes.
+  string message = 10;
+  // The source's own line as it printed it, cut to 256 bytes.
+  string raw = 11;
+  // For a deassertion, the `event_id` of the assertion it ends; empty otherwise. At most 64 bytes.
+  string about = 12;
+}
+
+// What part of the machine a `HardwareEvent` concerns.
+enum HardwareComponent {
+  // Not given, or a value this reader does not know.
+  HARDWARE_COMPONENT_UNSPECIFIED = 0;
+  HARDWARE_COMPONENT_MEMORY = 1;
+  HARDWARE_COMPONENT_CPU = 2;
+  HARDWARE_COMPONENT_PCIE = 3;
+  HARDWARE_COMPONENT_DISK = 4;
+  HARDWARE_COMPONENT_THERMAL = 5;
+  HARDWARE_COMPONENT_POWER = 6;
+  HARDWARE_COMPONENT_BOARD = 7;
+  // The whole host: an unexpected reboot, the host off, no BMC.
+  HARDWARE_COMPONENT_HOST = 8;
+}
+
+// How bad a `HardwareEvent` is.
+enum HardwareSeverity {
+  // Not given, or a value this reader does not know.
+  HARDWARE_SEVERITY_UNSPECIFIED = 0;
+  // Worth keeping; raises nothing on its own (a corrected error, a log cleared).
+  HARDWARE_SEVERITY_INFO = 1;
+  HARDWARE_SEVERITY_WARNING = 2;
+  HARDWARE_SEVERITY_CRITICAL = 3;
+}
+
+// Whether a `HardwareEvent` happened, or a condition began or ended.
+enum HardwareEventState {
+  // Not given, or a value this reader does not know.
+  HARDWARE_EVENT_STATE_UNSPECIFIED = 0;
+  // It happened.
+  HARDWARE_EVENT_STATE_EVENT = 1;
+  // A condition began: a sensor over its threshold, a disk failing.
+  HARDWARE_EVENT_STATE_ASSERTED = 2;
+  // That condition ended; `about` names its assertion.
+  HARDWARE_EVENT_STATE_DEASSERTED = 3;
+}
+
+// The host's capacity as the daemon read it in this boot.
+message Baseline {
+  // The kernel's `MemTotal`, KiB; on a Mac `hw.memsize` in KiB. 0: not read.
+  uint64 mem_total_kib = 1;
+  // The memory devices SMBIOS lists (type 17), populated or not, at most 32; empty on a Mac, which
+  // has none to read. Sent in a boot's first heartbeats and when they change.
+  repeated MemoryDevice memory_devices = 2;
+  // The CPUs present and online, as the kernel counts them (`/sys/devices/system/cpu/present` and
+  // `online`; on a Mac `hw.physicalcpu` and `hw.logicalcpu`).
+  uint32 cpus_present = 3;
+  uint32 cpus_online = 4;
+  // The kernel's `smt/control` (`on`, `off`, `forceoff`, `notsupported`, `notimplemented`), so
+  // that turning SMT off is not read as lost cores; empty where there is none. At most 16 bytes.
+  string smt = 5;
+  // The physical disks, at most 16.
+  repeated BaselineDisk disks = 6;
+  // The network interfaces that have a device, at most 8.
+  repeated BaselineNic nics = 7;
+}
+
+// One memory device of the SMBIOS table (type 17).
+message MemoryDevice {
+  // Its slot, as the table names it (`DIMM D1`), at most 32 bytes.
+  string locator = 1;
+  // The module's size; 0 for an empty slot.
+  uint64 size_bytes = 2;
+}
+
+// One physical disk.
+message BaselineDisk {
+  // Its block device name (`nvme1n1`, `sda`; a Mac's `disk0`), at most 32 bytes.
+  string name = 1;
+  uint64 size_bytes = 2;
+  // The first 8 bytes of the SHA-256 of the disk's serial, as a big-endian integer, so the disk is
+  // known again and its serial is not sent; 0 when it reports none.
+  fixed64 serial_digest = 3;
+}
+
+// One network interface.
+message BaselineNic {
+  // Its name (`eno1`), at most 16 bytes.
+  string name = 1;
+  // Its link speed, megabits per second; 0 when it has no carrier or reports none.
+  uint32 speed_mbps = 2;
+}
+
+// Whether the daemon could read one of its sources.
+message SourceState {
+  // The source, as `HardwareEvent.source` names it; at most 16 bytes.
+  string source = 1;
+  SourceStatus status = 2;
+  // Why it is unsupported or unreadable, in plain words (`/dev/ipmi0 is absent`, `database is
+  // locked`); empty when it is read. At most 64 bytes.
+  string reason = 3;
+}
+
+// Whether a source was read.
+enum SourceStatus {
+  // Not given, or a value this reader does not know.
+  SOURCE_STATUS_UNSPECIFIED = 0;
+  // It was read.
+  SOURCE_STATUS_OK = 1;
+  // The host does not have it: no BMC device, no rasdaemon, a disk that reports no SMART status.
+  SOURCE_STATUS_UNSUPPORTED = 2;
+  // The host has it, and reading it failed: a timeout, a locked database, output past its cap.
+  SOURCE_STATUS_UNREADABLE = 3;
+}
+
+// How a managed service's units have restarted, as the service manager counts it
+// (`ServiceBeat.restarts`).
+message ServiceRestarts {
+  // The service manager's restart counter of the service's main unit (systemd's `NRestarts`).
+  uint32 count = 1;
+  // The restarts in the last 10 minutes.
+  uint32 recent = 2;
+  // The unit's last result, as the service manager words it (`exit-code`, `signal`,
+  // `start-limit-hit`, ...); empty when it gives none. At most 32 bytes.
+  string last_result = 3;
+  // The main process's last exit status; absent when it gives none.
+  optional int32 exit_status = 4;
+}

@@ -256,6 +256,7 @@ fn a_host_is_what_the_status_holds_of_it() {
             bmc: None,
             serial_console: None,
             maintenance: None,
+            health: None,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {

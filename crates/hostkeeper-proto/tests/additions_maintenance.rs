@@ -705,6 +705,7 @@ fn the_enum_values_are_fixed() {
                 "MAINTENANCE_KIND_LINUX",
                 "MAINTENANCE_KIND_REBOOT",
                 "MAINTENANCE_KIND_PROBE",
+                "MAINTENANCE_KIND_REPAIR",
             ],
         ),
         (
