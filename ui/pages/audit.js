@@ -1,5 +1,6 @@
-// Audit: the coordinator's log of changes, newest last, each with its time and the name it was
-// made under (the operator's token, or `coordinator`, `ci`, `mdm-nonce`), filtered by actor, by
+// Audit: the coordinator's log of changes, newest last, each with its time, the name it was
+// made under (a signed-in user, an API token's owner, a tokens file token, or `coordinator`, `ci`,
+// `mdm-nonce`) and, for a change made with an API token, that token's name, filtered by actor, by
 // that name, by action, service and host, a page at a time from a sequence number or the newest
 // page. Calls: Audit.List, nothing else.
 
@@ -47,11 +48,12 @@ export async function render(ctx) {
     }
     return out;
   };
-  const rows = entries.map(({ seq, atUnix, by, byName, action: did, service, nodeId, reason }) => h("tr", {},
+  const rows = entries.map(({ seq, atUnix, by, byName, apiToken, action: did, service, nodeId, reason }) => h("tr", {},
     h("td", {}, String(seq || "-")),
     h("td", {}, fmtUnix(atUnix)),
     h("td", {}, enumLabel(by, "ACTOR_")),
     h("td", {}, byName || "-"),
+    h("td", {}, apiToken || "-"),
     h("td", {}, did || "-"),
     h("td", {}, service || "-"),
     h("td", {}, nodeId || "-"),
@@ -71,7 +73,7 @@ export async function render(ctx) {
         ctx.navigate("audit", filters());
         return undefined;
       })),
-    entries.length === 0 ? h("p", {}, "No entry.") : table(["Seq", "Time", "By", "Who", "Action", "Service", "Host", "Reason"], rows),
+    entries.length === 0 ? h("p", {}, "No entry.") : table(["Seq", "Time", "By", "Who", "Token", "Action", "Service", "Host", "Reason"], rows),
     h("div", { class: "buttons" },
       request.sinceSeq === "0" && !request.newest ? null : h("button", {
         type: "button", name: "first-page", on: { click: () => ctx.navigate("audit", filters()) },
