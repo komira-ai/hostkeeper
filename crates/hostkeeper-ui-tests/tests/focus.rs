@@ -73,17 +73,9 @@ fn the_focus_is_given_back_only_to_a_control_that_is_still_there_and_the_caret_o
     let one_reason = r#"h("section", {}, h("input", { type: "text", name: "reason" }))"#;
     let cases = [
         // The focused control is not in the new elements.
-        (
-            TWO_REASONS,
-            r#"named("update")[0].focus();"#,
-            one_reason,
-        ),
+        (TWO_REASONS, r#"named("update")[0].focus();"#, one_reason),
         // The second of its name was focused; the new elements have one.
-        (
-            TWO_REASONS,
-            r#"named("reason")[1].focus();"#,
-            one_reason,
-        ),
+        (TWO_REASONS, r#"named("reason")[1].focus();"#, one_reason),
         // The focused element has no name.
         (
             r#"h("section", {}, h("input", { type: "text" }), h("input", { type: "text", name: "reason" }))"#,
