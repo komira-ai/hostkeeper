@@ -26,7 +26,7 @@ fn the_macs_due_the_release_are_listed_by_group_with_the_line_that_stores_the_ru
         ran.stdout,
         format!(
             "{HELD}Xcode 27.2 is now due on 3 Macs:\n  mac-build (xcode_keep 2, batch 1): mac-01, \
-             mac-02, mac-03\n    no run takes it yet; a run would take mac-01, mac-02, mac-03 \
+             mac-02, mac-03\n    a run would take mac-01, mac-02, mac-03 \
              (batch 1)\n{}  left out: mac-04 (group mac-proof keeps no Xcode)\n",
             stores("mac-build")
         )
@@ -101,8 +101,7 @@ fn a_mac_whose_due_item_names_a_newer_release_is_due_that_one_then_this_in_the_s
         ran.stdout,
         format!(
             "{HELD}Xcode 27.2 is now due on 2 Macs:\n  g (xcode_keep 2, batch 1): mac-01, \
-             mac-02\n    mac-01: due: 27.3, then 27.2 in the same turn\n    no run takes it yet; \
-             a run would take mac-01, mac-02 (batch 1)\n{}  installed: mac-03\n",
+             mac-02\n    mac-01: due: 27.3, then 27.2 in the same turn\n    a run would take mac-01, mac-02 (batch 1)\n{}  installed: mac-03\n",
             stores("g")
         )
     );
@@ -151,8 +150,7 @@ fn a_mac_with_it_installed_is_due_to_select_it_only_while_it_is_the_groups_defau
         format!(
             "{HELD}Xcode 27.2 is now due on 2 Macs:\n  latest (xcode_keep 2, batch 1): mac-01, \
              mac-06\n    mac-01: installed, not selected: due to be selected\n    mac-06: \
-             installed, not selected: due to be selected\n    no run takes it yet; a run would \
-             take mac-01, mac-06 (batch 1)\n{}  installed: mac-02, mac-03, mac-04, mac-05\n",
+             installed, not selected: due to be selected\n    a run would take mac-01, mac-06 (batch 1)\n{}  installed: mac-02, mac-03, mac-04, mac-05\n",
             stores("latest")
         )
     );
@@ -178,7 +176,7 @@ fn an_xcode_installed_elsewhere_or_of_another_build_does_not_count() {
         ran.stdout,
         format!(
             "{HELD}Xcode 27.2 is now due on 3 Macs:\n  g (xcode_keep 1, batch 1): mac-01, \
-             mac-02, mac-03\n    no run takes it yet; a run would take mac-01, mac-02, mac-03 \
+             mac-02, mac-03\n    a run would take mac-01, mac-02, mac-03 \
              (batch 1)\n{}",
             stores("g")
         )
@@ -230,8 +228,7 @@ fn a_mac_in_a_run_that_takes_xcode_says_the_run_and_its_window() {
         format!(
             "{HELD}Xcode 27.2 is now due on 3 Macs:\n  g (xcode_keep 1, batch 1): mac-01, \
              mac-02\n    mac-01: in run r-win, window 2026-09-21 14:13 UTC to 2026-09-21 16:43 \
-             UTC\n    mac-02: in run r-now, now\n  h (xcode_keep 1, batch 1): mac-03\n    no run \
-             takes it yet; a run would take mac-03 (batch 1)\n{}",
+             UTC\n    mac-02: in run r-now, now\n  h (xcode_keep 1, batch 1): mac-03\n    a run would take mac-03 (batch 1)\n{}",
             stores("h")
         )
     );
@@ -356,8 +353,7 @@ fn a_mac_in_a_run_that_does_not_take_xcode_has_no_schedule_line() {
             "{HELD}Xcode 27.2 is now due on 5 Macs:\n  g (xcode_keep 1, batch 1): mac-01, mac-02, \
              mac-03\n    mac-01: in run r-old, which does not take Xcode: schedule after it \
              ends\n    mac-02: in run r-old, whose turn has already started: schedule after it \
-             ends\n    mac-03: in run r-old, now\n  h (xcode_keep 1, batch 1): mac-04\n    no run \
-             takes it yet; a run would take mac-04 (batch 1)\n{}  i (xcode_keep 1, batch 1): \
+             ends\n    mac-03: in run r-old, now\n  h (xcode_keep 1, batch 1): mac-04\n    a run would take mac-04 (batch 1)\n{}  i (xcode_keep 1, batch 1): \
              mac-05\n    mac-05: in run r-halt, which is halted in group i: put the halted host \
              back or cancel the run, then schedule\n",
             stores("h")
@@ -402,9 +398,9 @@ fn skipped_hosts_are_printed_with_the_coordinators_reason_and_the_batch_of_the_r
         ran.stdout,
         format!(
             "{HELD}Xcode 27.2 is now due on 4 Macs:\n  g (xcode_keep 1, batch 2): mac-01, mac-02, \
-             mac-03\n    no run takes it yet; a run would take mac-01 (batch 2)\n    skipped: \
+             mac-03\n    a run would take mac-01 (batch 2)\n    skipped: \
              mac-02 (no_update_account), mac-03 (filevault_not_ready)\n{}  h (xcode_keep 1, \
-             batch 1): mac-04\n    no run takes it yet; a run would take mac-04 (batch 3)\n{}",
+             batch 1): mac-04\n    a run would take mac-04 (batch 3)\n{}",
             stores("g"),
             stores("h")
         )
@@ -523,7 +519,7 @@ fn a_release_just_stored_is_among_the_releases_the_group_keeps() {
         ran.stdout,
         format!(
             "stored: Xcode 27.2 (27B52), sha256 {}, {} bytes\nXcode 27.2 is now due on 1 Mac:\n  \
-             two (xcode_keep 2, batch 1): mac-01\n    no run takes it yet; a run would take \
+             two (xcode_keep 2, batch 1): mac-01\n    a run would take \
              mac-01 (batch 1)\n{}  left out: mac-02 (group one keeps only newer releases \
              (27.3))\n",
             sha256(&archive_bytes()),

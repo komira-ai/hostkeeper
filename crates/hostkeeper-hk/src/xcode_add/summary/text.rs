@@ -96,7 +96,7 @@ fn run_lines(group: &str, version: &str, batch: u32, preview: &Preview) -> Vec<S
         Preview::Run { batch: own, turns } => {
             let taken = at_step(turns, "MAINTENANCE_HOST_STEP_WAITING");
             let mut lines = vec![format!(
-                "    no run takes it yet; a run would take {} (batch {})",
+                "    a run would take {} (batch {})",
                 taken.join(", "),
                 own.unwrap_or(batch)
             )];
