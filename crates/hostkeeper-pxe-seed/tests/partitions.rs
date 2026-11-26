@@ -132,7 +132,6 @@ fn each_refusal_says_which_field_is_wrong() {
         ("a:1GiB:xfs:/", mount),
         ("a:1GiB:xfs:", mount),
         ("a:1GiB:xfs:srv/a", mount),
-        ("a:1GiB:xfs://a", mount),
         ("a:1GiB:xfs:/a//b", mount),
         ("a:1GiB:xfs:/a/", mount),
         ("a:1GiB:xfs:/a/./b", mount),

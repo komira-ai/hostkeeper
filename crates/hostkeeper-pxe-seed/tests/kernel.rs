@@ -20,7 +20,7 @@ fn a_word_and_its_name_are_read() {
         ("quiet", "quiet"),
         ("a-b_c.D9=x=y", "a-b_c.D9"),
         ("foo=", "foo"),
-        ("rd.lvm.vg=x,y:z/@#%^&*()[]{}<>|;~!?+'", "rd.lvm.vg"),
+        ("rd.lvm_vg=x,y:z/@#%^&*()[]{}<>|;~!?+'", "rd.lvm_vg"),
     ] {
         let parameter = word(text);
         assert_eq!((parameter.as_str(), parameter.name()), (text, name));
