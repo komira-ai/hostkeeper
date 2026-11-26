@@ -242,7 +242,9 @@ The choices sections 8 and 9 leave open, as the code makes them (`store/postgres
   login fails closed: no session is made or found, and every name is locked.
 - `periodic_jobs` has no period column: the claim is given each job's period from `--job-every`, as section 9's `$period`. One
   job `prune` (the key of section 12) does every prune in one transaction; an order of `fleet_orders` is aged, and pruned,
-  once `ORDER_AGE` has passed since it was given, the age at which every reader already takes its slot as free.
+  once `ORDER_AGE` has passed since it was given while its host still heartbeats (its `fleet_hosts` row seen within
+  `DOWN_AFTER`, or none), the age at which every reader already takes its slot as free; the order of a host gone silent
+  holds its slot whatever its age (hostkeeper-design.md section 5.4) and is kept until the host beats or is abandoned.
 - The alerts' rows are keyed by the whole subject (six texts); only the job `alerts` writes them. `Alerts.List` reads them
   for each alert's first observed second (now for one the job has not noted yet) and writes and logs nothing; a write or
   read that fails falls back to this coordinator's memory, so the alert of a lost database is still logged.

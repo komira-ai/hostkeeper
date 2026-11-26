@@ -16,7 +16,7 @@ use std::time::Duration;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 
-use super::{Fleet, ORDER_AGE, Order};
+use super::{Fleet, Order};
 use crate::bake::Bake;
 use crate::store::decision::{OrderRow, Rows, TryRow, Writes};
 
@@ -29,6 +29,10 @@ pub(crate) struct Shared {
     /// The row of each host another coordinator heard that this fleet took in, as it was: a row
     /// not changed since is not taken in again.
     folded: BTreeMap<String, (i64, i64, String)>,
+    /// The orders memory dropped of each host and service, and when: an operator abandoned the
+    /// host, or it retired ([`Fleet::drop_orders`]). A row of one given by then is not taken in,
+    /// so the next decision ends it; a mark goes once no row of its host and service is read.
+    dropped: BTreeMap<(HostId, String), Duration>,
 }
 
 /// `unix`, a time of the database's clock, placed on the coordinator's clock: `now` is the
@@ -78,9 +82,22 @@ impl Fleet {
                 uninstall: row.uninstall_id.clone(),
                 order_try: try_of(row.order_try),
             };
-            orders.insert((host, row.service.clone()), order);
             kept.push(row.clone());
+            let key = (host, row.service.clone());
+            if self
+                .shared
+                .dropped
+                .get(&key)
+                .is_some_and(|by| order.at <= *by)
+            {
+                continue;
+            }
+            orders.insert(key, order);
         }
+        self.shared.dropped.retain(|(host, service), _| {
+            kept.iter()
+                .any(|row| row.host_id == host.as_str() && row.service == *service)
+        });
         let gone: Vec<_> = self
             .orders
             .iter()
@@ -136,10 +153,28 @@ impl Fleet {
         self.sent.clone()
     }
 
+    /// Notes that the orders of `keys` (host and service), which memory drops at `now`, end in
+    /// the rows too, once the rows were read (over a store other coordinators share): the next take
+    /// of the rows leaves out a row of each given by `now`, and that decision ends it. Without it
+    /// the next take would put the order back, and the order of a silent host would hold its slot
+    /// for ever ([`Fleet::order_holds`]).
+    pub(super) fn drop_orders(
+        &mut self,
+        keys: impl IntoIterator<Item = (HostId, String)>,
+        now: Duration,
+    ) {
+        if self.shared.quiet_until.is_some() {
+            self.shared
+                .dropped
+                .extend(keys.into_iter().map(|key| (key, now)));
+        }
+    }
+
     /// What a decision writes back of the orders and tries: the difference between `read` (the
     /// rows of `fleet_orders` it read at `now_unix`) and the orders memory holds at `now` that
-    /// have not aged out, and the tries memory raised above `sent` (those it held when it took
-    /// the rows in). An order read that memory no longer holds ends, and its try is kept.
+    /// are still outstanding ([`Fleet::order_holds`]), and the tries memory raised above `sent`
+    /// (those it held when it took the rows in). An order read that memory no longer holds ends,
+    /// and its try is kept.
     #[must_use]
     pub(crate) fn writes_since(
         &self,
@@ -153,7 +188,7 @@ impl Fleet {
         let held: Vec<OrderRow> = self
             .orders
             .iter()
-            .filter(|(_, order)| now.saturating_sub(order.at) < ORDER_AGE)
+            .filter(|((host, _), order)| self.order_holds(host, order, now))
             .map(|((host, service), order)| {
                 let at_unix = read
                     .iter()

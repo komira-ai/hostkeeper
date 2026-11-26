@@ -546,7 +546,8 @@ async fn a_report_of_another_update_keeps_the_order() {
     }
 }
 
-/// Catches: an order for a host that never reports holding its slot for ever.
+/// Catches: an order for a host that never reports holding its slot for ever. The host still
+/// heartbeats (it did not hear the order), so the order's age frees the slot.
 #[tokio::test]
 async fn an_order_nobody_reports_ages_out() {
     let rig = started("svc-order-age", ONE_STORAGE).await;
@@ -558,7 +559,12 @@ async fn an_order_nobody_reports_ages_out() {
         update("2.0")
     );
     rig.at(2_100 + age - 1);
-    // No beat of s1: only its order holds the slot.
+    // s1 beats without reporting the order: only its order holds the slot.
+    assert_eq!(
+        c.heartbeat_native(storage("s1"), beat("1.0"))
+            .expect("a heartbeat"),
+        update("2.0")
+    );
     assert_eq!(
         c.heartbeat_native(storage("s2"), beat("1.0"))
             .expect("a heartbeat"),
@@ -734,6 +740,31 @@ async fn an_order_for_a_new_version_replaces_the_old_one() {
         Reply::Nothing,
         "the first order would have aged out by now; the one for 3.0 has not"
     );
+}
+
+/// Catches: an order freeing its slot by age while its host is silent (design 5.4): `s1` is
+/// ordered and sends nothing after, as a host that heard the order and started and whose beats
+/// are lost; at `ORDER_AGE` and 900 s after the order `s2` is told nothing, so two updates are
+/// never live. A host that still heartbeats frees it at its age
+/// (`an_order_nobody_reports_ages_out`).
+#[tokio::test]
+async fn a_silent_ordered_host_keeps_the_slot_past_order_age() {
+    let rig = started("svc-order-silent", ONE_STORAGE).await;
+    let c = &rig.coordinator;
+    assert_eq!(
+        c.heartbeat_native(storage("s1"), beat("1.0"))
+            .expect("a heartbeat"),
+        update("2.0")
+    );
+    for after in [ORDER_AGE.as_secs(), 900] {
+        rig.at(2_100 + after);
+        assert_eq!(
+            c.heartbeat_native(storage("s2"), beat("1.0"))
+                .expect("a heartbeat"),
+            Reply::Nothing,
+            "{after} s after s1's order, s1 silent: it keeps the slot"
+        );
+    }
 }
 
 mod publishers_tests;

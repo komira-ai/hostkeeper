@@ -413,6 +413,50 @@ fn prune_deletes_expired_sessions_forgotten_failures_unseen_instances_and_aged_o
     stop(&stores);
 }
 
+/// Proves: the job `prune` keeps an aged order of a host gone silent (its row of `fleet_hosts`
+/// seen `DOWN_AFTER` or more ago, the boundary second included) and deletes the aged order of a
+/// host seen within `DOWN_AFTER` (one second inside the bound) and of a host with no row.
+///
+/// Catches: a prune that frees the slot of a host that heard its order and went silent (a second
+/// update then ordered in the farm), or one that keeps the order of a host that still heartbeats
+/// without reporting it, or of one never heard, for ever.
+#[test]
+fn prune_keeps_the_aged_order_of_a_silent_host() {
+    let (db, stores) = stores(1);
+    let now = 10_000_000_u64;
+    let (_now, at) = clock(now);
+    let jobs = jobs_of(&db, &stores[0], periods(), &at);
+    let n = now as i64;
+    for (host, seen) in [
+        ("gone", n - 45),
+        ("long-gone", n - 5000),
+        ("beating", n - 44),
+    ] {
+        db.run(&format!(
+            "INSERT INTO fleet_hosts (host_id, role, beat, seen_unix, sent_unix, instance) \
+             VALUES ('{host}', 'daemon', '\\x7b7d', {seen}, {seen}, 'another')"
+        ))
+        .expect("a host");
+    }
+    for host in ["gone", "long-gone", "beating", "unheard"] {
+        db.run(&format!(
+            "INSERT INTO fleet_orders (host_id, service, target, at_unix, try) \
+             VALUES ('{host}', 'web', '1.0', {}, 1)",
+            n - 5000
+        ))
+        .expect("an order");
+    }
+    let pruned = jobs.prune().expect("prunes");
+    assert_eq!(pruned.fleet_orders, 2);
+    let held: Vec<String> = db
+        .rows("SELECT host_id FROM fleet_orders ORDER BY host_id")
+        .into_iter()
+        .map(|row| row[0].clone().expect("a value"))
+        .collect();
+    assert_eq!(held, ["gone", "long-gone"]);
+    stop(&stores);
+}
+
 /// Proves: over a store whose session is lost, seeding, claiming and pruning each return the
 /// store's error and claim nothing.
 ///

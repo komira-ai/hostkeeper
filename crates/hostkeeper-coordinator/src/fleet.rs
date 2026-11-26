@@ -51,10 +51,12 @@ pub const QUIET_START: Duration = Duration::from_secs(30);
 /// whose clock was reset (a Mac back from a power cut) is off by, which is what the count is for.
 pub const CLOCK_SKEW_AFTER: Duration = Duration::from_secs(120);
 
-/// How long an update order holds its slot without the host reporting it. A host reports
-/// within one heartbeat interval (15 s) of hearing the order, so this is eight intervals:
-/// room for a lost reply and several missed beats, short enough that a host that never heard
-/// frees its slot before an operator would notice.
+/// How long an update order holds its slot without the host reporting it, while the host still
+/// heartbeats. A host reports within one heartbeat interval (15 s) of hearing the order, so this
+/// is eight intervals: room for a lost reply and several missed beats, short enough that a host
+/// that never heard frees its slot before an operator would notice. A host that has gone silent
+/// ([`DOWN_AFTER`]) keeps the slot of its order past this, as it may have heard the order and
+/// started: only `Hosts.Exclude` with `abandon` frees it ([`Fleet::is_ordered`]).
 pub const ORDER_AGE: Duration = Duration::from_secs(120);
 
 /// An update, an install or an uninstall the coordinator told a host to run, not yet seen in the
@@ -165,6 +167,8 @@ impl Node {
 
 #[path = "fleet_groups.rs"]
 mod groups;
+#[path = "fleet_orders.rs"]
+mod slots;
 pub use groups::Marks;
 #[path = "fleet_retry.rs"]
 pub mod retry;
@@ -478,9 +482,10 @@ impl Fleet {
 
     /// Forgets the host `id` everywhere, if its update record is final: no service it was
     /// heard for (counted or not) shows it updating or waiting for its promotion, and no order
-    /// for it is outstanding at `now`. Its slot, its bake and its orders go with it, so a
-    /// retiring host frees its update slot once it has finished (design 6.1). Returns
-    /// whether it was forgotten.
+    /// for it was given within [`ORDER_AGE`] of `now`, whether or not it still beats: an operator
+    /// retired it. Its slot, its bake and its orders go with it, the orders in the rows of a shared
+    /// store too ([`Self::drop_orders`]), so a retiring host frees its update slot once it has
+    /// finished (design 6.1). Returns whether it was forgotten.
     pub fn release_if_final(&mut self, id: &HostId, now: Duration) -> bool {
         let in_flight = self
             .hosts
@@ -498,6 +503,13 @@ impl Fleet {
         for hosts in self.hosts.values_mut().chain(self.outside.values_mut()) {
             hosts.remove(id);
         }
+        let given: Vec<_> = self
+            .orders
+            .keys()
+            .filter(|(o, _)| o == id)
+            .cloned()
+            .collect();
+        self.drop_orders(given, now);
         self.orders.retain(|(o, _), _| o != id);
         self.forget_retries(id);
         self.bake.retain(|(_, o), _| o != id);
@@ -674,7 +686,8 @@ impl Fleet {
     /// Notes that the host `id`, which runs `running` of `service`, was told at `now` to
     /// uninstall it by the order `order_id`. It holds the host's slot as an update's order does,
     /// until the host reports it running, reports its verdict, declines it (a deferral of
-    /// `running`) or the order ages out; asking again under it does not hold the slot longer.
+    /// `running`) or the order ages out ([`Self::is_ordered`]); asking again under it does not hold
+    /// the slot longer.
     pub fn order_uninstall(
         &mut self,
         service: &str,
@@ -734,64 +747,6 @@ impl Fleet {
     ) -> Option<Duration> {
         self.defers
             .until(&(id.clone(), service.to_owned()), target, backoff)
-    }
-
-    /// The hosts with an order of `service` outstanding at `now` whose last word about it the
-    /// fleet does not keep: a host told to install a service it does not list. They hold their
-    /// slot as the others do ([`crate::decide`]).
-    pub fn ordered_unseen(&self, service: &str, now: Duration) -> impl Iterator<Item = &HostId> {
-        self.orders
-            .iter()
-            .filter(move |((id, s), order)| {
-                s == service
-                    && now.saturating_sub(order.at) < ORDER_AGE
-                    && self.occupant(service, id).is_none()
-            })
-            .map(|((id, _), _)| id)
-    }
-
-    /// Whether `id` has an order outstanding for `service` at `now`.
-    #[must_use]
-    pub fn is_ordered(&self, service: &str, id: &HostId, now: Duration) -> bool {
-        self.orders
-            .get(&(id.clone(), service.to_owned()))
-            .is_some_and(|o| now.saturating_sub(o.at) < ORDER_AGE)
-    }
-
-    /// Whether the host `id` is busy with a service other than `service`: one of its other
-    /// services is updating, or has an order outstanding for it. A host does one update at a
-    /// time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
-    /// is leaving, which no service counts it for.
-    #[must_use]
-    pub fn is_busy_besides(&self, service: &str, id: &HostId, now: Duration) -> bool {
-        let leaving = self.outside.iter().filter(|_| self.is_moving(id));
-        let updating = self
-            .hosts
-            .iter()
-            .chain(leaving)
-            .filter(|(s, _)| s.as_str() != service)
-            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.beat.updating.is_some()));
-        updating
-            || self.orders.iter().any(|((o, s), order)| {
-                o == id && s != service && now.saturating_sub(order.at) < ORDER_AGE
-            })
-    }
-
-    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot`], or an
-    /// order is outstanding for it. A host an operator excluded from `service` holds one only
-    /// while it runs an update (updating, or its promotion pending) or has an order outstanding,
-    /// so a host excluded mid-update keeps its slot until that update ends; one whose last update
-    /// failed and that is not healthy holds none, since the service no longer orders it and
-    /// nothing of an update of it runs: it would keep its role's `max_updating` taken for as long
-    /// as it stays excluded.
-    #[must_use]
-    pub fn holds_slot(&self, service: &str, id: &HostId, host: &Host, now: Duration) -> bool {
-        let running = host.beat.updating.is_some() || host.beat.promotion_pending;
-        let held = match self.is_excluded(service, id) {
-            true => running,
-            false => host.holds_slot(),
-        };
-        held || self.is_ordered(service, id, now)
     }
 
     /// How many healthy beats in a row the host `id` has sent `service` at `version`.
@@ -981,19 +936,5 @@ impl Fleet {
     pub fn take_abort(&mut self, id: &HostId) -> Option<(String, String)> {
         let key = self.aborts.keys().find(|(host, _)| host == id).cloned()?;
         self.aborts.remove(&key).map(|order_id| (key.1, order_id))
-    }
-
-    /// Forgets the host `id` for `service` altogether, its order with it, so the slot it held is
-    /// free now: an operator abandoned it (`Hosts.Exclude` with `abandon`). Answers whether it
-    /// held the slot at `now`. A beat it sends later is noted as any other.
-    pub fn abandon_in(&mut self, service: &str, id: &HostId, now: Duration) -> bool {
-        let held = self
-            .occupant(service, id)
-            .is_some_and(|host| self.holds_slot(service, id, host, now));
-        for hosts in [&mut self.hosts, &mut self.outside] {
-            hosts.entry(service.to_owned()).or_default().remove(id);
-        }
-        self.orders.remove(&(id.clone(), service.to_owned()));
-        held
     }
 }

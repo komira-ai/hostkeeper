@@ -158,7 +158,7 @@ fn only_a_failure_of_a_version_the_host_does_not_run_is_set_aside() {
 
 /// Proves: the current order shows its try and target, the id the coordinator named for that
 /// target (none when it named none, or named it for another target), an uninstall's own id, and
-/// nothing once the order has aged out.
+/// nothing once the order has aged out while the host still heartbeats (a silent host keeps it).
 ///
 /// Catches: an order shown with the id of an earlier order to another version, an uninstall
 /// shown as an update, and an aged-out order still shown as current.
@@ -180,11 +180,9 @@ fn the_current_order_shows_its_id_try_and_target_until_it_ages_out() {
         fleet.outstanding(WEB, &host, secs(1)),
         Some(shown(Some("update-new")))
     );
-    assert_eq!(
-        fleet.outstanding(WEB, &host, secs(1) + ORDER_AGE),
-        None,
-        "aged out"
-    );
+    let aged = secs(1) + ORDER_AGE;
+    fleet.record_in(WEB, host.clone(), role("daemon"), web(None, false), aged);
+    assert_eq!(fleet.outstanding(WEB, &host, aged), None, "aged out");
 
     let (mut fleet, host) = heard(web(None, false));
     fleet.name_order(WEB, &host, &version("1.0"), "update-x".to_owned());

@@ -313,6 +313,14 @@ async fn the_agents_own_service_is_counted_at_the_agents_version_and_no_other() 
     assert_eq!(counted_at(&rig, HK, "d2").as_deref(), Some("0.1.83"));
 
     rig.at(2_000 + ORDER_AGE.as_secs() * 10);
+    // d2 reports its update done: a silent ordered host would keep the farm's one slot.
+    let (reply, _) = ask_typed(
+        &rig,
+        "d2",
+        "daemon",
+        daemon("0.2.0", vec![entry(HK, "0.2.0", None)]),
+    );
+    assert_eq!(reply, ServiceReply::Nothing);
     let (reply, _) = ask_typed(
         &rig,
         "d3",

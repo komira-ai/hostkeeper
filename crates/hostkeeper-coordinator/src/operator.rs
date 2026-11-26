@@ -428,8 +428,9 @@ impl Coordinator {
     }
 
     /// `Hosts.Exclude`: takes the host out of the service, as `/v1/operator`'s `exclude` does.
-    /// Its slot stays held until its own beats or its order's age free it; with `abandon`, for a
-    /// host that is gone, the slot is freed now, and the entry is `exclude_abandon` with
+    /// Its slot stays held until its own beats or its order's age free it (the age only while the
+    /// host still heartbeats: [`crate::fleet::Fleet::is_ordered`]); with `abandon`, for a host that
+    /// is gone, the slot is freed now, and the entry is `exclude_abandon` with
     /// `possibly_mid_update` in its reason: an alert while the host stays excluded
     /// ([`crate::alerts`], logged with `alert = "exclude_abandon"`).
     ///
