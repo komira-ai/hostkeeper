@@ -4,6 +4,7 @@
 //! store is written (packages-native.md section 10.6, build item A18).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_enrollment::fs::FaultFs;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
@@ -15,7 +16,7 @@ use crate::enrollment::tests::support::Rig as EnrollmentRig;
 use crate::first_serving_tests::{APPROVED, FIRST, Fixture, HK, WEB, daemon};
 use crate::marks_support::{ask_json as ask, operator, runs, who};
 use crate::picks::TARGET_FEATURE;
-use crate::testutil::{Log, Rig, beat, id};
+use crate::testutil::{Log, Rig, beat, id, ops_of};
 
 const ARCHIVE: &str = "hostkeeper-archive";
 const DB: &str = "db";
@@ -153,6 +154,49 @@ fn over_grpc(f: &Fixture) {
         (got.running, got.running_unix),
         (installed, host.running_unix)
     );
+}
+
+/// Proves: a host heard since the start is listed, and got, with its running time equal to the
+/// time of its last heartbeat, when the wall clock moves on at every read: right after the
+/// heartbeat and after 30 seconds of silence.
+///
+/// Catches: the running time read from the wall clock at the heartbeat, while the heartbeat's
+/// time is put back together from the wall clock read when the list is answered
+/// (komira-ai/hostkeeper#536).
+#[test]
+fn a_heard_hosts_running_time_is_its_heartbeat_time_on_a_clock_that_ticks_at_every_read() {
+    let mut rig = Rig::new("running-ticking-clock");
+    let reads = Arc::new(AtomicU64::new(1_800_000_000));
+    let unix: crate::audit_file::UnixClock = Arc::new(move || reads.fetch_add(1, Ordering::SeqCst));
+    rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_ops(ops_of(&rig.dir).with_unix(unix));
+    ask(&rig, "s1", "storage", beat("1.0"));
+    let got = |rig: &Rig| {
+        rig.coordinator
+            .get_host(
+                &operator(),
+                &proto::GetHostRequest {
+                    node_id: "s1".to_owned(),
+                },
+            )
+            .expect("answered")
+            .host
+            .expect("a host")
+    };
+    for silent in [0, 30] {
+        rig.at(1_000 + silent);
+        let host = listed(&rig, "s1");
+        assert_eq!(
+            host.running_unix,
+            Some(host.last_heartbeat_unix),
+            "listed after {silent} s of silence"
+        );
+        let host = got(&rig);
+        assert_eq!(
+            host.running_unix,
+            Some(host.last_heartbeat_unix),
+            "got after {silent} s of silence"
+        );
+    }
 }
 
 /// Proves: a daemon that does not announce `target-v1` runs every service from archives,
