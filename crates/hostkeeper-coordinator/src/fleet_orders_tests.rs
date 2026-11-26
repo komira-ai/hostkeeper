@@ -193,7 +193,11 @@ fn an_abandoned_or_retired_hosts_order_row_is_ended_by_the_next_decision() {
     let writes = fleet.writes_since(&kept, &sent, now, NOW_UNIX);
     assert_eq!(writes.ended, [row("s1", 500)]);
 
-    fleet.take_rows(&rows(Vec::new()), now);
+    let other_service = OrderRow {
+        service: "db".to_owned(),
+        ..row("s1", 10)
+    };
+    fleet.take_rows(&rows(vec![other_service]), now);
     fleet.take_rows(&rows(vec![row("s1", 10)]), now);
     assert!(
         fleet.is_ordered("web", &id("s1"), now),

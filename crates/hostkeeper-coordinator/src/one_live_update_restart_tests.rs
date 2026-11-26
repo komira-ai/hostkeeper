@@ -165,11 +165,16 @@ fn kept(enrollment: &EnrollmentRig, host: &str) -> Vec<(String, Option<String>)>
 }
 
 fn abandon(rig: &Rig, host: &str) {
+    abandon_of(rig, host, "other");
+}
+
+/// An operator excludes `host` from `service` with `abandon`.
+fn abandon_of(rig: &Rig, host: &str, service: &str) {
     rig.coordinator
         .exclude(
             &operator(),
             proto::ExcludeRequest {
-                service: "other".to_owned(),
+                service: service.to_owned(),
                 node_id: host.to_owned(),
                 reason: "host is gone".to_owned(),
                 abandon: true,
@@ -275,6 +280,24 @@ async fn a_host_that_finished_its_update_holds_nothing_after_a_restart() {
     restart(&mut rig, &enrollment, 2_030);
     assert_eq!(
         send(&rig, &enrollment, 2_060, "d2", &[second_behind()]),
+        order("second")
+    );
+}
+
+/// Proves: abandoning a host whose enrollment keeps no record of what it runs (approved, never
+/// heard), or a host id the enrollment never approved, writes no record and frees what it held;
+/// the approved host, once it beats, is ordered as any other.
+///
+/// Catches: an abandon that fails, or makes up a record, for a host the enrollment has no word of.
+#[tokio::test]
+async fn abandoning_a_host_with_no_record_writes_none() {
+    let (rig, enrollment) = rig("one-live-restart-enrolled-unheard").await;
+    rig.at(2_000);
+    abandon_of(&rig, "d2", "other");
+    abandon_of(&rig, "d9", "other");
+    assert!(kept(&enrollment, "d2").is_empty(), "no record is made");
+    assert_eq!(
+        send(&rig, &enrollment, 2_010, "d2", &[second_behind()]),
         order("second")
     );
 }
