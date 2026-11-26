@@ -47,6 +47,9 @@ the "hostkeeper" wordmark on top (a click goes Home), the pages (Host groups, Pa
 Sign out and a button that collapses the menu to icons; on a narrow screen it is a drawer opened by the top bar's Menu button.
 The top bar says where you are and who is signed in. The menu's icons are small inline SVG drawings (`icon` in `ui/view.js`; no image or font is loaded). Banners come in three kinds: `error` (red), `warning` (amber) and `notice` (blue, for what is true and needs no action); an empty one shows nothing. The pages that moved keep their old route: `fleet` is Home, and Release, Rollout and Holds still open
 by their route and are not in the menu.
+Every draw makes new elements; the control that had the focus (the one of the same name, and the same one of that name) has it
+again after a draw, with its caret where it was, so a page's repeat or a status line does not take the focus from a field being
+typed in (`mount` in `ui/view.js`).
 
 - **Home**: the lab. The floor plan is a band for each row of the cluster with a footprint for each rack (its number, its U in use
   and a dot for each state of its servers: healthy, updating, offline, pending); a click on a row opens its racks as front
@@ -62,13 +65,18 @@ by their route and are not in the menu.
   hosts' own reports, and says so. **Edit layout** shows the controls: rename the cluster, add a row (the next number), add a rack to a
   row (its height from a list, 42 U by default), resize, move to another row or remove a rack, remove a row, and move a server by
   picking it up (or dragging it) and putting it on a free U of a rack, or taking it out of its rack. A row or a rack that still
-  holds servers is not removed, and the page names them. A refusal is told in words. An empty lab says so and offers "Add a row".
+  holds servers is not removed, and the page names them. Each rack has **+ Add sled** and **+ Add device** (`ui/rackforms.js`), each
+  opening one form above the racks titled with what it adds and where; the form offers only the positions and slots that are free,
+  says what the add will take before it is sent, and keeps its inputs after an add, moving on to the next free U or slot. A rack's
+  height is set on the rack, by its stepper (1 to 60 U) or by dragging the grip on its bottom edge, and a shrink that would cut off
+  a sled is refused before any call, naming the sled. A sled's own panel resizes, moves or removes it (`ui/sledpanels.js`).
+  A refusal is told in words. An empty lab says so and offers "Add a row".
   Above the alerts, the updates notice: when `Alerts.List` answers `updates_due` alerts (one per host group with hosts that have
   updates due, "Updates due on 4 hosts of mac-build"), it shows each one's words with an **Update** button (one `Maintenance.Schedule` call for the group, with the one
   Reason field of the notice, after one confirmation) and an **Open Maintenance** button that opens
   the Maintenance page; these alerts are not repeated in the alerts strip, and with none the notice is not shown.
   Calls: `Hosts.List`, `Releases.Status`, `Alerts.List`, `Layout.Get`, `Enrollment.ListRecords`; on a button `Layout.PutName`,
-  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `Place` and `Unplace`; on the notice's Update `Maintenance.Schedule`.
+  `AddRow`, `RemoveRow`, `PutRack`, `RemoveRack`, `PutSled`, `RemoveSled`, `Place` and `Unplace`; on the notice's Update `Maintenance.Schedule`.
 - **Enrollment** (approval): besides the host group, the Height (1U to 4U, 1U by default), Row, Rack and U position of the server.
   All four are choices from the layout, the U position only among the free slots of the rack for that height; Row's first choice,
   Unplaced, places nothing. The placement is sent with the approval, which is refused whole when the slot is taken.
@@ -268,8 +276,8 @@ by their route and are not in the menu.
 - **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, owner, maker and time. Create
   takes a name, makes a token owned by the signed-in user and shows it once, as Users does a password. Revoke asks first and is offered for the tokens of the
   store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name, by an API token's owner with the token in
-  `api_token`, or by a tokens file token's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name, by an API token's owner with the token
+  (the entry's `api_token`) in its Token column, or by a tokens file token's name; a change made without an API token has `-` there. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
