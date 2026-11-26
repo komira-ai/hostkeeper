@@ -6,6 +6,9 @@
 //! versions are compared, trailing `.0` parts do not count, so `27.2` is `27.2.0`. The name is only
 //! a hint: the version read from the expanded app decides.
 //!
+//! - [`name_version`] and [`named`]: the version a name carries, as written and as numbers; off
+//!   macOS, where the archive cannot be expanded to read its version, the name is where it comes
+//!   from when none is given;
 //! - [`in_downloads`]: the file named for a version in `~/Downloads` or in
 //!   `~/Downloads/hk-xcode-push/<version>/`, the newest by modification time;
 //! - [`newest`]: the file directly in `~/Downloads` named for the highest version, then the newest
@@ -44,12 +47,19 @@ pub(crate) fn parts(text: &str) -> Option<Vec<u64>> {
     Some(numbers)
 }
 
+/// The version an archive's file name is named for, as written in it (`27.2`); `None` when the
+/// name is not `Xcode`, `_` or `-`, a version and `.xip`.
+pub(crate) fn name_version(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("Xcode")?;
+    let rest = rest.strip_prefix(['_', '-'])?;
+    let version = rest.strip_suffix(".xip")?;
+    parts(version).map(|_| version)
+}
+
 /// The version an archive's file name is named for, as [`parts`] reads it; `None` when the name
 /// is not `Xcode`, `_` or `-`, a version and `.xip`.
 pub(crate) fn named(name: &str) -> Option<Vec<u64>> {
-    let rest = name.strip_prefix("Xcode")?;
-    let rest = rest.strip_prefix(['_', '-'])?;
-    parts(rest.strip_suffix(".xip")?)
+    parts(name_version(name)?)
 }
 
 /// A file named like an archive.

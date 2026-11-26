@@ -86,7 +86,7 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     assert_eq!(
         old.rows("SELECT max(version) FROM schema_version"),
-        one("31")
+        one("32")
     );
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 24 ORDER BY version"),
@@ -97,10 +97,11 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
             one("28"),
             one("29"),
             one("30"),
-            one("31")
+            one("31"),
+            one("32")
         ]
         .concat(),
-        "0025 ran, and 0026 to 0031 after it"
+        "0025 ran, and 0026 to 0032 after it"
     );
     for table in TABLES {
         assert_eq!(

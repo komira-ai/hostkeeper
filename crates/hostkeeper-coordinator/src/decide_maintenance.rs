@@ -72,7 +72,10 @@
 //! store holds, the versions to remove and the default, read at each heartbeat the order is sent;
 //! none in a group that keeps no Xcode. While the store cannot be read, a turn that holds `xcode`
 //! is neither started ([`Hold::XcodeStore`]) nor sent its `RUN` again; an operator's `RETRY` or
-//! `PUT_BACK` of it is still sent, with no Xcode.
+//! `PUT_BACK` of it is still sent, with no Xcode. The order of a turn of `probe` alone in a run
+//! that names an archive to check carries that archive's entry alone (the store's version, build,
+//! size and SHA-256, no version to remove, no default), or none when the store no longer holds it;
+//! while the store cannot be read it is held and sent as a turn with `xcode` is.
 //!
 //! A halted host whose turn holds an operator's act queued by `RetryHost` or `PutBack`
 //! ([`RunHost::queued`]) is sent a `maintain` too: the same order id, the action `RETRY` or
@@ -530,11 +533,13 @@ fn serving(view: &View<'_>, group: &str) -> usize {
 /// The `maintain` of `host`'s turn in `run` under the order id `order_id`: its kinds in the order
 /// they are applied, the Linux scope, `macos_major` and `return_secs` of its group's table
 /// ([`View::policy`]) for the host's platform, the run's drain deadline, else the group's, and,
-/// for `xcode` on a Mac, what the Xcode store and the table make of its last kept report. Its
-/// action is `RUN` under try 1, except for a halted turn with an operator's act queued: that act
+/// for `xcode` on a Mac, what the Xcode store and the table make of its last kept report, and, for
+/// a turn of `probe` alone in a run that names an archive to check ([`Run::xcode_sha256`]), that
+/// archive's entry alone, with nothing to remove and no default (no archive when the store no
+/// longer holds it: a plain probe). Its action is `RUN` under try 1, except for a halted turn with an operator's act queued: that act
 /// under the try it was queued under ([`RunHost::order_try`]). None for a `RUN` of a turn that
-/// holds `xcode` while the store cannot be read; an operator's act is sent then with no Xcode, so
-/// that a store fault never keeps a halted Mac from being put back.
+/// holds `xcode`, or a probe of an archive, while the store cannot be read; an operator's act is
+/// sent then with no Xcode, so that a store fault never keeps a halted Mac from being put back.
 fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Option<Ordered> {
     let node = host
         .host_id
@@ -558,6 +563,16 @@ fn ordered(view: &View<'_>, run: &Run, host: &RunHost, order_id: String) -> Opti
         (platform == hostkeeper_wire::Platform::DarwinArm64)
             .then(|| crate::maintenance_xcode::plan(view.policy, archives, installed).order())
             .flatten()
+    } else if host.kinds == [Kind::Probe] && !run.xcode_sha256.is_empty() {
+        let archives = match view.xcode_store {
+            Some(archives) => archives,
+            None if action == agent::MaintainAction::Run => return None,
+            None => &[],
+        };
+        archives
+            .iter()
+            .find(|archive| archive.sha256 == run.xcode_sha256)
+            .map(crate::maintenance_xcode::check_order)
     } else {
         None
     };

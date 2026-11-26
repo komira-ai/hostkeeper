@@ -260,20 +260,22 @@ fn a_failing_check_still_writes_the_record_naming_it() {
     assert_eq!(proof.recorded("xar.args"), "");
 }
 
-/// Proves: off macOS `hk xcode verify` refuses at once, exit 1, saying it runs on macOS only
-/// and what the system is: no program runs, nothing is written, and its help is still printed.
+/// Proves: off macOS `hk xcode verify` with no `--mac` and no `xcode_mac` is a usage error, exit
+/// 2, with the exact text that says the archive is checked on a farm Mac and how to name one: no
+/// program runs, nothing is written, and its help is still printed.
 #[test]
-fn off_macos_it_refuses_with_a_clear_message() {
+fn off_macos_without_a_mac_it_is_a_usage_error_saying_how_to_name_one() {
     let mut proof = Proof::new("linux");
     proof.mac.os = "linux";
     let archive = proof.archive(ARCHIVE);
     let ran = proof.verify(&archive);
-    assert_eq!(ran.code, 1, "{ran:?}");
+    assert_eq!(ran.code, 2, "{ran:?}");
     assert_eq!(ran.stdout, "");
     assert_eq!(
         ran.stderr,
-        "hk: hk xcode verify runs on macOS only, on the Mac the archive was downloaded to: it \
-         runs pkgutil, xip, codesign and other macOS programs, and this system is linux\n"
+        "hk: hk xcode verify checks the archive on a farm Mac, because this system is linux, \
+         which has no pkgutil, xip or codesign of Apple's: name the Mac with --mac <node-id>, or \
+         with xcode_mac in ~/.hostkeeper/hk.toml\n"
     );
     assert!(!proof.rig.path("home/.hostkeeper").exists());
     assert_eq!(proof.recorded("pkgutil.args"), "");
@@ -281,7 +283,7 @@ fn off_macos_it_refuses_with_a_clear_message() {
     assert_eq!(help.code, 0, "{help:?}");
     assert!(
         help.stdout
-            .starts_with("hk xcode verify [--apple-root FILE] <archive.xip>\n")
+            .starts_with("hk xcode verify [--apple-root FILE | --mac NODE-ID] <archive.xip>\n")
     );
 }
 

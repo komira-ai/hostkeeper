@@ -3,12 +3,14 @@
 //!
 //! A run is kept in the ops state ([`crate::ops::OpsState::maintenance_runs`]): over the files a
 //! top-level key of the ops file, written only when a run is held; over a database the rows of
-//! `maintenance_runs` and `maintenance_hosts` (migration `0029`), which no release before reads.
+//! `maintenance_runs` and `maintenance_hosts` (migration `0029`, and `0032` for the archive's
+//! column), which no release before reads.
 //! A coordinator that starts again reads its runs from there.
 //!
 //! What a run holds is what `Maintenance.Schedule` decided: its kinds, where (hosts, or a host
 //! group), its window, its batch and drain deadline (absent: each group's), whether it may take a
-//! group's last host, its reason, who scheduled it and when, and its hosts, each with its group,
+//! group's last host, its reason, who scheduled it and when, for a run of `probe` the SHA-256 of
+//! the Xcode archive its probes check, and its hosts, each with its group,
 //! its step and since when, the kinds its turn applies and, for a host or a kind left out, why.
 //! The one ending it stores is a cancel ([`Run::cancelled_unix`]); where it stands otherwise
 //! ([`Run::state_at`]) is read from its hosts' steps and the clock, so a window that ends needs
@@ -327,6 +329,13 @@ pub(crate) struct Run {
     /// When an operator cancelled it; none while no one has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cancelled_unix: Option<u64>,
+    /// For a run of `probe` that checks an Xcode archive: its SHA-256, 64 lower-case hex
+    /// characters, an archive the Xcode store held when the run was scheduled; each host's probe
+    /// turn is ordered to check it ([`crate::decide_maintenance`]). Empty: none, the probes make
+    /// their reads. Stored with the run (the ops file's key `xcode_sha256`, which a run without
+    /// one omits; the column `0032` adds to `maintenance_runs`, `NULL` for none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) xcode_sha256: String,
     /// Its hosts, by node id.
     #[serde(default)]
     pub(crate) hosts: Vec<RunHost>,

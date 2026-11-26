@@ -71,8 +71,8 @@ export function closeWords(code, reason, opened) {
 }
 
 // The words for a refusal of Console.Open that the operator can act on; any other is shown as its
-// code and token.
-const REFUSALS = {
+// code and token. The Desktop page says the same, but for what differs on a Mac (`desktop.js`).
+export const REFUSALS = {
   no_console_access: "You are not named in the coordinator's console operators file, so you cannot open one.",
   console_busy: "Someone already holds this host's console: see the open sessions below.",
   too_many_sessions: "The coordinator holds as many console sessions as it allows. Close one and try again.",

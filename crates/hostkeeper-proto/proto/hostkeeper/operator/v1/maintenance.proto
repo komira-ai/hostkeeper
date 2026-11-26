@@ -231,6 +231,14 @@ message ScheduleMaintenanceRequest {
   // Store the run. Without it nothing is stored, no host is ordered, and the answer is the run as
   // it would be.
   bool confirm = 10;
+  // With `kinds` exactly `[probe]`: the SHA-256 of an archive the Xcode store holds, 64 lower-case
+  // hex characters, for each host's probe to check instead of making its reads: fetched from the
+  // store while the host serves, then, drained, Apple's signature, the expansion, the version and
+  // build, and the app's code signature (docs/operations/maintenance.md, "Probe: check an Xcode
+  // archive"). Such a run holds only a host whose group keeps Xcode (`xcode_keep` 1 or more), the
+  // hosts that may read the store. Empty: none. With another kind, not 64 lower-case hex, or naming
+  // an archive the store does not hold: `invalid_request`.
+  string xcode_sha256 = 11;
 }
 
 message ScheduleMaintenanceResponse {
@@ -348,6 +356,9 @@ message MaintenanceRun {
   repeated string halted_groups = 15;
   // How many hosts it holds, skipped ones included.
   uint32 host_count = 16;
+  // For a run of `probe`: the SHA-256 of the Xcode archive its probes check
+  // (`ScheduleMaintenanceRequest.xcode_sha256`); empty: none, the probes make their reads.
+  string xcode_sha256 = 17;
 }
 
 // One host's turn of a run.

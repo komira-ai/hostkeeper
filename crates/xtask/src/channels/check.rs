@@ -11,6 +11,11 @@
 //! unit is enabled if the spec says the install enables it and is not otherwise, and no process
 //! of the program runs.
 //!
+//! `apt-get update` is asked again after each of [`UPDATE_PAUSES`] while it fails only because an
+//! Ubuntu mirror served an index file that does not match its `Release` yet (apt's "Mirror sync in
+//! progress?" or "Hash Sum mismatch", which apt does not retry itself); a failure of the
+//! repository's own index, or any other failure, ends the check at once.
+//!
 //! The programs (`apt-get`, `dpkg`, `dpkg-query`, `getent`, `curl`, the installed binary) run behind
 //! [`Host`], so a test answers in place of them; `--root` is where the checked system is (`/`),
 //! so a test points it at a scratch directory.
@@ -21,6 +26,7 @@
 //! [`Exec`](crate::release::ports::Exec) port.
 
 use std::path::Path;
+use std::time::Duration;
 
 use super::aws::{Answer, run_program};
 use super::host::Host;
@@ -38,6 +44,19 @@ pub(crate) const SOURCES: &str = "etc/apt/sources.list.d/komira.sources";
 
 /// The keyring's file name in the repository.
 pub(crate) const KEYRING_NAME: &str = "komira-archive-keyring.gpg";
+
+/// The pauses before each repeated `apt-get update` of an Ubuntu mirror out of sync: a mirror's
+/// cache can serve an older index than its `Release` names for a few minutes, so `apt-get update`
+/// is run at most `UPDATE_PAUSES.len() + 1` times in about three and a half minutes.
+const UPDATE_PAUSES: [Duration; 3] = [
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+];
+
+/// The line apt adds when an index file failed and the update went on without it.
+const INDEX_FILES_IGNORED: &str =
+    "Some index files failed to download. They have been ignored, or old ones used instead.";
 
 /// The programs of the checked system, run through an [`Exec`] with the frontend of `debconf`
 /// set to `noninteractive`, as a package install in a container needs.
@@ -164,6 +183,69 @@ pub(crate) struct Apt<'a> {
     pub(crate) commit: &'a str,
     /// The repository, `https://packages.komira.ai/apt`.
     pub(crate) apt_url: &'a str,
+    /// Waits out one of [`UPDATE_PAUSES`] before `apt-get update` is run again
+    /// (`std::thread::sleep`, bar the tests, which record it).
+    pub(crate) pause: &'a dyn Fn(Duration),
+}
+
+/// Whether a failed `apt-get update` failed only because a mirror other than the repository at
+/// `apt_url` is out of sync: every error is a failed fetch apt suspects of a mirror sync ("Mirror
+/// sync in progress?") or a hash mismatch, of a URL not below `apt_url`, but for apt's closing
+/// line that index files were ignored; and there is at least one such fetch. The wording is apt's
+/// (English, `E: ` lines) in the job's image, which is pinned by digest: an image whose apt words
+/// it otherwise makes every failure final, as before this repeat, never a failure ignored.
+fn mirror_out_of_sync(stderr: &str, apt_url: &str) -> bool {
+    let ours = format!("{apt_url}/");
+    let mut fetches = 0;
+    for line in stderr.lines() {
+        let Some(error) = line.strip_prefix("E: ") else {
+            continue;
+        };
+        if let Some(fetch) = error.strip_prefix("Failed to fetch ") {
+            let out_of_sync =
+                fetch.contains("Mirror sync in progress?") || fetch.contains("Hash Sum mismatch");
+            if fetch.starts_with(&ours) || !out_of_sync {
+                return false;
+            }
+            fetches += 1;
+        } else if error != INDEX_FILES_IGNORED {
+            return false;
+        }
+    }
+    fetches > 0
+}
+
+/// `apt-get update`, run again after each of [`UPDATE_PAUSES`] while it fails only because an
+/// Ubuntu mirror is out of sync ([`mirror_out_of_sync`]): one notice per repeat, printed with the
+/// check's result.
+fn update(host: &dyn Host, r: &Apt) -> Result<Vec<String>, Error> {
+    let mut notices = Vec::new();
+    let mut pauses = UPDATE_PAUSES.iter();
+    loop {
+        let answer = host.run(Path::new("apt-get"), &strings(&["update"]))?;
+        if answer.ok {
+            return Ok(notices);
+        }
+        let stderr = answer.stderr.trim_end();
+        match pauses.next() {
+            Some(wait) if mirror_out_of_sync(stderr, r.apt_url) => {
+                notices.push(format!(
+                    "::notice title=check-apt::apt-get update found an Ubuntu mirror out of sync with its Release file; run again after {}s",
+                    wait.as_secs()
+                ));
+                (r.pause)(*wait);
+            }
+            _ if notices.is_empty() => {
+                return Err(Error::Failed(format!("apt-get update failed: {stderr}")));
+            }
+            _ => {
+                return Err(Error::Failed(format!(
+                    "apt-get update failed (run {} times): {stderr}",
+                    notices.len() + 1
+                )));
+            }
+        }
+    }
 }
 
 /// The deb822 source of the suite `testing`, signed by the keyring alone.
@@ -271,7 +353,7 @@ pub(crate) fn check_apt(host: &dyn Host, r: &Apt) -> Result<Vec<String>, Error> 
         )));
     }
     // A clean image has no certificates: the first update goes over the mirrors' plain HTTP.
-    must(host, "apt-get", &["update"])?;
+    let mut lines = update(host, r)?;
     must(
         host,
         "apt-get",
@@ -314,7 +396,7 @@ pub(crate) fn check_apt(host: &dyn Host, r: &Apt) -> Result<Vec<String>, Error> 
     std::fs::create_dir_all(dir).map_err(Error::spawn(format!("create {}", dir.display())))?;
     std::fs::write(&sources, source(r.apt_url, r.arch))
         .map_err(Error::spawn(format!("write {}", sources.display())))?;
-    must(host, "apt-get", &["update"])?;
+    lines.extend(update(host, r)?);
     for prerequisite in r.package.prerequisites {
         must(
             host,
@@ -345,14 +427,15 @@ pub(crate) fn check_apt(host: &dyn Host, r: &Apt) -> Result<Vec<String>, Error> 
     if !problems.is_empty() {
         return Err(Error::Refused(problems));
     }
-    Ok(vec![format!(
+    lines.push(format!(
         "check-apt: {} {} installed from the suite testing on {}; it says {said:?}; its {} files are there; {}",
         r.package.name,
         r.version,
         r.arch,
         r.package.files.len(),
         outcome(r.package)
-    )])
+    ));
+    Ok(lines)
 }
 
 /// What the check found the install to have done to the service, for the line it prints.

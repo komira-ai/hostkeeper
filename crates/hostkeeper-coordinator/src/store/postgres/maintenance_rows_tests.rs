@@ -19,6 +19,9 @@ fn rows_of(runs: &[Run]) -> Tables {
     tables
 }
 
+/// The SHA-256 of the Xcode archive the run [`full`] checks.
+const ARCHIVE: &str = "abababababababababababababababababababababababababababababababab";
+
 /// A run with every optional value set, and two hosts.
 fn full(id: &str) -> Run {
     Run {
@@ -35,6 +38,7 @@ fn full(id: &str) -> Run {
         by: "alice".to_owned(),
         scheduled_unix: 1_900_000_000,
         cancelled_unix: Some(1_900_000_100),
+        xcode_sha256: ARCHIVE.to_owned(),
         hosts: vec![
             RunHost {
                 host_id: "h2".to_owned(),
@@ -84,6 +88,7 @@ fn bare(id: &str) -> Run {
         by: "bob".to_owned(),
         scheduled_unix: 1_900_000_001,
         cancelled_unix: None,
+        xcode_sha256: String::new(),
         hosts: vec![RunHost {
             host_id: "h3".to_owned(),
             host_group: String::new(),
@@ -123,9 +128,9 @@ fn the_sample_runs_round_trip_through_their_rows() {
 /// the window, batch, drain deadline, cancel and position as numbers) and each of its hosts one
 /// row of `maintenance_hosts` (step and skip by name, an empty group `NULL`, its offers after a
 /// deferral and its bake as numbers, a queued act by its name and `NULL` for none, and the last
-/// order try as a number), and a run with
-/// nothing set has `NULL` for its group, batch, drain deadline and cancel, and an empty list for
-/// its kinds and hosts.
+/// order try as a number), a run that checks an Xcode archive has its SHA-256 as text, and a run with
+/// nothing set has `NULL` for its group, batch, drain deadline, cancel and archive, and an empty
+/// list for its kinds and hosts.
 ///
 /// Catches: a value stored as a zero or an empty text where the run left it out, and a name
 /// written other than the one the file writes.
@@ -148,6 +153,7 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
             Val::Int(1_900_000_000),
             Val::Int(1_900_000_100),
             Val::Int(0),
+            s(ARCHIVE),
         ]
     );
     assert_eq!(
@@ -166,6 +172,7 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
             Val::Int(1_900_000_001),
             Val::Null,
             Val::Int(1),
+            Val::Null,
         ]
     );
     assert_eq!(
@@ -211,6 +218,28 @@ fn the_rows_of_a_run_and_of_a_host_hold_the_values_by_name_and_null_for_none() {
         [Val::Null, Val::Int(0)]
     );
     assert_eq!(tables["maintenance_hosts"].len(), 3);
+}
+
+/// Proves: the SHA-256 of the archive a run checks is column `xcode_sha256` of its row, `NULL` for a
+/// run that checks none, and a row whose column is `NULL` (as one written before `0032` has it)
+/// reads as a run with an empty `xcode_sha256`, while a row with the text reads it back.
+///
+/// Catches: an archive dropped by the rows (a probe run that checks nothing after a restart), or
+/// an empty text read where a run named none.
+#[test]
+fn the_archive_a_run_checks_is_a_nullable_column_that_reads_back() {
+    let mut run = bare("run-a");
+    assert_eq!(
+        rows_of(&[run.clone()])["maintenance_runs"][&key(&["run-a"])][13],
+        Val::Null
+    );
+    run.xcode_sha256 = ARCHIVE.to_owned();
+    let tables = rows_of(&[run.clone()]);
+    assert_eq!(tables["maintenance_runs"][&key(&["run-a"])][13], s(ARCHIVE));
+    assert_eq!(runs_of(&tables).expect("back")[0].xcode_sha256, ARCHIVE);
+    let mut before = tables;
+    set_run(&mut before, 13, Val::Null);
+    assert_eq!(runs_of(&before).expect("back")[0].xcode_sha256, "");
 }
 
 /// Proves: the runs read back in the order they are held and each run's hosts in theirs, not in
@@ -342,6 +371,10 @@ fn a_run_row_this_build_cannot_read_is_refused_naming_the_run_and_the_reason() {
     assert_eq!(
         edited(|t| set_run(t, 12, s("first"))),
         at("a position is not a number")
+    );
+    assert_eq!(
+        edited(|t| set_run(t, 13, Val::Int(1))),
+        at("a column is not text")
     );
     assert_eq!(
         edited(|t| set_host(t, 10, s("nap"))),

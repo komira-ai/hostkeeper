@@ -444,6 +444,7 @@ export namespace hostkeeper_operator_v1 {
     endedUnix?: string;
     haltedGroups?: string[];
     hostCount?: number;
+    xcodeSha256?: string;
   }
   export type MaintenanceSkip =
     | "MAINTENANCE_SKIP_UNSPECIFIED"
@@ -736,6 +737,7 @@ export namespace hostkeeper_operator_v1 {
     reason?: string;
     takeLastHost?: boolean;
     confirm?: boolean;
+    xcodeSha256?: string;
   }
   export interface ScheduleMaintenanceResponse { run?: hostkeeper_operator_v1.MaintenanceRun; hosts?: hostkeeper_operator_v1.MaintenanceHost[]; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface SecretInfo { kind?: string; version?: number; fingerprintSha256?: string; notAfterUnix?: string; createdUnix?: string; supersededUnix?: string; }

@@ -6,6 +6,11 @@
 //! them: a flag given on the command line wins, and a flag neither gives stays missing, so the
 //! verb's own usage error is the one said.
 //!
+//! The key `xcode_mac`, also a string, is the default of the verb flag `--mac` of `hk xcode add`
+//! and `hk xcode verify`: the node id of the farm Mac that checks an Xcode archive when the system
+//! has no macOS programs of its own ([`fill_mac`], which only those two verbs run off macOS). It
+//! is a value of the operator's own, never written by `hk settings init`, and ignored on macOS.
+//!
 //! - The file is read only when a flag a verb needs is missing, so a command line that gives all
 //!   of them never fails because of the file, and `--help` and `--version` never read it.
 //! - `token_file` is a default only when no other credential is given: `--token-stdin` or
@@ -35,6 +40,7 @@ struct Settings {
     endpoint: Option<Vec<u8>>,
     ca_file: Option<Vec<u8>>,
     token_file: Option<Vec<u8>>,
+    xcode_mac: Option<Vec<u8>>,
 }
 
 /// The settings file of the user, `None` when there is none (no home, no `~/.hostkeeper`, no
@@ -59,6 +65,7 @@ fn load(w: &mut World<'_>) -> Flow<Option<Settings>> {
             "endpoint" => &mut settings.endpoint,
             "ca_file" => &mut settings.ca_file,
             "token_file" => &mut settings.token_file,
+            "xcode_mac" => &mut settings.xcode_mac,
             _ => {
                 let _ = writeln!(
                     w.stderr,
@@ -79,9 +86,31 @@ fn load(w: &mut World<'_>) -> Flow<Option<Settings>> {
 /// Gives each of `--endpoint`, `--ca-file` and `--token-file` that `globals` lack the value the
 /// settings file has for it, when it has one.
 pub(crate) fn fill(w: &mut World<'_>, globals: &mut Globals) -> Flow<()> {
+    fill_with(w, globals, &mut None, false)
+}
+
+/// [`fill`], and the `--mac` of the verb too: when `mac` is `None` it is given the file's
+/// `xcode_mac`, when the file has one, and the file is read for it even when the three flags are
+/// all given.
+pub(crate) fn fill_mac(
+    w: &mut World<'_>,
+    globals: &mut Globals,
+    mac: &mut Option<Vec<u8>>,
+) -> Flow<()> {
+    let wanted = mac.is_none();
+    fill_with(w, globals, mac, wanted)
+}
+
+/// The body of [`fill`] and [`fill_mac`]; `want_mac` is whether `mac` is to be filled.
+fn fill_with(
+    w: &mut World<'_>,
+    globals: &mut Globals,
+    mac: &mut Option<Vec<u8>>,
+    want_mac: bool,
+) -> Flow<()> {
     let token_default =
         globals.token_file.is_none() && !globals.token_stdin && globals.audience.is_none();
-    if globals.endpoint.is_some() && globals.ca_file.is_some() && !token_default {
+    if globals.endpoint.is_some() && globals.ca_file.is_some() && !token_default && !want_mac {
         return Ok(());
     }
     let Some(file) = load(w)? else {
@@ -91,6 +120,9 @@ pub(crate) fn fill(w: &mut World<'_>, globals: &mut Globals) -> Flow<()> {
     globals.ca_file = globals.ca_file.take().or(file.ca_file);
     if token_default {
         globals.token_file = file.token_file;
+    }
+    if want_mac {
+        *mac = file.xcode_mac;
     }
     Ok(())
 }

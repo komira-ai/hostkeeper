@@ -65,6 +65,7 @@ pub(crate) fn sample() -> Vec<Run> {
         by: "operator ana".to_owned(),
         scheduled_unix: 1_900_000_000,
         cancelled_unix: None,
+        xcode_sha256: String::new(),
         hosts: vec![
             host(
                 "host-a",
@@ -105,6 +106,7 @@ pub(crate) fn sample() -> Vec<Run> {
         by: "token ci".to_owned(),
         scheduled_unix: 1_900_000_050,
         cancelled_unix: Some(1_900_000_200),
+        xcode_sha256: String::new(),
         hosts: vec![
             RunHost {
                 applied: vec![Kind::Linux, Kind::Reboot],
@@ -132,7 +134,7 @@ pub(crate) fn sample() -> Vec<Run> {
     };
     let third = Run {
         id: "run-1900000090-2".to_owned(),
-        kinds: vec![Kind::Xcode],
+        kinds: vec![Kind::Probe],
         host_ids: vec!["host-i".to_owned()],
         host_group: String::new(),
         window_start_unix: 0,
@@ -140,10 +142,11 @@ pub(crate) fn sample() -> Vec<Run> {
         batch: Some(1),
         drain_deadline_secs: Some(900),
         take_last_host: false,
-        reason: "xcode".to_owned(),
+        reason: "check".to_owned(),
         by: "operator ana".to_owned(),
         scheduled_unix: 1_900_000_090,
         cancelled_unix: None,
+        xcode_sha256: "0123456789abcdef".repeat(4),
         hosts: vec![RunHost {
             offered_again: 1,
             ..host(
@@ -151,7 +154,7 @@ pub(crate) fn sample() -> Vec<Run> {
                 "mac",
                 Step::Staging,
                 1_900_000_100,
-                &[Kind::Xcode],
+                &[Kind::Probe],
             )
         }],
     };
@@ -190,6 +193,7 @@ fn run(id: &str, hosts: Vec<RunHost>) -> Run {
         by: "who".to_owned(),
         scheduled_unix: 500,
         cancelled_unix: None,
+        xcode_sha256: String::new(),
         hosts,
     }
 }

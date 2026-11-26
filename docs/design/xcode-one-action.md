@@ -5,8 +5,10 @@ and `home.rs`); `hk xcode verify` and its record (section 5, X2), as a hand-writ
 service `xcode` (section 2.7 last paragraph); `hk xcode add` (X3, X4): sections 2.2 to 2.4 with resume, 2.6 and 2.7, and the
 summary of the Macs (2.5, in `xcode_add/summary/`), in `crates/hostkeeper-hk/src/xcode_add/` and `xcode_push/resume.rs`; the
 coordinator's side of resume (section 3: the query, `Content-Range`, the partial, its lock, removal, lapse, `Xcode.List.uploads`,
-`crates/hostkeeper-coordinator/src/xcode_put_range.rs` and `xcode_partial.rs`); and the console's Xcode page (X5,
-`ui/pages/xcode.js`). It changes how an operator brings a new Xcode into the store of
+`crates/hostkeeper-coordinator/src/xcode_put_range.rs` and `xcode_partial.rs`); the console's Xcode page (X5,
+`ui/pages/xcode.js`); and `hk xcode add` and `hk xcode verify` from a Linux box, with their checks made by a farm Mac in a
+probe run (section 2.8, X8, `crates/hostkeeper-hk/src/xcode_farm/` and
+`crates/hostkeeper-daemon/src/maintenance_hook/xcode/check.rs`). It changes how an operator brings a new Xcode into the store of
 [maintenance-updates.md](maintenance-updates.md) section 2.0 (Built: `hk xcode-push`, `crates/hostkeeper-hk/src/xcode_push/`;
 the store and its route, `crates/hostkeeper-coordinator/src/xcode_put.rs` and `xcode_store.rs`), and how the Mac proof's
 operator-side steps are run ([mac-proof.md](../operations/mac-proof.md) MP-X1 to MP-X6). Facts about this repository were read on
@@ -83,7 +85,8 @@ gateway call. It runs the Mac's own programs through the Built `Mac` value (`xco
 `xip` and `plutil`). That value gains `codesign`, `spctl`, `xar`, `sw_vers`, `uname`, `cp` and the optional `archiveutil`, `aa`
 and `aea`, each by its Apple path in `Mac::system`, and tests replace each with the Built fake tool. Its gateway calls
 (`Xcode.List`, `Hosts.List`, `HostGroups.List`, `Maintenance.List`, `Maintenance.Get`, and `Maintenance.Schedule` without
-`confirm`) go through the Built transport. It runs on macOS only, as today.
+`confirm`) go through the Built transport. It runs on macOS; on another system its checks are made by a farm Mac (section
+2.8).
 
 ```
 hk xcode add [<version> | <path to .xip>]
@@ -265,6 +268,54 @@ way to do the same thing. The same pull request (T19) changes everything that na
 beside `list` and `remove`, so the doc generator (`doc.rs`) learns the hand-written methods of a service. That change lands
 with the first of them, `verify` (X2).
 
+### 2.8 From a Linux box: the checks on a farm Mac (Built)
+
+The owner downloads Xcode on the lead's Linux box (`docs/operations/mac-proof-owner-session.md`, step 1). Linux has no `pkgutil`,
+`xip` or `codesign`, so `hk xcode add` and `hk xcode verify` used to refuse to run there, and the archive went in through the
+`PUT` route by hand. Now both verbs run there, and the checks those programs make run on a farm Mac, through hostkeeper:
+
+```
+hk xcode add [--mac <node-id>] [<version> | <path to .xip>]
+hk xcode verify [--mac <node-id>] <path to .xip>
+```
+
+- **Which Mac.** `--mac`, else `xcode_mac` in the settings file (2.1; an older `hk` warns of the key and ignores it). There is no
+  default Mac: the check drains the Mac it runs on, so the operator names it. With neither, `hk` stops before it reads the
+  archive (exit 2). On a Mac, `--mac` is refused: the checks run there.
+- **What `hk` does on Linux before the upload.** The kind (2.3 step 1), the hash and the store (steps 2 and 3), as on a Mac. Then
+  there are no local checks: the version comes from the name (2.2's name rule) or the argument, and the build is the coordinator's
+  waiting release's for that version. A version the coordinator does not list as waiting stops the run before the upload. `hk`
+  downloads nothing on Linux (no `xcodes`).
+- **The upload** is 2.4's, unchanged.
+- **The check** is a run of the Built `probe` kind (`maintenance.md`, "Probe: drain, read, put back"), which names the stored
+  archive: `ScheduleMaintenanceRequest.xcode_sha256` (new, additive, kept in the run and shown as `MaintenanceRun.xcode_sha256`).
+  The coordinator puts the archive in the order's Built `Maintain.xcodes`, one entry. The probe's `prepare`, while the Mac serves,
+  fetches it into a directory of its own (`/Applications/.hostkeeper-check`) with the stage's fetch. Its `cutover`, drained, runs the
+  stage's checks (`pkgutil` with the Built verdict, `xip --expand`, one app, the version and build against the store's,
+  `codesign`), each kept as a probe step with a last step `verdict`. Then everything it made is removed. The answer comes back in
+  the Built `MaintenanceReport.probe`, read through `Hosts.Get`. A Mac is in such a run only when its group keeps Xcode, since
+  only such a Mac may read the store (Built: `xcode_get.rs`).
+- **The record** is `hk xcode verify`'s, `hk-xcode-verify-v1` at the same path (5.2), with a new key `farm` holding the Mac, the
+  run and its steps. Its `macos` is the Mac's and its `expansion` holds what the Mac read. The parts the farm check does not make
+  (`programs`, `signature`, `tamper`, `toc`) are `null`. `hk xcode add` reuses a passing record for the version and build as on a
+  Mac (2.3 step 5), and checks nothing again for bytes the store holds with such a record.
+- **The guarantees hold.** Nothing installs: the check moves nothing into `/Applications`, and an install is still an operator's
+  `xcode` run, whose stage checks the archive again. A failing check refuses the archive: `hk xcode add` removes it from the store
+  (`Xcode.Remove`, audited), and an archive that could not be checked stays stored but unchecked, as a Mac's upload never is, and
+  every stage still checks it. No secret goes into an argument: the Mac is given the archive's SHA-256, version, build and size, and
+  the token stays in `hk`'s `Authorization` header.
+
+**Why the probe, and not the `xcode` stage or a new kind.** The stage of an `xcode` run makes exactly these checks, but its turn
+installs when they pass, and its order names the group's kept releases, not one archive. A new kind would be a new enum value on
+both wires, a new step kind on disk and a new feature to announce. The probe already drains a named Mac on demand, runs programs as
+root and brings a bounded result back in the report (8 steps of 128 bytes). That is enough for a verdict and the values the record
+needs. What was missing is a way to name the archive (one request field, one run field, one column) and the check itself, which
+reuses the stage's code.
+
+**Not chosen.** Running `hk xcode verify` itself on the Mac: `hk` is not installed on farm Macs, the daemon does not depend on
+`hk`, and its record (tens of KB with the table of contents) does not fit a heartbeat. A route for the Mac to upload a record to the
+coordinator is a new write path from hosts, larger than this change.
+
 ## 3. The coordinator: an upload that resumes (New)
 
 Today an upload is `.upload-<sha256>-<token>-<n>` and is deleted whenever its request ends without being stored (Built:
@@ -378,7 +429,8 @@ hk xcode verify ~/Downloads/Xcode_27.2.xip
 ```
 
 It runs on the operator's Mac as the operator's user. It reads the archive only, makes nothing outside a scratch directory
-beside the archive (removed after) and `~/.hostkeeper/xcode/`, and calls no coordinator. It fetches one file: Apple's published
+beside the archive (removed after) and `~/.hostkeeper/xcode/`, and calls no coordinator. On another system it checks an archive the
+store holds on a farm Mac instead (section 2.8). It fetches one file: Apple's published
 root certificate, over HTTPS from Apple's certificate authority page, unless `--apple-root <file.cer>` gives it. Before each
 expansion it checks the free space as `hk xcode add` does (`free_space_short`). Each runbook step becomes one part of it:
 
@@ -566,6 +618,7 @@ is at 800 lines (R12).
 | X6a | Update account, wire and coordinator (6.1): `MacAccounts`, `update_account_set`, the heartbeat field, `additions_update_account.rs` | owner's answer to question 2 |
 | X6b | Update account, daemon: the fact `file_present`, the write and the making on delivery; `docs/operations/maintenance.md` | X6a |
 | X7 | Remove `hk xcode-push`, and its name from the runbook check | one minor release after X3 |
+| X8 | From a Linux box (2.8): `xcode_sha256` on the schedule and the run, the probe's archive check, `hk xcode add` and `hk xcode verify` with `--mac` | X4 |
 
 X2 can land first: it needs nothing else, and it lets the proof run now. X1 and X2 go in parallel.
 

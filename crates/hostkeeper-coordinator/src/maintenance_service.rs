@@ -17,7 +17,11 @@
 //! coordinator decides it ([`crate::maintenance_xcode`]). `probe` is never due, and a run that
 //! names no kind never takes it: it is named alone, for hosts named, and holds each of them whose
 //! last report lists `probe` on demand (a Mac's daemon of a release that has it); a host whose
-//! report does not is not in the run, as a host with nothing due is not. The run is refused, in
+//! report does not is not in the run, as a host with nothing due is not. A run of `probe` may name
+//! an archive of the Xcode store (`xcode_sha256`) for each probe to check: the run then holds only
+//! a host whose group keeps Xcode (`xcode_keep` 1 or more), since that is a host that may read the
+//! store, and stores the SHA-256 ([`Run::xcode_sha256`]), which `List`, `Get` and the answer of a
+//! `Schedule` show. The run is refused, in
 //! this order, `nothing_due` when no host waits, `last_host` when the hosts that wait are every
 //! host of one of their groups and the request does not say `take_last_host`, and
 //! `host_in_maintenance` when a host that would wait has a turn of another run that has not ended,
@@ -35,6 +39,7 @@ use std::collections::BTreeMap;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MaintenanceRefusal as Refusal;
 use hostkeeper_proto::hostkeeper::operator::v1::{MaintenanceSkip, MaintenanceState};
+use hostkeeper_release::grammar::is_sha256;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::OrderId;
 
@@ -79,6 +84,8 @@ struct Asked {
     reason: Option<String>,
     take_last_host: bool,
     confirm: bool,
+    /// The archive of the Xcode store a run of `probe` checks; empty: none.
+    xcode_sha256: String,
 }
 
 /// What the coordinator knows of a host a run may go to.
@@ -98,6 +105,9 @@ struct Seen {
     due: Vec<Kind>,
     /// Whether the kept report lists `probe` among the kinds the daemon runs when named.
     probe: bool,
+    /// Whether the host's group keeps Xcode (`xcode_keep` 1 or more), which is what lets the host
+    /// read the Xcode store.
+    keeps_xcode: bool,
     /// Why the kept report keeps the host from being ordered `macos`
     /// ([`maintenance_mac::macos_skip`]): read only when `macos` is due, so a Linux host's
     /// `no_update_account` (it reports no Mac facts) is never used.
@@ -120,7 +130,8 @@ fn kind_of(value: i32) -> Option<Kind> {
 /// and `host_group`; more than [`MAX_HOST_IDS`] host ids, one that is not a host id or one named
 /// twice; a group name that is not one; a window start without an end, an end not after its
 /// start, or an end or a drain deadline above [`MAX_SECS`]; a batch of 0 or above [`MAX_BATCH`];
-/// a reason that breaks its rule, or none with `confirm`.
+/// a reason that breaks its rule, or none with `confirm`; an `xcode_sha256` that is not 64
+/// lower-case hex characters, or one with kinds other than exactly `probe`.
 fn asked(request: &proto::ScheduleMaintenanceRequest) -> Result<Asked, Refusal> {
     let invalid = Refusal::InvalidRequest;
     let mut kinds = Vec::new();
@@ -147,6 +158,11 @@ fn asked(request: &proto::ScheduleMaintenanceRequest) -> Result<Asked, Refusal> 
         _ => return Err(invalid),
     };
     if kinds.contains(&Kind::Probe) && (kinds.len() > 1 || matches!(target, Target::Group(_))) {
+        return Err(invalid);
+    }
+    if !request.xcode_sha256.is_empty()
+        && (!is_sha256(&request.xcode_sha256) || kinds.as_slice() != [Kind::Probe])
+    {
         return Err(invalid);
     }
     let (start, end) = (request.window_start_unix, request.window_end_unix);
@@ -180,6 +196,7 @@ fn asked(request: &proto::ScheduleMaintenanceRequest) -> Result<Asked, Refusal> 
         reason,
         take_last_host: request.take_last_host,
         confirm: request.confirm,
+        xcode_sha256: request.xcode_sha256.clone(),
     })
 }
 
@@ -210,6 +227,7 @@ pub(crate) fn run_proto(run: &Run, now: u64) -> proto::MaintenanceRun {
         ended_unix,
         halted_groups: run.halted_groups(),
         host_count: u32::try_from(run.hosts.len()).unwrap_or(u32::MAX),
+        xcode_sha256: run.xcode_sha256.clone(),
     }
 }
 
@@ -256,9 +274,10 @@ fn skip_of(seen: &Seen, state: &OpsState) -> Option<Skip> {
 /// in the run (not heard since the coordinator started, or nothing due of the kinds). A host
 /// that may not be ordered `macos` waits without it, with why; it is left out when `macos` is all
 /// that is due of the kinds. A run of `probe` holds a host whose report lists it on demand, and
-/// no other.
-fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
-    if !seen.heard {
+/// no other; one that `checks` an Xcode archive holds, of those, only a host whose group keeps
+/// Xcode, whether or not the host announces `maintenance-v1`.
+fn turn_of(seen: &Seen, kinds: &[Kind], checks: bool, state: &OpsState) -> Option<RunHost> {
+    if !seen.heard || (checks && !seen.keeps_xcode) {
         return None;
     }
     let mut due: Vec<Kind> = if seen.announced && kinds == [Kind::Probe] {
@@ -326,9 +345,11 @@ impl Coordinator {
     /// `confirm` stored and audited.
     ///
     /// # Errors
-    /// `unauthorized` and `forbidden`; `invalid_request` ([`asked`]); `window_ended`;
+    /// `unauthorized` and `forbidden`; `invalid_request` ([`asked`], and an `xcode_sha256` the
+    /// Xcode store does not hold); `window_ended`;
     /// `unknown_group`; `unknown_host`; `nothing_due`; `last_host`; `host_in_maintenance`;
-    /// `store_failed` (an enrolled host or a group's hosts cannot be read, or the run not stored);
+    /// `store_failed` (an enrolled host or a group's hosts cannot be read, the Xcode store cannot
+    /// be read for an `xcode_sha256`, or the run not stored);
     /// `audit_unavailable`.
     pub(crate) fn maintenance_schedule(
         &self,
@@ -341,10 +362,14 @@ impl Coordinator {
         if asked.window_end_unix != 0 && asked.window_end_unix <= now {
             return Err(Refusal::WindowEnded);
         }
+        let checks = !asked.xcode_sha256.is_empty();
+        if checks {
+            self.require_archive(&asked.xcode_sha256)?;
+        }
         let seen = self.seen(&asked.target)?;
         let mut hosts: Vec<RunHost> = self.ops.read(|state| {
             seen.iter()
-                .filter_map(|seen| turn_of(seen, &asked.kinds, state))
+                .filter_map(|seen| turn_of(seen, &asked.kinds, checks, state))
                 .collect()
         });
         hosts.sort_by(|a, b| a.host_id.cmp(&b.host_id));
@@ -376,6 +401,7 @@ impl Coordinator {
             by: by.by_name().to_owned(),
             scheduled_unix: now,
             cancelled_unix: None,
+            xcode_sha256: asked.xcode_sha256,
             hosts,
         };
         let entry = if asked.confirm {
@@ -474,6 +500,7 @@ impl Coordinator {
                 due.dedup();
                 Seen {
                     probe,
+                    keeps_xcode: table.xcode_keep != 0,
                     heard: node.is_some(),
                     announced: fleet.announced(&id, FEATURE),
                     role: node.map(|node| node.role.clone()).unwrap_or_default(),

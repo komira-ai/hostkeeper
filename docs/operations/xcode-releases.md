@@ -58,7 +58,8 @@ The coordinator's address, the CA and the token file come from the settings file
 same command for one release: it says `hk xcode-push is now hk xcode add` on stderr and then does what
 `hk xcode add` does.
 
-It runs on macOS only (anywhere else it says so and stops). One run at a time per Mac: the lock
+On a box that is not a Mac it runs too, with the checks made on a farm Mac
+([below](#from-a-linux-box-hk-xcode-add---mac)). One run at a time per box: the lock
 `~/.hostkeeper/xcode/.lock` holds the running process's id, and a second run exits 1 naming it and
 does not wait; a lock whose process is gone is taken over. In order, and a step that fails uploads
 nothing:
@@ -160,16 +161,80 @@ sync, audit and store it. A refusal of the store is said in words with what to d
 1. An upload cut off before its answer keeps nothing in the store and is run again. `--token-stdin` is
 not taken: the terminal is `xcodes`'s, for the two-factor prompt.
 
+## From a Linux box: `hk xcode add --mac`
+
+Linux has no `pkgutil`, `xip` or `codesign`, so on a box that is not a Mac `hk xcode add` uploads
+first and has a farm Mac check what it stored. The Mac is named with `--mac <node-id>`, or once in
+the settings file as `xcode_mac = "<node-id>"`; with neither, `hk` says so and stops (exit 2) before
+it reads the archive. The Mac must be one whose hostkeeper lists `probe` on demand, in a group that
+keeps Xcode (`xcode_keep` 1 or more). The proof Mac is one.
+
+```
+hk xcode add --mac mac-studio-01
+hk xcode add --mac mac-studio-01 ~/Downloads/Xcode_27.2.xip
+hk xcode verify --mac mac-studio-01 ~/Downloads/Xcode_27.2.xip
+```
+
+What changes from the steps above:
+
+- **The archive** is found the same way, but `hk` downloads nothing: a version with no archive in
+  `~/Downloads` ends (exit 1) saying to download `Xcode_<version>.xip` in a browser from Apple's
+  developer downloads page.
+- **No local checks but the kind.** Steps 5 and 6 do not run. The version is the one given, or the
+  one waiting, or read from the archive's name (`Xcode_<version>.xip`; any other name stops the
+  run, exit 1). The build is the one the coordinator lists for that version as waiting; a version it
+  does not list as waiting stops the run before the upload (exit 1), since only macOS's `xip` can
+  read the build from the archive.
+- **The upload** is step 8 as it is, with its resume.
+- **The check.** `hk` schedules one probe run on the Mac that names the stored archive
+  ([maintenance.md](maintenance.md#probe-check-an-xcode-archive)): `--kinds probe`, the Mac,
+  `--xcode-sha256`, `--take-last-host true`, a reason naming the release. It says the run's id and
+  the line that cancels it, then follows the run every 15 seconds and says each step it reaches:
+  the fetch from the store while the Mac serves, the drain, the checks, the put back. It has no time
+  limit of its own; the turn ends by itself. The Mac checks Apple's signature (`pkgutil`), the
+  expansion (`xip`), the app's version and build against the store's, and `codesign`, and then
+  removes everything it made.
+  - **A pass** writes the record of `hk xcode verify` to `~/.hostkeeper/xcode/<sha256>.json`. It
+    has the steps the Mac reported under `farm`, the Mac's macOS under `macos`, and the version
+    and build under `expansion`. The parts the Mac does not make (`programs`, `signature`,
+    `tamper`, `toc`) are `null`. Then `checked on <mac> (run <id>): pass` and the Macs (step 9),
+    exit 0. A later run of bytes the store holds, with that record, checks nothing again; bytes
+    the store no longer holds are uploaded again, with the record's version and build, and checked
+    again.
+  - **A check that fails** (`xcode_archive_not_apple`, `xcode_expand_failed`,
+    `xcode_build_mismatch`, `xcode_signature_invalid`, or a stage that finds the store's bytes are
+    not its record's or are an encrypted archive) writes the record with its `fail: ...` verdict and
+    removes the archive from the store (`Xcode.Remove`, audited, with a reason naming the Mac, the
+    run and the check). It prints `refused: <verdict>` and exits 1, so no Mac is ever due it.
+  - **A check that could not be made** leaves the archive stored and unchecked, writes no record,
+    says why and exits 1, with `hk xcode verify --mac <node-id> <archive>` to try again; a refusal
+    of the run exits as a refused call does (2 for `nothing_due`, not such a Mac, and for
+    `host_in_maintenance`, it is in another run; 1 for `unknown_host`). The cases: a refusal of the
+    run; a deferred stage (no room, the store not reached), which `hk` cancels so the Mac is not
+    offered it again; a halted turn, which leaves the Mac drained until an operator acts, as any
+    halted turn does; a daemon or a coordinator of a release before this one, which makes a plain
+    probe (`hk` cancels the run at once when the coordinator's answer does not name the archive).
+- **The token** stays in the request's `Authorization` header, as everywhere; the Mac is given
+  nothing secret.
+
+`hk xcode verify --mac <node-id> <archive>` does the same check of an archive the store already holds
+(it uploads nothing; an archive the store does not hold ends with exit 1 and the `hk xcode add`
+line). It prints the record on stdout as on a Mac and exits 0 on a pass and 1 otherwise, or when
+the record cannot be kept. It removes
+nothing; on a failing check it prints the `hk xcode remove` line. `--apple-root` has no use off macOS
+and is refused. On a Mac, `--mac` is refused: the checks run on that Mac.
+
 ## Pushing an archive: `PUT /v1/xcode/<sha256>?version=<version>&build=<build>`
 
 The route is on the private listener, the one operators use. The caller sends an operator token as the
 bearer (an operator token or a user's API token; CI's token is refused) and the archive as the body; the
 path names the SHA-256 of the body as 64 lowercase hex characters, and the query holds exactly `version`
 (digits and dots, `27.2`) and `build` (letters, digits and dots, at most 32, `27B52`), each once.
-`hk xcode-push` makes it from a Mac; from an operator's Linux box, where `hk xcode-push` does not run,
-any HTTPS client that reads the bearer from a file makes it the same way. The store checks no
-signature: each Mac checks Apple's signature, the version and the build when it stages the archive,
-before it installs it ([maintenance.md](maintenance.md), "From a box that is not a Mac").
+`hk xcode add` makes it, from a Mac or from an operator's Linux box. The store checks no signature:
+from a Linux box, `hk xcode add` has a farm Mac check the stored archive and removes it when a check
+fails ([below](#from-a-linux-box-hk-xcode-add---mac)), and each Mac checks Apple's signature, the
+version and the build again when it stages the archive, before it installs it
+([maintenance.md](maintenance.md), "From a box that is not a Mac").
 
 The checks run in this order, and a refusal stores nothing. Each answer is JSON, `{"error":"<code>"}`:
 

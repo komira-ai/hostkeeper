@@ -3,7 +3,7 @@
 //! read-only programs ([`STEPS`]) the way it runs its own, and keeps what each gave in the probe
 //! file beside the run record ([`PROBE_FILE`]), which the daemon's report carries
 //! (`MaintenanceReport.probe`) until the next probe. It installs nothing and changes nothing on the
-//! Mac but that file.
+//! Mac but that file, unless the order names an Xcode archive to check (below).
 //!
 //! **Where the programs run.** In the hook's own launchd job, which the daemon starts in the
 //! System domain as root for each step of a run (`hostkeeper-launchd`'s launcher), each as a child
@@ -21,8 +21,15 @@
 //!
 //! **Output.** Each step keeps the non-empty lines of its standard output, then of its standard
 //! error, each trimmed and joined by `; `, cut at a character's boundary to
-//! [`MAX_PROBE_OUTPUT`] bytes (`cut` says so). No program is given a password or a parameter of
-//! the order, and none of the programs reads a secret.
+//! [`MAX_PROBE_OUTPUT`] bytes (`cut` says so). No program is given a password, and none of the
+//! programs reads a secret.
+//!
+//! **An archive to check.** When the order's `Maintain.xcodes` names an Xcode archive (the probe of
+//! `hk xcode add` and `hk xcode verify`) and the kind has an [`ArchiveCheck`], `prepare` fetches the
+//! archive from the coordinator's store into `/Applications/.hostkeeper-check`, and `cutover` runs
+//! the archive check's steps in place of [`STEPS`] and removes that directory: the Mac's programs
+//! are given the archive's path, nothing is installed, and nothing is left in `/Applications`
+//! ([`super::xcode::check`]). With no archive in the order, the probe is as above.
 
 use std::fs;
 use std::io;
@@ -38,6 +45,7 @@ use prost::Message as _;
 use super::kind::{Cutover, KindError, MaintenanceKind};
 use super::macos::{HostPrograms, Programs};
 use super::params::MaintainParams;
+use super::xcode::check::ArchiveCheck;
 use crate::unix_clock::SystemUnixClock;
 
 /// The file of the last probe, beside the run record: a `MaintenanceProbe`, encoded.
@@ -116,6 +124,8 @@ pub struct ProbeKind {
     /// The run's directory, where the probe file goes; `None` for parameters on standard input,
     /// where no `cutover` runs.
     dir: Option<PathBuf>,
+    /// The check of the Xcode archive an order names; `None` for a probe that checks none.
+    archive: Option<ArchiveCheck>,
 }
 
 impl ProbeKind {
@@ -129,12 +139,22 @@ impl ProbeKind {
             programs,
             clock,
             dir: dir.map(Path::to_path_buf),
+            archive: None,
         }
     }
 
-    /// The probe of this Mac, in the run's directory `dir`.
+    /// This probe, checking the Xcode archive an order names with `check`.
+    #[must_use]
+    pub fn with_archive_check(mut self, check: ArchiveCheck) -> ProbeKind {
+        self.archive = Some(check);
+        self
+    }
+
+    /// The probe of this Mac, in the run's directory `dir`, checking an archive an order names
+    /// with the Mac's own ports ([`ArchiveCheck::at_host`]).
     pub fn at_host(dir: Option<&Path>) -> ProbeKind {
         ProbeKind::new(Box::new(HostPrograms), Box::new(SystemUnixClock), dir)
+            .with_archive_check(ArchiveCheck::at_host())
     }
 
     /// Every step of [`STEPS`], in order.
@@ -185,22 +205,32 @@ impl ProbeKind {
 }
 
 impl MaintenanceKind for ProbeKind {
-    /// Nothing to stage.
-    fn prepare(&self, _params: &MaintainParams) -> Result<(), KindError> {
-        Ok(())
+    /// Nothing to stage, unless the order names an archive and the kind checks one: the archive
+    /// is fetched ([`ArchiveCheck::prepare`]).
+    fn prepare(&self, params: &MaintainParams) -> Result<(), KindError> {
+        match &self.archive {
+            Some(check) => check.prepare(&params.maintain().xcodes),
+            None => Ok(()),
+        }
     }
 
-    /// Runs every step and writes the probe file; applied, its version the number of steps run.
-    /// A hook that keeps no run directory runs no step.
+    /// Runs every step (of [`STEPS`], or of the archive check when the order names an archive and
+    /// the kind checks one) and writes the probe file; applied, its version the number of steps
+    /// run. A hook that keeps no run directory runs no step.
     fn cutover(&self, params: &MaintainParams) -> Result<Cutover, KindError> {
         let unwritten = |error: io::Error| KindError::Failed {
             reason: REASON_PROBE_UNWRITTEN,
             detail: format!("the probe file could not be written: {error}"),
         };
         let path = self.file().map_err(unwritten)?;
+        let xcodes = &params.maintain().xcodes;
+        let steps = match &self.archive {
+            Some(check) if !xcodes.is_empty() => check.steps(xcodes),
+            _ => self.steps(),
+        };
         let probe = MaintenanceProbe {
             run_id: params.run_id().to_owned(),
-            steps: self.steps(),
+            steps,
             probed_unix: self.clock.unix_secs(),
         };
         write_probe(&path, &probe).map_err(unwritten)?;

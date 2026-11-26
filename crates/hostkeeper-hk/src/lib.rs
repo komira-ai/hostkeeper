@@ -6,14 +6,18 @@
 //! is built in: [`ssh`] is `hk ssh`, `hk ssh-proxy`, `hk ssh-revoke`, `hk ssh-status` and the
 //! `hk ssh-known-host` that ssh runs. [`xcode_add`] is `hk xcode add` (and `hk xcode-push`, its
 //! second name for one release), which brings an Xcode release into the coordinator's Xcode store
-//! from the operator's own Mac; [`xcode_push`] holds the programs of the Mac and the steps it
-//! shares with `hk xcode verify`. [`xcode_verify`] is
+//! from the operator's own Mac, or, off macOS, from any system; [`xcode_push`] holds the programs
+//! of the Mac and the steps it shares with `hk xcode verify`. [`xcode_verify`] is
 //! `hk xcode verify`, a hand-written method of the generated service `xcode` ([`hand`]) that
-//! checks an archive there and keeps the record of what it found ([`xcode_record`]). [`tailnet_wait`] is
+//! checks an archive there and keeps the record of what it found ([`xcode_record`]). Off macOS,
+//! where there are no programs of Apple's to run, both have a farm Mac named by `--mac` (or the
+//! settings key `xcode_mac`) check the archive as a maintenance run of the kind `probe`, which
+//! [`xcode_farm`] schedules, reads and records. [`tailnet_wait`] is
 //! `hk tailnet-wait`, which waits for the coordinator after a CI runner joined the tailnet and
 //! rejoins it once when the coordinator does not answer. [`settings`] is the file
 //! `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their
-//! defaults, and `hk settings init`, which writes it; [`home`] makes and checks `~/.hostkeeper`.
+//! defaults (and `--mac` of the two Xcode verbs, as `xcode_mac`), and `hk settings init`, which
+//! writes it; [`home`] makes and checks `~/.hostkeeper`.
 //!
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
 //!   command table, the streams and whether stderr is a terminal, the home directory and the user's id, the runner's token request, the program
@@ -48,6 +52,7 @@ pub mod tailnet_wait;
 #[cfg(test)]
 mod tests;
 mod xcode_add;
+mod xcode_farm;
 pub mod xcode_push;
 mod xcode_record;
 mod xcode_verify;

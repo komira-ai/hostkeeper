@@ -13,6 +13,9 @@
 //! The programs are the [`Mac`]'s. [`target`] reads the coordinator's address, the CA and the token
 //! before anything else, so that a mistake in any ends the run at once. The token is never an
 //! argument, an environment variable or an output line of a program `hk` runs.
+//!
+//! Off macOS none of the programs is run: only [`upload`] and [`target`] are used there, and a
+//! farm Mac does the checking of [`archive`] and [`signature`] ([`crate::xcode_farm`]).
 
 pub(crate) mod archive;
 mod resume;
@@ -36,7 +39,8 @@ use crate::{Flow, PROGRAM, Stop, World};
 /// the two things `verify` reads from outside: Apple's root certificate and a clock.
 #[derive(Debug, Clone)]
 pub struct Mac {
-    /// The operating system, as `std::env::consts::OS` names it: both run only on `macos`.
+    /// The operating system, as `std::env::consts::OS` names it: both run the programs below only
+    /// on `macos`; anywhere else a farm Mac checks the archive.
     pub os: &'static str,
     /// `xcodes`, which downloads an Xcode in the operator's session.
     pub xcodes: PathBuf,
@@ -171,14 +175,19 @@ pub(crate) struct Target {
     pub(crate) timeout_secs: u32,
 }
 
-/// The coordinator and the token of `globals` for the verb `word` (`xcode add`, `xcode-push`):
-/// the usage error when a flag is missing, refused or unreadable.
+/// The coordinator and the token of `globals` for the verb `word` (`xcode add`, `xcode-push`,
+/// `xcode verify` off macOS): the usage error when a flag is missing, refused or unreadable.
 pub(crate) fn target(globals: &Globals, word: &str) -> Flow<Target> {
     if globals.token_stdin || globals.audience.is_some() || globals.response_file.is_some() {
+        // `hk xcode verify` runs no `xcodes`, so there is no two-factor prompt to leave stdin for.
+        let why = if word == "xcode verify" {
+            ""
+        } else {
+            " (stdin is the terminal xcodes asks a two-factor code on)"
+        };
         return Err(Stop::usage(format!(
             "{PROGRAM} {word} takes --token-file only: --token-stdin, --github-oidc-audience \
-             and --response-file are not for it (stdin is the terminal xcodes asks a two-factor \
-             code on)"
+             and --response-file are not for it{why}"
         )));
     }
     let (Some(endpoint), Some(ca_file), Some(token_file)) =

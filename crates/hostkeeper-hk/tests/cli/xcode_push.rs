@@ -467,11 +467,13 @@ fn a_refusal_before_the_body_is_read_before_any_byte_of_the_archive_is_sent() {
     assert_eq!(bytes, 0, "bytes of the archive reached the coordinator");
 }
 
-/// Proves: off macOS the push refuses at once, exit 1, with a message that says it runs on the
-/// Mac signed in to the Apple developer account; no program runs and nothing is uploaded. Its
-/// help is still printed.
+/// Proves: off macOS the push, which is `hk xcode add`, checks the archive on a farm Mac and so
+/// needs one named: with no `--mac` and no `xcode_mac` it is a usage error, exit 2, with the exact
+/// text that says the archive is checked on a farm Mac and how to name it; no program runs, nothing
+/// is uploaded or asked, and `~/.hostkeeper` is not made. Its help is still printed and names
+/// `--mac`.
 #[test]
-fn off_macos_it_refuses_with_a_clear_message() {
+fn off_macos_without_a_mac_the_push_is_a_usage_error_saying_how_to_name_one() {
     let mut push = Push::new("linux");
     push.mac.os = "linux";
     let archive = push.archive();
@@ -480,14 +482,16 @@ fn off_macos_it_refuses_with_a_clear_message() {
     assert_eq!(
         (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
         (
-            1,
+            2,
             "",
-            "hk xcode-push is now hk xcode add\nhk: hk xcode-push runs on macOS only, on the Mac signed in to the Apple developer \
-             account: it runs xcodes, pkgutil and xip, which are macOS programs, and this system \
-             is linux\n"
+            "hk xcode-push is now hk xcode add\nhk: hk xcode-push checks the archive on a farm Mac, \
+             because this system is linux, which has no pkgutil, xip or codesign of Apple's: name \
+             the Mac with --mac <node-id>, or with xcode_mac in ~/.hostkeeper/hk.toml\n"
         )
     );
     assert!(puts(&server).is_empty());
+    assert!(server.seen().is_empty());
+    assert!(!push.rig.path("home/.hostkeeper").exists());
     for tool in ["xcodes", "pkgutil", "xip", "plutil"] {
         assert_eq!(push.record(&format!("{tool}.args")), "", "{tool} ran");
     }
@@ -495,7 +499,7 @@ fn off_macos_it_refuses_with_a_clear_message() {
     assert_eq!(help.code, 0);
     assert!(
         help.stdout
-            .starts_with("hk xcode-push <version> | <archive.xip>\n")
+            .starts_with("hk xcode-push [--mac NODE-ID] <version> | <archive.xip>\n")
     );
 }
 
