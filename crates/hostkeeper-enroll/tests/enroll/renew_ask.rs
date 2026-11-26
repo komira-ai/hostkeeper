@@ -244,9 +244,10 @@ fn only_a_regular_file_is_an_ask() {
     assert!(world.coordinator().renews.is_empty());
 }
 
-/// Catches an ask lost across a daemon restart, or a torn one left for ever: with the daemon
-/// stopped, an ask and a temporary file of one are in the pki directory; the next enroller's open
-/// keeps the ask and removes the temporary file, and its first step renews.
+/// Catches an ask lost across a daemon restart, or one that a torn ask blocks or that an open
+/// breaks: with the daemon stopped, an ask and a temporary file of one (an ask being written, or
+/// a crash's) are in the pki directory; the next enroller's open keeps both, its first step
+/// renews, and a later ask over the temporary file is written.
 #[test]
 fn an_ask_made_while_the_daemon_is_stopped_is_answered_at_its_start() {
     let world = World::new("ask-stopped");
@@ -255,9 +256,12 @@ fn an_ask_made_while_the_daemon_is_stopped_is_answered_at_its_start() {
     fs::write(world.pki().join("RENEW.tmp"), "").expect("a torn ask");
     let mut enroller = world.open();
     assert!(asked(&world));
-    assert!(!world.pki().join("RENEW.tmp").exists());
+    assert!(world.pki().join("RENEW.tmp").exists(), "the open leaves it");
     assert_eq!(renewed(enroller.run_once()).0, 2);
     assert!(!asked(&world));
+    assert_eq!(pki_of(&world).ask_renewal().expect("ask again"), Some(2));
+    assert!(asked(&world));
+    assert!(!world.pki().join("RENEW.tmp").exists());
 }
 
 /// The pki directory, except that the ask cannot be read, or cannot be removed.

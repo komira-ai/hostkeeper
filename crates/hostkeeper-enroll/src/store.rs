@@ -42,7 +42,8 @@
 //! `hostkeeper renew` beside the daemon): it is written by the same temporary file and rename, so
 //! the enroller sees it whole or not at all. It is optional in schema 1: a release that does not
 //! know it ignores it, since only `gen-<n>`, `pending/`, `current` and `SCHEMA` are read. Only a
-//! regular file counts as an ask; the open removes a temporary file of it a crash left.
+//! regular file counts as an ask. The open leaves a temporary file of it alone, since an ask may
+//! be writing it while the daemon starts; the next ask replaces one a crash left.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Write};
@@ -394,7 +395,6 @@ impl PkiDir {
             self.own_dir(&self.pending_dir())?;
         }
         remove_file_if_present(&self.root.join(CURRENT_TMP))?;
-        remove_file_if_present(&self.root.join(tmp_name(RENEW)))?;
         remove_file_if_present(&self.pending_dir().join(tmp_name(KEY)))?;
         let mut newest = None;
         for number in self.generations()? {

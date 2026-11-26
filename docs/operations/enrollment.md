@@ -674,7 +674,8 @@ stored, or when the coordinator refuses the renewal (`renewal refused: <token>`,
 life). Any other failed step (the coordinator out of reach, its CA not the pinned one, an issued
 certificate refused) keeps `RENEW`, and the next step asks again. A host whose certificate expired,
 or cannot authenticate `Renew`, returns with `renewal_of` as above and keeps `RENEW` until that
-returned generation is stored.
+returned generation is stored. An ask made while a renewal is already in flight is answered by that
+renewal, whose certificate is issued within the same step.
 
 `hostkeeper renew` exits 1 and writes nothing on a host with no certificate (`hostkeeper renew:
 refused: not_enrolled: ...`: its enrollment gives it its first), and on a pki directory it cannot
