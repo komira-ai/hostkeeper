@@ -565,6 +565,10 @@ failure of a check, `promote-check` or a stable job opens the release's `RELEASE
    enabled or not as the package says (hostkeeper enables the `[Install]` links of a `run` unit
    itself and starts one that nothing enables). `check-pkg` downloads each installer, its bundle and the directory's
    `SHA256SUMS` from the public host and compares them with the release's `SHA256SUMS`.
+   `check-apt` runs `apt-get update` again after 30, 60 and 120 seconds while every failure is an
+   Ubuntu mirror serving an index out of sync with its `Release` (apt's "Mirror sync in progress?"
+   or "Hash Sum mismatch"), and its output says so once per repeat; a failure of the index of
+   `packages.komira.ai` itself, or any other failure, ends the check at once.
 3. **Decision.** `promote-check` (`cargo xtask channels decide`) promotes when every write succeeded
    and every check succeeded or had nothing to check.
 4. **Stable.** `stable-apt-*` and `stable-rpm-*` list the entries of the release that `testing` holds
