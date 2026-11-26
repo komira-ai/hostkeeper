@@ -55,7 +55,7 @@ fn each_archive_failure_ends_the_steps_with_its_reason_and_verdict() {
         for dir in ["Xcode.app", "Xcode-beta.app", "Other"] {
             fs::create_dir_all(spawn.cwd.join(dir))?;
         }
-        fs::write(spawn.cwd.join("File.app"), b"a file")?;
+        fs::write(spawn.cwd.join("xcode.app"), b"a file, not an app")?;
         Ok(Ran {
             code: Some(0),
             ..Ran::default()

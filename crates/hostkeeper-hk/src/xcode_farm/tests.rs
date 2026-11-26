@@ -103,13 +103,13 @@ fn the_reasons_name_the_release_the_digits_the_mac_and_the_run() {
 #[test]
 fn a_path_is_a_word_a_shell_takes_whole() {
     assert_eq!(
-        shell_word("/home/me/Downloads/Xcode_27.2.xip"),
-        "/home/me/Downloads/Xcode_27.2.xip"
+        shell_word("/scratch/op/Downloads/Xcode_27.2.xip"),
+        "/scratch/op/Downloads/Xcode_27.2.xip"
     );
     assert_eq!(shell_word("Xcode-27.2+beta.xip"), "Xcode-27.2+beta.xip");
     assert_eq!(
-        shell_word("/home/me/My Downloads/x.xip"),
-        "'/home/me/My Downloads/x.xip'"
+        shell_word("/scratch/op/My Downloads/x.xip"),
+        "'/scratch/op/My Downloads/x.xip'"
     );
     assert_eq!(shell_word("it's.xip"), "'it'\\''s.xip'");
     assert_eq!(shell_word("a;b"), "'a;b'");

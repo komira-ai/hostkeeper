@@ -392,8 +392,8 @@ pub(crate) const HAND_VERBS: &[&str] = &[
 /// The methods of a generated service that hk has by hand (`hostkeeper_hk`'s `hand.rs`): the
 /// service, the method and the flags of its own.
 pub(crate) const HAND_METHODS: &[(&str, &str, &[&str])] = &[
-    ("xcode", "add", &[]),
-    ("xcode", "verify", &["--apple-root"]),
+    ("xcode", "add", &["--mac"]),
+    ("xcode", "verify", &["--apple-root", "--mac"]),
 ];
 
 /// The flags of its own of the hand method `method` of `service`, when it is one.
@@ -412,6 +412,8 @@ const XCODE_PUSH_ONE: &str = "hk xcode-push takes one Xcode version (27.2) or th
 /// those of `ssh` and `ssh-proxy`, and those of `ssh-revoke`.
 const HAND_IDENTITY_FLAGS: &[&str] = &["--identity", "--reason"];
 const HAND_REVOKE_FLAGS: &[&str] = &["--operator", "--serial", "--host"];
+/// The flag of `hk xcode-push` of its own: the farm Mac that checks the archive off macOS.
+const HAND_XCODE_PUSH_FLAGS: &[&str] = &["--mac"];
 /// The flags of `hk tailnet-wait`, each with the whole numbers it takes.
 const TAILNET_WAIT_FLAGS: &[(&str, u32, u32)] =
     &[("--attempts", 1, 100), ("--interval-secs", 0, 600)];
@@ -423,6 +425,7 @@ pub(crate) fn hand_flags(verb: &str) -> &'static [&'static str] {
         "ssh" | "ssh-proxy" => HAND_IDENTITY_FLAGS,
         "ssh-revoke" => HAND_REVOKE_FLAGS,
         "tailnet-wait" => HAND_TAILNET_WAIT_FLAGS,
+        "xcode-push" => HAND_XCODE_PUSH_FLAGS,
         _ => &[],
     }
 }
@@ -558,18 +561,25 @@ fn settings(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
     Ok(Parsed::Call("settings".to_owned()))
 }
 
-/// What `words` (the words after `xcode add`) ask for: at most one version or archive path, and the
-/// global flags, of which the token file is the only credential and none is needed (the settings
-/// file gives what the line lacks); in hk's words.
+/// What `words` (the words after `xcode add`) ask for: at most one version or archive path,
+/// `--mac` once with a value, and the global flags, of which the token file is the only credential
+/// and none is needed (the settings file gives what the line lacks); in hk's words.
 fn xcode_add(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
     let mut paths = 0;
+    let mut mac = false;
     let mut at = 0;
     while let Some(word) = words.get(at) {
         let flag = flag_of(word);
         if matches!(flag, "--help" | "-h") {
             return Ok(Parsed::Help);
         }
-        if word.starts_with('-') {
+        if flag == "--mac" {
+            let (_, took) = arg(flag, &words[at..])?;
+            if std::mem::replace(&mut mac, true) {
+                return Err("--mac is given twice".to_owned());
+            }
+            at += took;
+        } else if word.starts_with('-') {
             match line.global(&words[at..])? {
                 Some(took) => at += took,
                 None => return Err(format!("hk xcode add has no flag {flag}")),
@@ -598,11 +608,12 @@ fn xcode_add(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
     Ok(Parsed::Call("xcode add".to_owned()))
 }
 
-/// What `words` (the words after `xcode verify`) ask for: one archive, `--apple-root` once with
-/// a value, and the global flags, none of which it needs; in hk's words.
+/// What `words` (the words after `xcode verify`) ask for: one archive, `--apple-root` and `--mac`
+/// each once with a value, and the global flags, none of which it needs; in hk's words.
 fn xcode_verify(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
     let mut paths = 0;
     let mut root = false;
+    let mut mac = false;
     let mut at = 0;
     while let Some(word) = words.get(at) {
         let flag = flag_of(word);
@@ -613,6 +624,12 @@ fn xcode_verify(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String>
             let (_, took) = arg(flag, &words[at..])?;
             if std::mem::replace(&mut root, true) {
                 return Err("--apple-root is given twice".to_owned());
+            }
+            at += took;
+        } else if flag == "--mac" {
+            let (_, took) = arg(flag, &words[at..])?;
+            if std::mem::replace(&mut mac, true) {
+                return Err("--mac is given twice".to_owned());
             }
             at += took;
         } else if word.starts_with('-') {

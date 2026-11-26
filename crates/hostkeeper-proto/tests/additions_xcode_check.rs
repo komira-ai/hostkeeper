@@ -39,7 +39,11 @@ fn without(set: &mut FileDescriptorSet, message: &str, number: i32) {
         .expect("the message");
     let before = found.field.len();
     found.field.retain(|field| field.number() != number);
-    assert_eq!(before - found.field.len(), 1, "{message}.{number} taken out");
+    assert_eq!(
+        before - found.field.len(),
+        1,
+        "{message}.{number} taken out"
+    );
 }
 
 /// This build's schema without the two fields: what a peer of the release before knows.
@@ -130,7 +134,10 @@ fn the_release_befores_request_and_run_read_without_an_archive() {
             .get_message_by_name("hostkeeper.operator.v1.ScheduleMaintenanceRequest")
             .expect("ScheduleMaintenanceRequest"),
     );
-    request.set_field_by_name("host_ids", Value::List(vec![Value::String("mac-01".into())]));
+    request.set_field_by_name(
+        "host_ids",
+        Value::List(vec![Value::String("mac-01".into())]),
+    );
     let read = operator::ScheduleMaintenanceRequest::decode(request.encode_to_vec().as_slice())
         .expect("decodes");
     assert_eq!(read.xcode_sha256, "");
@@ -141,8 +148,7 @@ fn the_release_befores_request_and_run_read_without_an_archive() {
             .expect("MaintenanceRun"),
     );
     run.set_field_by_name("id", Value::String("run-1".into()));
-    let read =
-        operator::MaintenanceRun::decode(run.encode_to_vec().as_slice()).expect("decodes");
+    let read = operator::MaintenanceRun::decode(run.encode_to_vec().as_slice()).expect("decodes");
     assert_eq!(read.xcode_sha256, "");
     assert_eq!(read.id, "run-1");
 }
