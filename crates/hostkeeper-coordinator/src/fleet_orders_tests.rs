@@ -26,7 +26,10 @@ fn held(fleet: &Fleet, now: Duration) -> bool {
     let host = fleet.get_in("web", &id("s1")).expect("s1 is heard");
     let ordered = fleet.is_ordered("web", &id("s1"), now);
     assert_eq!(fleet.holds_slot("web", &id("s1"), host, now), ordered);
-    assert_eq!(fleet.is_up("web", &id("s1"), host, now), !ordered);
+    assert_eq!(
+        fleet.is_up("web", &id("s1"), host, now),
+        host.is_up(now) && !ordered
+    );
     assert_eq!(fleet.is_busy_besides("other", &id("s1"), now), ordered);
     assert_eq!(fleet.outstanding("web", &id("s1"), now).is_some(), ordered);
     ordered
@@ -191,10 +194,10 @@ fn an_abandoned_or_retired_hosts_order_row_is_ended_by_the_next_decision() {
     assert_eq!(writes.ended, [row("s1", 500)]);
 
     fleet.take_rows(&rows(Vec::new()), now);
-    fleet.take_rows(&rows(vec![row("s1", 500)]), now);
+    fleet.take_rows(&rows(vec![row("s1", 10)]), now);
     assert!(
         fleet.is_ordered("web", &id("s1"), now),
-        "the mark went once no row was read"
+        "the mark went once no row was read: a row given before the abandon is taken in"
     );
     fleet.abandon_in("web", &id("s1"), now);
     fleet.take_rows(&rows(vec![row("s1", -10)]), now);

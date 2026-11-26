@@ -141,8 +141,8 @@ fn hold(rig: &Rig, service: &str, host: &str) -> Option<Why> {
         .and_then(|h| h.hold)
 }
 
-/// What the enrollment kept of the services `host` runs: each one's name and the version it was
-/// updating to.
+/// What the enrollment kept of the services `host` runs but the legacy service (the heartbeat's
+/// top level): each one's name and the version it was updating to.
 fn kept(enrollment: &EnrollmentRig, host: &str) -> Vec<(String, Option<String>)> {
     let id = HostId::parse(host).expect("a host id");
     let running: Option<HostRunning> = enrollment
@@ -160,6 +160,7 @@ fn kept(enrollment: &EnrollmentRig, host: &str) -> Vec<(String, Option<String>)>
                  service, updating, ..
              }| (service, updating),
         )
+        .filter(|(service, _)| service != crate::testutil::LEGACY)
         .collect()
 }
 

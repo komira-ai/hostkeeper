@@ -295,6 +295,14 @@ fn a_report_with_no_try_ends_once_a_second_order_was_given() {
             fleet.set_aside_of(WEB, &host).is_some(),
             "a resend is no second order"
         );
+        // The host still heartbeats, so the first order has aged out and this one is a second.
+        fleet.record_in(
+            WEB,
+            host.clone(),
+            role("daemon"),
+            web(Some(report.clone()), false),
+            secs(1) + ORDER_AGE,
+        );
         order(&mut fleet, secs(1) + ORDER_AGE);
         fleet.record_in(
             WEB,

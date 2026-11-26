@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::agent_service::{own_beat, runs_itself};
 use crate::assign_support::why_of;
 use crate::decide::{Skip, Why};
-use crate::fleet::ORDER_AGE;
+use crate::fleet::{DOWN_AFTER, ORDER_AGE};
 use crate::marks_support::{ask_typed, digest, native_target, who};
 use crate::orders::{Order, install_order_id};
 use crate::registry::Digest;
@@ -313,7 +313,8 @@ async fn the_agents_own_service_is_counted_at_the_agents_version_and_no_other() 
     assert_eq!(counted_at(&rig, HK, "d2").as_deref(), Some("0.1.83"));
 
     rig.at(2_000 + ORDER_AGE.as_secs() * 10);
-    // d2 reports its update done: a silent ordered host would keep the farm's one slot.
+    // d2 reports its update done (a silent ordered host would keep the farm's one slot) and then
+    // goes silent, which ends its bake's hold on the farm.
     let (reply, _) = ask_typed(
         &rig,
         "d2",
@@ -321,6 +322,7 @@ async fn the_agents_own_service_is_counted_at_the_agents_version_and_no_other() 
         daemon("0.2.0", vec![entry(HK, "0.2.0", None)]),
     );
     assert_eq!(reply, ServiceReply::Nothing);
+    rig.at(2_000 + ORDER_AGE.as_secs() * 10 + DOWN_AFTER.as_secs());
     let (reply, _) = ask_typed(
         &rig,
         "d3",

@@ -312,8 +312,8 @@ fn a_host_the_release_picks_no_package_for_holds_no_slot() {
 /// Behaviour: the coordinator orders `hello` to `linux-1` at 200 s (an update of a host that runs
 /// it) and to `linux-2` at 300 s (an install, of a host with no word of `hello`, never heard at
 /// all). Neither host reports the order: `linux-1` goes on heartbeating idle (a beat at the last
-/// second of the order's age and one at the age, so it is never silent) and `linux-2` sends
-/// nothing. Each order holds `hostkeeper` (`waiting_on_why` names it `ordered` on its host)
+/// second of the order's age and one at the age, so it is never silent; it runs 0.1.92 and bakes
+/// by its two beats while `linux-2`'s order ages) and `linux-2` sends nothing. Each order holds `hostkeeper` (`waiting_on_why` names it `ordered` on its host)
 /// until it is [`ORDER_AGE`] old, the last second included, and frees the slot at that age.
 /// Catches an order to a host that never reports it holding the farm's rollout for ever.
 #[test]
@@ -329,8 +329,15 @@ fn an_order_a_host_never_reports_frees_the_slot_at_its_age() {
         if host == "linux-2" {
             f.order("hello", id(host), version("0.1.92"), secs(at));
         }
+        // linux-1 heartbeats idle under its order, then runs 0.1.92 (and bakes) while linux-2's
+        // order ages: it is never silent.
+        let running = if host == "linux-1" {
+            "0.1.91"
+        } else {
+            "0.1.92"
+        };
         let last = at + age - 1;
-        linux(&mut f, "linux-1", beat("0.1.91"), last);
+        linux(&mut f, "linux-1", beat(running), last);
         linux(&mut f, "linux-3", beat("0.1.92"), last);
         assert_eq!(
             why(&f, "hello", last),
@@ -346,7 +353,7 @@ fn an_order_a_host_never_reports_frees_the_slot_at_its_age() {
             "{host} at {last}"
         );
         let aged = at + age;
-        linux(&mut f, "linux-1", beat("0.1.91"), aged);
+        linux(&mut f, "linux-1", beat(running), aged);
         linux(&mut f, "linux-3", beat("0.1.92"), aged);
         assert_ne!(
             why(&f, "hello", aged).and_then(|l| l.host),
