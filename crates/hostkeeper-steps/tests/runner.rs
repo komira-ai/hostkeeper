@@ -574,7 +574,7 @@ fn rollback_falls_back_to_the_previous_hook_only_when_the_new_one_cannot_start()
     let rig = Rig::new("run-fallback-first-install");
     fs::remove_file(rig.new_dir.join("hook")).unwrap();
     let mut order = rig.order();
-    order.previous = None;
+    (order.previous, order.previous_version) = (None, None);
     assert_eq!(rig.runner().run(&order).unwrap(), fin(Verdict::Halt));
 
     // The launcher says the new hook did not start in `rollback`.
@@ -772,7 +772,7 @@ fn only_the_same_order_resumes_an_unfinished_update() {
     o.staged = Staged::seal(&rig.old_dir).unwrap();
     others.push(o);
     let mut o = rig.order();
-    o.previous = None;
+    (o.previous, o.previous_version) = (None, None);
     others.push(o);
     let mut o = rig.order();
     o.previous = Some(Staged::seal(&rig.new_dir).unwrap());
