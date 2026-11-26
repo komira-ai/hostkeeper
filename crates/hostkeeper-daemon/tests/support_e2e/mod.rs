@@ -41,6 +41,7 @@ use hostkeeper_daemon::maintenance_run::Driven;
 use hostkeeper_daemon::start::{self, Started};
 use hostkeeper_daemon::{Daemon, Ports};
 use hostkeeper_hook::Outcome;
+use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::{
     FakeCerts, FakeClock as LinkClock, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
 };

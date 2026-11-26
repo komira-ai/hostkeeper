@@ -56,10 +56,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 # The settings file `~/.hostkeeper/hk.toml`.
 toml.workspace = true
-# The runtime the ssh verbs run on, and the byte streams of the tunnel.
-tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "sync"] }
-# The sender half of the tunnel's request stream, as the stream gRPC reads.
-tokio-stream.workspace = true
+# The runtime the ssh verbs run on, the byte streams of the tunnel, and the SIGHUP and SIGTERM
+# that `hk ssh-proxy` turns into a close of the tunnel.
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt", "signal", "sync"] }
+# The sender half of the tunnel's request stream, as the stream gRPC reads, and the signals as one
+# stream.
+tokio-stream = { workspace = true, features = ["signal"] }
 # The channel to the coordinator over TLS that trusts the CA file given, and the client side of
 # the tunnel's bidirectional stream.
 tonic = { workspace = true, features = ["channel", "tls-ring"] }
@@ -85,7 +87,8 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 http-body-util.workspace = true
 hyper.workspace = true
-# The umask a test of `hk xcode add` runs under (`fs::Mode`).
+# The umask a test of `hk xcode add` runs under (`fs::Mode`), and the SIGHUP and SIGTERM the
+# tests send to a running `hk ssh-proxy`: safe calls.
 rustix = { workspace = true, features = ["fs", "process"] }
 # Reads the recorded request bodies back as the fixture's and the real protos' messages.
 prost-reflect = { workspace = true, features = ["serde"] }

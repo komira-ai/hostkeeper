@@ -477,3 +477,39 @@ fn an_event_that_does_not_fit_is_refused_naming_it_and_where_the_turn_stands() {
         );
     }
 }
+
+/// Catches a probe turn that skips the drain or the put back, applies its kind more than once,
+/// or is written to the record under another name than `probe`: a run of `probe` alone drains
+/// js-agent, applies the probe, checks, resumes and ends done with nothing drained, and its
+/// record reads back with the kind `probe`.
+#[test]
+fn a_probe_turn_drains_probes_checks_and_puts_back() {
+    let mut rec = record(&[Kind::Probe], &["js-agent"]);
+    let mut launches = Vec::new();
+    loop {
+        let (launch, after, next) = run_step(&rec, Outcome::Ok);
+        launches.push(launch);
+        rec = after;
+        if next == Action::End(Ending::Done) {
+            break;
+        }
+    }
+    assert_eq!(
+        launches,
+        [
+            Launch::Stage,
+            Launch::Drain(service("js-agent")),
+            Launch::Apply(Kind::Probe),
+            Launch::Check,
+            Launch::Resume(service("js-agent")),
+        ]
+    );
+    assert!(rec.drained.is_empty());
+    assert!(rec.kinds.iter().all(|kind| kind.applied));
+    let written = serde_json::to_value(&rec).expect("JSON");
+    assert_eq!(
+        written["kinds"],
+        serde_json::json!([{ "kind": "probe", "applied": true }])
+    );
+    assert_eq!(Kind::Probe.to_string(), "probe");
+}

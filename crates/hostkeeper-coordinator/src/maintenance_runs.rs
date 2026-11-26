@@ -94,6 +94,9 @@ named! {
         Linux = "linux" => Linux,
         /// A reboot the host needs.
         Reboot = "reboot" => Reboot,
+        /// A probe: the host drained, the daemon's read-only programs run, the host put back.
+        /// Never due; a run of it holds no other kind.
+        Probe = "probe" => Probe,
     }
 }
 

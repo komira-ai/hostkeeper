@@ -667,7 +667,8 @@ fn the_maintenance_fields_have_their_numbers_and_types() {
         .iter()
         .map(|name| message(&now, name).fields().count())
         .collect();
-    assert_eq!(counts, [9, 8, 5, 6, 4, 3, 6, 5, 11, 4]);
+    // `MaintenanceReport` holds 11 since `probe` and `on_demand` (additions_maintenance_probe.rs).
+    assert_eq!(counts, [11, 8, 5, 6, 4, 3, 6, 5, 11, 4]);
 }
 
 /// The values of the enum `name` of `pool`, by name and number.
@@ -703,6 +704,7 @@ fn the_enum_values_are_fixed() {
                 "MAINTENANCE_KIND_XCODE",
                 "MAINTENANCE_KIND_LINUX",
                 "MAINTENANCE_KIND_REBOOT",
+                "MAINTENANCE_KIND_PROBE",
             ],
         ),
         (

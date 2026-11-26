@@ -8,8 +8,9 @@ use prost::Message as _;
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::maintenance::{
     MAX_APPLIED, MAX_DUE, MAX_DUE_LABEL, MAX_DUE_VERSION, MAX_HALTED_REASON, MAX_KERNEL_TEXT,
-    MAX_LOOK_FAILED, MAX_MAC_TEXT, MAX_MDM_CONFLICTS, MAX_OS_TEXT, MAX_REPORT_BYTES, MAX_RUN_ID,
-    MAX_XCODE_PATH, MAX_XCODE_VERSION, MAX_XCODES, MaintenanceReportError, check_report,
+    MAX_LOOK_FAILED, MAX_MAC_TEXT, MAX_MDM_CONFLICTS, MAX_ON_DEMAND, MAX_OS_TEXT, MAX_PROBE_NAME,
+    MAX_PROBE_OUTPUT, MAX_PROBE_STEPS, MAX_REPORT_BYTES, MAX_RUN_ID, MAX_XCODE_PATH,
+    MAX_XCODE_VERSION, MAX_XCODES, MaintenanceReportError, check_report,
 };
 
 #[path = "support/maintenance_reports.rs"]
@@ -19,8 +20,8 @@ use maintenance_reports::{at_every_bound, linux_report, text};
 /// Catches: a bound's constant changed from the number the schema gives, or a report at every
 /// bound refused or over its budget (and so over its share of the heartbeat's
 /// 16 KiB): every list and text at its bound, and every number at its largest, passes the check
-/// and encodes to at most 5120 bytes; so does a Linux host's report with no Mac facts and no run,
-/// and the empty report.
+/// and encodes to at most 7168 bytes (a probe's eight steps at their bounds among it); so does a
+/// Linux host's report with no Mac facts and no run, and the empty report.
 #[test]
 fn a_report_at_every_bound_is_accepted_within_its_budget() {
     assert_eq!(
@@ -39,10 +40,14 @@ fn a_report_at_every_bound_is_accepted_within_its_budget() {
             MAX_RUN_ID,
             MAX_HALTED_REASON,
             MAX_LOOK_FAILED,
+            MAX_ON_DEMAND,
+            MAX_PROBE_STEPS,
+            MAX_PROBE_NAME,
+            MAX_PROBE_OUTPUT,
             MAX_REPORT_BYTES,
         ],
         [
-            6, 12, 16, 4, 32, 64, 16, 128, 64, 32, 64, 64, 256, 256, 5120
+            6, 12, 16, 4, 32, 64, 16, 128, 64, 32, 64, 64, 256, 256, 4, 8, 32, 128, 7168
         ]
     );
     let full = at_every_bound();
@@ -91,6 +96,11 @@ fn mac(report: &mut agent::MaintenanceReport) -> &mut agent::MacUpdateFacts {
     report.mac.as_mut().expect("the Mac facts")
 }
 
+/// The probe of a report.
+fn probe(report: &mut agent::MaintenanceReport) -> &mut agent::MaintenanceProbe {
+    report.probe.as_mut().expect("the probe")
+}
+
 /// The run of a report.
 fn run(report: &mut agent::MaintenanceReport) -> &mut agent::MaintenanceRunState {
     report.run.as_mut().expect("the run")
@@ -102,7 +112,7 @@ fn run(report: &mut agent::MaintenanceReport) -> &mut agent::MaintenanceRunState
 /// or text, its size and its bound. The refusal's words name them too.
 #[test]
 fn a_report_one_over_any_bound_is_refused_naming_it() {
-    let breaches: [Breach; 23] = [
+    let breaches: [Breach; 28] = [
         (
             |r| r.xcodes.push(r.xcodes[0].clone()),
             too_many("xcodes", MAX_XCODES),
@@ -198,6 +208,26 @@ fn a_report_one_over_any_bound_is_refused_naming_it() {
         (
             |r| r.look_failed.push('a'),
             too_long("look_failed", MAX_LOOK_FAILED),
+        ),
+        (
+            |r| probe(r).steps.push(agent::MaintenanceProbeStep::default()),
+            too_many("probe.steps", MAX_PROBE_STEPS),
+        ),
+        (
+            |r| r.on_demand.push(0),
+            too_many("on_demand", MAX_ON_DEMAND),
+        ),
+        (
+            |r| probe(r).run_id.push('a'),
+            too_long("probe.run_id", MAX_RUN_ID),
+        ),
+        (
+            |r| probe(r).steps[MAX_PROBE_STEPS - 1].name.push('a'),
+            too_long("probe.step_name", MAX_PROBE_NAME),
+        ),
+        (
+            |r| probe(r).steps[MAX_PROBE_STEPS - 1].output.push('a'),
+            too_long("probe.step_output", MAX_PROBE_OUTPUT),
         ),
     ];
     for (breach, want) in breaches {

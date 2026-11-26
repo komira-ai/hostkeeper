@@ -75,7 +75,7 @@ use crate::maintenance_collect::{Collector, LinuxScope};
 use crate::maintenance_facts::MaintenanceFacts;
 use crate::maintenance_hook::HookArgs;
 use crate::maintenance_softwareupdate::MacosMajor;
-use crate::maintenance_state::RunReported;
+use crate::maintenance_state::{RunReported, on_demand_of};
 use crate::notify::{
     NoNotifier, NoWatchdog, ReadyFile, ReadyNotifier, SystemdNotifier, SystemdWatchdog, Watchdog,
 };
@@ -521,6 +521,7 @@ pub fn host_links(
     let prerequisites = Prerequisites::at_host(kind, log.clone());
     let maintenance = maintenance_source(
         daemon,
+        kind,
         scope,
         crate::maintenance_collectors::at_host(kind, major, ctx.repository_ports.lock_wait_secs),
         Arc::new(SystemUnixClock),
@@ -566,9 +567,11 @@ pub fn host_links(
 /// under `scope` (`--maintenance-linux-scope`), leaving out the packages of the daemon's own
 /// `placed.json` ([`crate::Placement`] of its context), timed by `clock` and run on `dispatch`;
 /// none when there is no collector, which then announces and sends nothing. The report carries
-/// the run state of the host's maintenance turn ([`RunReported`]).
+/// the run state of the host's maintenance turn, the host's last probe and, on a Mac (`kind`),
+/// `probe` as a kind run only when named ([`RunReported`], [`on_demand_of`]).
 pub fn maintenance_source(
     daemon: &Arc<Daemon>,
+    kind: PlatformKind,
     scope: LinuxScope,
     collectors: Vec<Box<dyn Collector>>,
     clock: Arc<dyn hostkeeper_link::UnixClock>,
@@ -584,7 +587,11 @@ pub fn maintenance_source(
         log,
     )
     .map(|facts| {
-        Arc::new(RunReported::new(facts, &daemon.ctx().dirs.state)) as Arc<dyn MaintenanceSource>
+        Arc::new(RunReported::new(
+            facts,
+            &daemon.ctx().dirs.state,
+            on_demand_of(kind),
+        )) as Arc<dyn MaintenanceSource>
     })
 }
 

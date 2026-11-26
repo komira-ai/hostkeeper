@@ -23,8 +23,10 @@
 //!    ([`Hold::NoFeature`]), no hold stands on it and it is excluded from no package ([`Hold::Held`],
 //!    [`Hold::Excluded`]), its group is still the one the run took it in ([`Hold::GroupChanged`]),
 //!    and it runs no package update and has no package order outstanding
-//!    ([`Hold::InPackageUpdate`]). These are read afresh at each heartbeat and stored nowhere: a
-//!    hold released, or a package update ended, lets the host go at a later heartbeat.
+//!    ([`Hold::InPackageUpdate`]); a turn of `probe` also needs the host's last report to list
+//!    `probe` on demand ([`Hold::NoProbe`]), so that no daemon is sent a kind it does not know.
+//!    These are read afresh at each heartbeat and stored nowhere: a hold released, or a package
+//!    update ended, lets the host go at a later heartbeat.
 //! 5. **Batch:** at most `batch` hosts of a group (the run's, else the group's) hold a place, over
 //!    every run; groups go in parallel ([`Hold::Batch`]). A host holds its place in its turn (a
 //!    halted or not back host included) and, once done, until it has sent its group's
@@ -133,6 +135,9 @@ pub(crate) enum Hold {
     Serving,
     /// The host's turn holds `xcode` and the Xcode store cannot be read.
     XcodeStore,
+    /// The host's turn holds `probe` and its last report does not list `probe` on demand (its
+    /// daemon was replaced by one without it since the run took the host).
+    NoProbe,
 }
 
 /// What the rules make of one host at one heartbeat.
@@ -438,6 +443,13 @@ fn eligible(view: &View<'_>, host: &RunHost) -> Result<(), Hold> {
     };
     if !node.features.iter().any(|feature| feature == FEATURE) {
         return Err(Hold::NoFeature);
+    }
+    let lists_probe = node
+        .maintenance
+        .as_ref()
+        .is_some_and(|kept| crate::maintenance::lists_probe(kept.report()));
+    if host.kinds.contains(&Kind::Probe) && !lists_probe {
+        return Err(Hold::NoProbe);
     }
     let group = view.group_of(&host.host_id);
     let role = if group.is_empty() {

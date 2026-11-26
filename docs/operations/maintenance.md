@@ -257,6 +257,81 @@ once the group's `defer_backoff` has passed since it deferred (300 seconds by de
 each deferral of its turn, at most 3600). A stage that fails defers the same way. A run with no
 window end keeps offering a deferred host; Cancel it to stop.
 
+## Probe: drain, read, put back
+
+A **probe** is a run of the kind `probe`: it takes a Mac out of service the way any turn does, runs
+a fixed list of read-only programs on it, keeps what they wrote, and puts the Mac back. It installs,
+removes and restarts nothing. It is how the steps of [mac-proof.md](mac-proof.md) that need the Mac
+out of builds and a launchd job as root are run: one command from the operator's side, and the drain
+and the put back are hostkeeper's (js-agent's `drain` cordons the Mac and waits for its jobs, its
+`resume` uncordons it), so no one cordons the Mac by hand and no one runs a harness on it.
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    maintenance schedule --kinds probe --host-ids mac-studio-01 --confirm true \
+    --reason "Mac proof: launchd probes"
+```
+
+For a Mac that is the only host of its group, add `--take-last-host true` (otherwise `last_host`). It
+prints the run, one host waiting (the audit entry shortened here):
+
+```
+{"run":{"id":"run-1796000000-1","state":"MAINTENANCE_STATE_RUNNING","kinds":["MAINTENANCE_KIND_PROBE"],"hostIds":["mac-studio-01"],"reason":"Mac proof: launchd probes","byName":"<operator>","scheduledUnix":"1796000000","hostCount":1},"hosts":[{"hostId":"mac-studio-01","hostGroup":"mac-build","step":"MAINTENANCE_HOST_STEP_WAITING","kinds":["MAINTENANCE_KIND_PROBE"]}],"entry":{"action":"maintenance_schedule","reason":"Mac proof: launchd probes run run-1796000000-1",...}}
+```
+
+The Mac's turn is the steps of [What one host's turn does](#what-one-hosts-turn-does) with nothing to
+stage or check but the probe: stage (nothing), drain (js-agent cordons the Mac and waits for its
+jobs, with no deadline unless the run or the group sets one), apply (the probe), check (the probe
+was kept), put back (js-agent uncordons it), done. The probe's programs run in the launchd job the
+daemon starts for the hook's `cutover`, in the System domain, as root, each by its absolute path
+with an empty environment and no standard input, exactly as the Mac's update steps run theirs:
+
+| Step | Program | Shows |
+|---|---|---|
+| `console` | `/usr/bin/stat -f %Su /dev/console` | who owns the console: `root` with nobody logged in |
+| `who` | `/usr/bin/who` | the sessions; empty with nobody logged in |
+| `id` | `/usr/bin/id` | who the hook runs as |
+| `managername` | `/bin/launchctl managername` | the launchd domain: `System` |
+| `env` | `/usr/bin/env` | the environment the hook gives its programs: empty |
+| `sw_vers` | `/usr/bin/sw_vers` | the macOS it ran on |
+| `fdesetup_status` | `/usr/bin/fdesetup status` | FileVault, as the update path reads it |
+| `fdesetup_supportsauthrestart` | `/usr/bin/fdesetup supportsauthrestart` | the authenticated restart, as the update path reads it |
+
+Read the run until the Mac is done, then the probe, which the Mac's next heartbeat carries in its
+maintenance report and keeps there until its next probe:
+
+```
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    maintenance get --run-id run-1796000000-1
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    --response-file probe-host.json hosts get --node-id mac-studio-01
+jq '(.host // .).maintenance.probe' probe-host.json
+```
+
+```
+{"runId":"run-1796000000-1","probedUnix":"1796000300","steps":[{"name":"console","exitCode":0,"output":"root"},{"name":"who","exitCode":0},{"name":"id","exitCode":0,"output":"uid=0(root) gid=0(wheel) groups=0(wheel),..."},{"name":"managername","exitCode":0,"output":"System"},{"name":"env","exitCode":0},{"name":"sw_vers","exitCode":0,"output":"ProductName:\t\tmacOS; ProductVersion:\t\t27.2.1; BuildVersion:\t\t26B131"},{"name":"fdesetup_status","exitCode":0,"output":"FileVault is Off."},{"name":"fdesetup_supportsauthrestart","exitCode":0,"output":"true"}]}
+```
+
+Each step keeps its exit code (absent when the program did not exit by itself: it did not start, or
+was killed after 60 seconds), and its output: the non-empty lines of its standard output, then of
+its standard error, trimmed and joined by `; `, at most 128 bytes (`cut` is true when it was
+longer). An empty output is left out of the JSON. A program that fails is a result, not a failure:
+the probe goes on to the next. The turn halts only when the probe could not be kept
+(`apply probe: exit 1, probe_unwritten: ...`) or the check does not find it (`check: exit 1,
+probe_missing: ...`); the Mac then stays cordoned until **Put back**, as any halted host does.
+
+The rules of a probe run:
+
+- `--kinds probe` is given alone and with `--host-ids`; with another kind or with `--host-group`
+  it is refused `invalid_request`. The Update button and a run that names no kind never take it.
+- A host is in the run only when its daemon lists `probe` in its report's `on_demand`: a Mac whose
+  daemon is of a release that has it. Any other host named is not in the run, as a host with
+  nothing due is not, and a run that holds none is refused `nothing_due`. A host whose daemon does
+  not announce `maintenance-v1` is listed `skipped` (`no_maintenance_v1`).
+- Everything else is a run's: `last_host` (`--take-last-host true` for the one Mac of a group),
+  `min_serving`, the batch, a window, the drain deadline, Cancel, Retry and Put back, the audit
+  entries and the alerts.
+
 ## Reading a run
 
 The Maintenance page's **Runs** lists the last ten runs, read again every 10 seconds: each with its
@@ -862,11 +937,11 @@ with `build.json` the group as `get` answered it, its `maintenance` changed:
 |---|---|
 | `unauthorized` | no credential, or not an operator's |
 | `forbidden` | a CI token |
-| `invalid_request` | a field breaks its rule: a host id, a group name, a run id; a reason missing from a call that changes something, over 256 bytes or with a control character; a kind named twice; both or neither of `--host-ids` and `--host-group`; more than 32 hosts or one twice; a batch of 0 or above 10000; a window start without an end, or an end not after its start |
+| `invalid_request` | a field breaks its rule: a host id, a group name, a run id; a reason missing from a call that changes something, over 256 bytes or with a control character; a kind named twice; `probe` with another kind or with `--host-group`; both or neither of `--host-ids` and `--host-group`; more than 32 hosts or one twice; a batch of 0 or above 10000; a window start without an end, or an end not after its start |
 | `unknown_group` | `Schedule` names a group the coordinator does not hold |
 | `unknown_host` | `Schedule` names a host that is not enrolled |
 | `unknown_run` | no run has the id |
-| `nothing_due` | no host of the `Schedule` has anything due of its kinds that could be ordered (every one with something due was skipped, or none has sent a report since the coordinator started) |
+| `nothing_due` | no host of the `Schedule` has anything due of its kinds that could be ordered (every one with something due was skipped, or none has sent a report since the coordinator started); for `probe`, no host named lists it on demand |
 | `window_ended` | the window's end is at or before the coordinator's clock |
 | `last_host` | the run would take every host of a group, without `--take-last-host true` |
 | `host_in_maintenance` | a host of the `Schedule` holds a turn of another run that has not ended |

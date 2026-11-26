@@ -21,7 +21,7 @@ use hostkeeper_daemon::maintenance_collect::{Collector, LinuxScope};
 use hostkeeper_daemon::maintenance_state::{LookAgain, RunReported, run_state};
 use hostkeeper_daemon::testing::RecordedWaits;
 use hostkeeper_hook::Verdict;
-use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput};
+use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::testing::{
     FakeCerts, FakeClock, FakeLink, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
 };
@@ -75,7 +75,7 @@ fn source(rig: &Rig) -> (RunReported<Facts>, Arc<AtomicUsize>) {
     let facts = Facts {
         looks: Arc::clone(&looks),
     };
-    (RunReported::new(facts, &rig.state), looks)
+    (RunReported::new(facts, &rig.state, Vec::new()), looks)
 }
 
 /// Writes `record` as the rig's run record.
@@ -557,6 +557,7 @@ fn the_wired_source_reports_the_run_of_the_record() {
     ))];
     let source = maintenance_source(
         &daemon,
+        PlatformKind::Linux,
         LinuxScope::Security,
         collectors,
         Arc::new(FakeClock::new(2_000_000_000, 0)),

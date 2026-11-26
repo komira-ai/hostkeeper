@@ -28,7 +28,7 @@ package hostkeeper.agent.v1;
 
 // What a host's daemon found when it last looked at its host for maintenance, and the maintenance
 // run it holds. Every text and every list has a bound, given with its field, so that a report at
-// every bound is at most 5120 bytes encoded, well inside the heartbeat's 16 KiB
+// every bound is at most 7168 bytes encoded, well inside the heartbeat's 16 KiB
 // (`hostkeeper_proto::maintenance` holds the bounds and the check of them). A report that breaks a
 // bound is refused whole, never cut: the daemon keeps each text and list within its bound.
 message MaintenanceReport {
@@ -56,6 +56,41 @@ message MaintenanceReport {
   // look leaves the rest of the report as the last look that succeeded left it, `looked_unix`
   // its time.
   string look_failed = 9;
+  // What the last `probe` of the host read, as its daemon keeps it until the next one; absent
+  // before the host's first probe, and from a daemon that has no `probe`.
+  optional MaintenanceProbe probe = 10;
+  // The kinds this daemon runs only when an operator names them in a run, never reported due:
+  // `MAINTENANCE_KIND_PROBE` on a Mac. Each at most once, at most 4; empty from a daemon of an
+  // earlier release, which the coordinator never orders such a kind.
+  repeated MaintenanceKind on_demand = 11;
+}
+
+// What a `probe` read on the host: each program of the daemon's fixed list, run by the maintenance
+// hook on the drained host as the hook's own programs run (on a Mac: as root, in the launchd job
+// of the hook's `cutover`, in the System domain, with an empty environment and no standard input).
+// No program is named by the order, and none is given a password.
+message MaintenanceProbe {
+  // The run that probed (`Maintain.run_id`), at most 64 bytes.
+  string run_id = 1;
+  // The Unix time the probe ended.
+  uint64 probed_unix = 2;
+  // Each program, in the order run: at most 8.
+  repeated MaintenanceProbeStep steps = 3;
+}
+
+// One program of a `probe`, and what it gave.
+message MaintenanceProbeStep {
+  // The step's name in the daemon's list (`console`, `fdesetup_status`), at most 32 bytes.
+  string name = 1;
+  // Its exit code; absent when it did not exit by itself (not started, killed at its deadline or
+  // by a signal).
+  optional int32 exit_code = 2;
+  // What it wrote, at most 128 bytes: the non-empty lines of its standard output, then of its
+  // standard error, each trimmed, joined by `; `; empty when it wrote nothing, or when it did not
+  // start, then the reason it did not.
+  string output = 3;
+  // Whether `output` was cut to its bound.
+  bool cut = 4;
 }
 
 // What a host runs, as the daemon read it.
@@ -183,6 +218,13 @@ enum MaintenanceKind {
   MAINTENANCE_KIND_LINUX = 3;
   // A reboot the host needs and has not had, with nothing to install.
   MAINTENANCE_KIND_REBOOT = 4;
+  // A probe: the host is drained, the daemon's fixed list of read-only programs runs as the
+  // maintenance hook's own programs run, what they gave goes into the report
+  // (`MaintenanceReport.probe`), and the host is put back. It installs and changes nothing on the
+  // host, is never due, and is ordered only alone, to hosts an operator names whose daemon lists
+  // it in `MaintenanceReport.on_demand` (docs/operations/maintenance.md, "Probe: drain, read,
+  // put back").
+  MAINTENANCE_KIND_PROBE = 5;
 }
 
 // The state of the maintenance run a host holds, as its run record says.
@@ -234,7 +276,8 @@ message Maintain {
   string run_id = 1;
   // What to do with the host's turn.
   MaintainAction action = 2;
-  // The kinds to apply, each once, at most 4; the daemon applies `macos` before `xcode`.
+  // The kinds to apply, each once, at most 4; the daemon applies `macos` before `xcode`. A
+  // coordinator orders `probe` only alone.
   repeated MaintenanceKind kinds = 3;
   // For `linux`: which updates.
   LinuxScope linux_scope = 4;

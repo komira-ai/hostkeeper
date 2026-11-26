@@ -224,6 +224,7 @@ fn kind_names_and_proto() {
         (Kind::Xcode, "xcode", MaintenanceKind::Xcode),
         (Kind::Linux, "linux", MaintenanceKind::Linux),
         (Kind::Reboot, "reboot", MaintenanceKind::Reboot),
+        (Kind::Probe, "probe", MaintenanceKind::Probe),
     ];
     assert_eq!(Kind::ALL.len(), expected.len());
     for (kind, name, proto) in expected {

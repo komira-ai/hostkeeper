@@ -124,5 +124,6 @@ pub(crate) fn record_kind(kind: Kind) -> RecordKind {
         Kind::Xcode => RecordKind::Xcode,
         Kind::Linux => RecordKind::Linux,
         Kind::Reboot => RecordKind::Reboot,
+        Kind::Probe => RecordKind::Probe,
     }
 }

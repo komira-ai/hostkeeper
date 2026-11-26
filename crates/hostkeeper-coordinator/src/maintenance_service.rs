@@ -14,13 +14,16 @@
 //! `filevault_not_ready`) waits without `macos`, with why in `skipped_because`, and is left out
 //! with that reason when `macos` is all it has due of the run's kinds; a major upgrade of macOS
 //! counts as due only in a group whose `macos_major` allows one, and `xcode` is due on a Mac as the
-//! coordinator decides it ([`crate::maintenance_xcode`]). The run is refused, in this
-//! order, `nothing_due` when no host waits, `last_host` when the hosts that wait are every host of
-//! one of their groups and the request does not say `take_last_host`, and `host_in_maintenance`
-//! when a host that would wait has a turn of another run that has not ended, which a `Schedule`
-//! with `confirm` checks on the state it stores the run in. The Update button of the design is a
-//! `Schedule` of every kind due, now, with each group's batch and drain deadline: a request that
-//! names no kind, no window, no batch and no drain deadline.
+//! coordinator decides it ([`crate::maintenance_xcode`]). `probe` is never due, and a run that
+//! names no kind never takes it: it is named alone, for hosts named, and holds each of them whose
+//! last report lists `probe` on demand (a Mac's daemon of a release that has it); a host whose
+//! report does not is not in the run, as a host with nothing due is not. The run is refused, in
+//! this order, `nothing_due` when no host waits, `last_host` when the hosts that wait are every
+//! host of one of their groups and the request does not say `take_last_host`, and
+//! `host_in_maintenance` when a host that would wait has a turn of another run that has not ended,
+//! which a `Schedule` with `confirm` checks on the state it stores the run in. The Update button
+//! of the design is a `Schedule` of every kind due, now, with each group's batch and drain
+//! deadline: a request that names no kind, no window, no batch and no drain deadline.
 //!
 //! A `Schedule` with `confirm` stores the run and audits `maintenance_schedule` in one change;
 //! `Cancel` ends a run and audits `maintenance_cancel`, each with the caller's reason followed by
@@ -91,8 +94,10 @@ struct Seen {
     role: String,
     /// The kinds the kept report lists as due, each once, a major upgrade of macOS only when
     /// the host's group allows one ([`maintenance_mac::counts_as_due`]), and `xcode` when the
-    /// coordinator finds it due ([`crate::maintenance_xcode::due_of`]).
+    /// coordinator finds it due ([`crate::maintenance_xcode::due_of`]); never `probe`.
     due: Vec<Kind>,
+    /// Whether the kept report lists `probe` among the kinds the daemon runs when named.
+    probe: bool,
     /// Why the kept report keeps the host from being ordered `macos`
     /// ([`maintenance_mac::macos_skip`]): read only when `macos` is due, so a Linux host's
     /// `no_update_account` (it reports no Mac facts) is never used.
@@ -110,7 +115,8 @@ fn kind_of(value: i32) -> Option<Kind> {
 /// `request` read against the rules of `ScheduleMaintenanceRequest`.
 ///
 /// # Errors
-/// `invalid_request`: a kind unspecified, unknown or named twice; both or neither of `host_ids`
+/// `invalid_request`: a kind unspecified, unknown or named twice; `probe` with another kind or
+/// with `host_group`; both or neither of `host_ids`
 /// and `host_group`; more than [`MAX_HOST_IDS`] host ids, one that is not a host id or one named
 /// twice; a group name that is not one; a window start without an end, an end not after its
 /// start, or an end or a drain deadline above [`MAX_SECS`]; a batch of 0 or above [`MAX_BATCH`];
@@ -140,6 +146,9 @@ fn asked(request: &proto::ScheduleMaintenanceRequest) -> Result<Asked, Refusal> 
         (true, false) => Target::Group(request.host_group.parse().map_err(|_| invalid)?),
         _ => return Err(invalid),
     };
+    if kinds.contains(&Kind::Probe) && (kinds.len() > 1 || matches!(target, Target::Group(_))) {
+        return Err(invalid);
+    }
     let (start, end) = (request.window_start_unix, request.window_end_unix);
     if (start != 0 && end <= start) || end > MAX_SECS {
         return Err(invalid);
@@ -246,12 +255,18 @@ fn skip_of(seen: &Seen, state: &OpsState) -> Option<Skip> {
 /// exclusions of `state`: waiting with the kinds due, or left out with why; none when it is not
 /// in the run (not heard since the coordinator started, or nothing due of the kinds). A host
 /// that may not be ordered `macos` waits without it, with why; it is left out when `macos` is all
-/// that is due of the kinds.
+/// that is due of the kinds. A run of `probe` holds a host whose report lists it on demand, and
+/// no other.
 fn turn_of(seen: &Seen, kinds: &[Kind], state: &OpsState) -> Option<RunHost> {
     if !seen.heard {
         return None;
     }
-    let mut due: Vec<Kind> = if seen.announced {
+    let mut due: Vec<Kind> = if seen.announced && kinds == [Kind::Probe] {
+        if !seen.probe {
+            return None;
+        }
+        vec![Kind::Probe]
+    } else if seen.announced {
         let due: Vec<Kind> = seen
             .due
             .iter()
@@ -447,15 +462,18 @@ impl Coordinator {
                             .iter()
                             .filter(|item| maintenance_mac::counts_as_due(item, macos_major))
                             .filter_map(|item| kind_of(item.kind))
+                            .filter(|kind| *kind != Kind::Probe)
                             .collect()
                     })
                     .unwrap_or_default();
+                let probe = report.is_some_and(crate::maintenance::lists_probe);
                 if xcode_due {
                     due.push(Kind::Xcode);
                 }
                 due.sort();
                 due.dedup();
                 Seen {
+                    probe,
                     heard: node.is_some(),
                     announced: fleet.announced(&id, FEATURE),
                     role: node.map(|node| node.role.clone()).unwrap_or_default(),
@@ -610,3 +628,7 @@ impl Coordinator {
 #[cfg(test)]
 #[path = "maintenance_service_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "maintenance_probe_tests.rs"]
+mod probe_tests;

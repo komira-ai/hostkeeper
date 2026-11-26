@@ -893,7 +893,7 @@ Apple Business); a major upgrade, which cannot be undone, needs the owner's choi
 | An Xcode install, a swap and a removal, js-agent probing before and after | 2.4, MP | MP-I5 | not run: needs the drained Mac and its js-agent | js-agent's probe reads `/Applications/Xcode*.app/Contents/version.plist` and runs nothing (komira-ai/jobscheduler); what it reports after each step decides whether J2's re-read in `resume` is enough |
 | `sysadminctl -addUser` and `-secureTokenOn` take both passwords on standard input (`-`), or need a pseudo-terminal | 5.5 | MP-A2, MP-A3 | not run | on a pipe: the Built stdin runner is enough; only from a terminal: the daemon gives it a pseudo-terminal it owns; a password reaches no argument in either case |
 | The Secure Token grant, and the account hidden | 5.5 | MP-A1, MP-A4, MP-A5 | MP-A1 shown (10.1.2): the reads before the account, and a hidden account's `dsAttrTypeNative:IsHidden: 1`, fixed; MP-A4, MP-A5 not run | read three ways (`sysadminctl -secureTokenStatus`, `diskutil apfs listCryptoUsers /`, `fdesetup list`); the built read uses the first (`maintenance_account.rs`) |
-| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8 | MP-A6 from a root shell with FileVault off shown (10.1.2); from launchd, and with FileVault on, not run: needs a cordon, then FileVault turned on by the owner | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
+| The update account is a FileVault user; `fdesetup authrestart -inputplist` with the plist on standard input | 5.5 | MP-A6 to MP-A8, MP-E13 | MP-A6 from a root shell with FileVault off shown (10.1.2); from launchd with FileVault off, not run: it is MP-E13's probe run, which needs no cordon, once the coordinator and the Mac run a release with the probe; with FileVault on, not run: needs FileVault turned on by the owner | if the account cannot authorise it, Macs with FileVault on are never ordered `macos` (question 4) |
 | A minor update as root from launchd, nobody logged in, FileVault off and on | 5.5 | MP-U1 to MP-U5 | not run: no minor update pending on 2026-11-25 (10.1.2) | stops, asks, or does not restart: the apply step changes (MU8); `--restart` with FileVault on stops at the pre-boot login: the install runs without it and `authrestart` follows, as 5.5 says |
 | A major upgrade by `startosinstall --nointeraction --user --stdinpass`, FileVault off and on | 5.5 | MP-U6 to MP-U8 | not run: cannot be undone; needs a Mac on an older major and the owner's choice | as for the minor; one Mac can show only one of the two FileVault cases |
 | `startosinstall` restarts authenticated with FileVault on | 5.5 | MP-U8 | not run (as above) | if it stops at the pre-boot login, major upgrades are ordered only on Macs with FileVault off |
@@ -912,9 +912,15 @@ Found while writing the steps, from the code and the jobscheduler repository, no
   administrator (`login_account.rs`); with two, the host has none. The proof account (`hkproof`, never the production `hkupdate`) is
   hidden in the same step that makes it, and the update account of MU8 must be too (5.5 already hides it; it must not be visible between
   the two calls).
-- **A cordon must outlive the shell and the Mac's restarts.** The cordon a shell starts ends with the shell's session. The proof uses
-  the job scheduler's operator cordon instead (MP-E6): placed from the operator's side, it holds up to seven days a call with nothing on
-  the Mac renewing it, over restarts of the Mac and its agent (komira-ai/jobscheduler `docs/runbooks/cordon-a-node.md`).
+- **A cordon must outlive the shell and the Mac's restarts.** The cordon a shell starts ends with the shell's session. The owner's
+  steps use the job scheduler's operator cordon instead (MP-E6): placed from the operator's side, it holds up to seven days a call with
+  nothing on the Mac renewing it, over restarts of the Mac and its agent (komira-ai/jobscheduler `docs/runbooks/cordon-a-node.md`).
+- **The steps that need no owner run inside a maintenance run, not under a cordon placed by hand.** A run of the kind `probe`
+  (`docs/operations/maintenance.md`, "Probe: drain, read, put back") drains the Mac through js-agent's `drain`, runs a fixed list of
+  read-only programs in the maintenance hook's launchd job (root, System domain, an empty environment), keeps what they wrote in the
+  Mac's report and puts the Mac back with js-agent's `resume`: one operator command, with the drain, the halt and the put back of any
+  run. It carries MP-E8's probe and MP-A6's launchd half as MP-E13; `mac-proof.md` section 1 lists every step that needs the Mac out of
+  builds and what takes it out for each.
 - **`hk ssh` needs the coordinator's SSH user CA, and the new group is named in its files first.** With no CA the `Ssh` service answers
   `not_configured` and no host announces `ssh-v1`; the SSH operators file must list the proof operator for the Mac. The operator-keys file
   is a second route (a plain `ssh` to the Mac's administrator), and moving a Mac into a group it does not list takes those keys away;

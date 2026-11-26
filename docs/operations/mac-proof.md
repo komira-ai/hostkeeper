@@ -8,15 +8,18 @@ Xcode install) cite those results, not this runbook.
 
 Nothing here is a test of this repository. It is run by hand, once, by a person with a root shell on the proof Mac, with the owner for the
 steps that need the owner's own hands (MP-E9). Reads are fine on any Mac; every change is made only on the proof Mac. Never run a step on a
-Mac that takes builds.
+Mac that takes builds. The steps that need the Mac out of builds and no owner run inside a hostkeeper maintenance run, which drains the
+Mac through js-agent and puts it back, from one operator command (MP-E13); no one cordons the Mac by hand for them ("Which steps need
+the Mac out of builds" in section 1).
 
 ## Who runs what, and in what order
 
 | Order | Steps | Where | Who |
 |---|---|---|---|
+| 0 | MP-E13: the launchd context and FileVault from launchd, in one probe run (any time after MP-E1; needs no shell, no cordon and no group of its own) | the coordinator side; the run drains the Mac | an operator with `hk` |
 | 1 | MP-E1 to MP-E8 in the order of section 1's "The ready state, in order", MP-E10; MP-E9 says what only the owner can do (there is no MP-E11: putting the Mac back is section 7) | the coordinator side and the job service, then the proof Mac | an operator with `hk` and `js`, and the coordinator's deploy owner; then a root shell on the Mac |
 | 2 | MP-X1 to MP-X6, all by `hk xcode verify` on the newest archive and on one older release (section 2; any time, independent) | the operator's own Mac, signed in to the developer account | the operator |
-| 3 | MP-M1 (baseline), MP-A1, MP-A6 | the proof Mac | root shell |
+| 3 | MP-M1 (baseline), MP-A1, MP-A6 (its launchd half is MP-E13's) | the proof Mac | root shell |
 | 4 | MP-I1 to MP-I5 | the proof Mac | root shell; needs the archive of step 2 |
 | 5 | MP-A2 to MP-A5, with MP-E12's check right after MP-A2 | the proof Mac | root shell; the administrator's password from the owner |
 | 6 | MP-U1 to MP-U3 (FileVault off) | the proof Mac | root shell; needs a pending minor update |
@@ -73,11 +76,11 @@ below are run in this order, not in the order of their ids; each row names the c
 | R1 | Read every Mac; choose the proof Mac, the one that takes the fewest builds | an operator with `hk`, and with the job scheduler's `js` (both read only) | MP-E1 | the Mac announces `maintenance-v1`, its `maintenance` is there and `lookFailed` is empty |
 | R2 | Give the coordinator the SSH user CA, the SSH operators file and `--ssh-login-user-macos`, if `ssh host-keys` answers `not_configured` or the flag is empty | the coordinator's deploy owner | MP-E2 (a), (b) | `ssh host-keys` for the Mac answers, `no_pin` or `pinned`, and the coordinator's configuration names `ssh-login-user-macos` |
 | R3 | Name `mac-proof` in the operator-keys and host-prerequisites files | the coordinator's deploy owner | MP-E2 (c), (d) | one `--tls-reload-secs` has passed, or the coordinator restarted |
-| R4 | Cordon the Mac in the job scheduler and wait until it holds no job | an operator with the job service's operator token | MP-E6 | `js host list` shows the Mac's cordon end and no booking |
+| R4 | Cordon the Mac in the job scheduler and wait until it holds no job; only for the owner's steps (MP-E13 drains the Mac itself) | an operator with the job service's operator token | MP-E6 | `js host list` shows the Mac's cordon end and no booking |
 | R5 | Make `mac-proof` with the same packages, versions and policy, and move the Mac into it | an operator with `hk` | MP-E3 | `hostGroup` is `mac-proof`, the services are unchanged, `operatorKeys.digest` is set |
 | R6 | Pin the Mac's host keys and open the root shell | an operator with `hk`; the owner types the administrator's password | MP-E4 | `ssh host-keys` says `pinned`; `id` in the shell is the administrator |
 | R7 | Read the Mac as root and compare with R1 | the root shell | MP-E5, MP-E6's process list | each pair agrees |
-| R8 | Log the console user out; the launchd harness | the root shell, with the owner's agreement | MP-E7, MP-E8 | the probe job runs as uid 0 in the System domain |
+| R8 | Log the console user out, when MP-E13's `console` is not `root`; the launchd harness of the owner's steps | the root shell, with the owner's agreement | MP-E7, MP-E8 | MP-E13's probe ran as uid 0 in the System domain |
 
 No row installs, updates or removes a package on any Mac: R5's move does nothing of the kind when the two groups list the same
 packages at the same versions. Three rows change a host's configuration, and are run knowing it. R2 reaches every host, not only the
@@ -85,6 +88,29 @@ proof Mac: once the coordinator holds the CA it advertises `ssh-v1`, and the dae
 to trust the CA, Linux hosts and the other Macs included (`docs/operations/ssh-ca.md`, "What hosts are sent"). R5 has the proof
 Mac's daemon write the operators' public keys into its administrator's `authorized_keys`. R4 changes only where the job scheduler
 places jobs. R1 and R6 read, but R6's pin is a write on the coordinator. R7 reads only. R8 ends a session on the Mac.
+
+### Which steps need the Mac out of builds, and what takes it out
+
+Every step that changes the Mac, or needs it to take no build while it runs, is listed here with what takes the Mac out of builds for it.
+A hostkeeper maintenance run does it whenever the step is one of the run's: js-agent's `drain` cordons the Mac in the job service and waits
+for its jobs to end, and its `resume` uncordons it (`docs/operations/maintenance.md`, "What one host's turn does" and "How a drain
+waits"); each step of the turn is in the run and the audit log, and a halted turn keeps the Mac cordoned until **Put back**.
+
+| Steps | Needs the Mac out of builds because | What takes it out |
+|---|---|---|
+| MP-E8's probe job; MP-A6 from launchd | a launchd job as root, with nobody's shell in between | a probe run (MP-E13): one `hk maintenance schedule --kinds probe` |
+| MP-E7 | ends a console session | the owner, with MP-E6's cordon; MP-E13's `console` and `who` say first whether there is a session to end |
+| MP-I1 to MP-I5 | expands and moves an Xcode, runs its first launch | the owner (the archive is the owner's download), with MP-E6's cordon; later, a run of `xcode` once the archive is pushed (`maintenance.md`, "Bringing in a new Xcode") |
+| MP-A2, MP-A3, MP-A7, MP-A8, MP-A9 | makes the proof account, grants its token, turns FileVault on, restarts | the owner (the administrator's password, FileVault), with MP-E6's cordon |
+| MP-U1 to MP-U9 | installs macOS and restarts | the owner (the update account, a major upgrade), with MP-E6's cordon; later, a run of `macos` once one is due |
+| MP-J2, MP-J3, MP-J5 | updates hostkeeper itself, restarts the Mac | MP-E6's cordon: a self-update is a package roll, not a maintenance run, and a run has no restart of its own on a Mac (its `reboot` kind is not written) |
+| MP-J4, MP-J6 | disables or stops the daemon that runs a maintenance run | MP-E6's cordon: a run cannot hold the Mac out while its own daemon is stopped |
+
+No other step needs the Mac out of builds. MP-E1, MP-E5, MP-E10, MP-E12's check, MP-A4, MP-A5, MP-M1 to MP-M7 (the owner's settings are
+made in Apple Business, not on the Mac) and MP-X1 to MP-X7 read; MP-E4 and MP-A1 write only scratch files in root's 0700
+`/var/root/hk-proof` (MP-A1 the password files); MP-E2 and MP-E3 change the coordinator, and through it the Mac's sshd trust and its
+administrator's `authorized_keys` ("The ready state, in order"), which takes no build away. The steps above that name the owner stay as
+they are (MP-E9).
 
 ### MP-E1 Read what the coordinator holds for the Macs
 Settles: none; the baseline that MP-E5 and section 7 compare with (design 4.1). Runs: an operator on the coordinator side with hk. Needs: an operator token file (0600), the coordinator's private URL and CA file. Nothing on a Mac changes.
@@ -199,7 +225,8 @@ Decides:
 - if FileVault is on -> the "FileVault on" runs need no change; if off, turning it on is the owner's (MP-E9); answers design question 4 with real state.
 
 ### MP-E6 Take the Mac out of builds and check it is idle
-Settles: none; prepares every proof (design 5.3). Runs: an operator with the job service's operator token, from the operator's side (no shell on the Mac is needed); the process list in a root shell on the proof Mac once MP-E4 has given one. Needs: MP-E1; the farm owner agrees. Moving the group does not stop builds: js-agent is a package of both groups and goes on taking jobs. An operator's cordon in the job scheduler does (komira-ai/jobscheduler `docs/runbooks/cordon-a-node.md`): it holds for the length asked for, at most seven days a call, with nothing on the Mac renewing it, over restarts of the Mac, of its agent and of the lease server; the jobs already on the Mac go on, so the proof waits until none is booked. `<js-host-id>` is the id the Mac's agent registers with, as `js host list` shows it.
+Settles: none; prepares the owner's steps and section 6a (design 5.3). MP-E13 needs no cordon: its run drains the Mac and puts it back
+("Which steps need the Mac out of builds", above). Runs: an operator with the job service's operator token, from the operator's side (no shell on the Mac is needed); the process list in a root shell on the proof Mac once MP-E4 has given one. Needs: MP-E1; the farm owner agrees. Moving the group does not stop builds: js-agent is a package of both groups and goes on taking jobs. An operator's cordon in the job scheduler does (komira-ai/jobscheduler `docs/runbooks/cordon-a-node.md`): it holds for the length asked for, at most seven days a call, with nothing on the Mac renewing it, over restarts of the Mac, of its agent and of the lease server; the jobs already on the Mac go on, so the proof waits until none is booked. `<js-host-id>` is the id the Mac's agent registers with, as `js host list` shows it.
 ```sh
 # P set as in MP-E1
 js --server https://<job-service> --token-file <js-operator-token> host cordon --host-id <js-host-id> --cordon-secs 48h
@@ -239,7 +266,10 @@ until launchctl print system/$L | grep -q -E 'last exit code = [0-9]+'; do sleep
 launchctl print system/$L | grep -E 'state|last exit code'; cat $N.out $N.err
 launchctl bootout system/$L; rm -P $N.plist $N.in
 ```
-For the probe, `<command>` is `/usr/bin/stat -f %Su /dev/console; /usr/bin/sw_vers; id; /bin/launchctl managername; /usr/bin/who; env | sort` (no `env` in a job whose environment holds a password).
+The probe of this harness (who owns the console, `id`, `launchctl managername`, `who`, the environment, `sw_vers`) is MP-E13 now, run
+by the maintenance hook's own launchd job with the Mac drained by its run, and needs no root shell. The harness is for the owner's steps
+that put a password or an archive on a program's standard input (MP-A2 on, MP-I), which the probe does not run. To run the probe here
+anyway, `<command>` is `/usr/bin/stat -f %Su /dev/console; /usr/bin/sw_vers; id; /bin/launchctl managername; /usr/bin/who; env | sort` (no `env` in a job whose environment holds a password).
 Record: id (uid 0), managername (expected System), console owner, the environment (note a missing PATH, HOME, TMPDIR), end state and exit code, sw_vers.
 Decides:
 - if a program needs an environment the job lacks -> the hook's new runner (beside `crates/hostkeeper-launchd`) passes it, with absolute paths (design 5.5).
@@ -285,6 +315,39 @@ Decides:
 - if "n local administrator accounts" is reported in the window -> the account-making start writes `IsHidden 1` right after `-addUser` and before any other call (built: `update_account_make.rs`); if that window is still seen, it creates without `-admin`, hides, then grants admin (design 5.5).
 - if `ssh.state` becomes `no_login_user` and the session drops -> real lockout risk; run the proof only with the owner at the Mac (MP-E9).
 
+### MP-E13 The launchd context and FileVault from launchd, in one probe run
+Settles: the launchd context every "as root from launchd, nobody logged in" proof assumes (MP-E8's probe: design 5.5) and MP-A6's launchd
+half ([V] of section 5.5 line 481, FileVault off). Runs: an operator on the coordinator side with hk, one command. Needs: MP-E1 (the Mac
+announces `maintenance-v1` and its `maintenance` lists `MAINTENANCE_KIND_PROBE` in `onDemand`: a coordinator and a daemon of a release
+that has the probe); not MP-E2 to MP-E8: no shell, no cordon, no group of its own. Changes nothing on the Mac but the probe file beside its
+run record (`docs/operations/maintenance.md`, "Probe: drain, read, put back").
+```sh
+# P set as in MP-E1; this is the whole of the operator's part: the run drains the Mac (js-agent cordons it and waits for its jobs),
+# probes it, checks the probe was kept and puts it back (js-agent uncordons it)
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/probe-run.json maintenance schedule --kinds probe --host-ids <node-id> --confirm true --reason "Mac proof: launchd probes"
+jq -r '.run.id' $P/probe-run.json
+# read until the host's step is MAINTENANCE_HOST_STEP_DONE (or HALTED: its reason says why; Put back, maintenance.md "A halted host")
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> maintenance get --run-id <run-id>
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-probe.json hosts get --node-id <node-id>
+jq '(.host // .).maintenance.probe' $P/get-probe.json
+```
+Record: the run id, its audit entries (`maintenance_schedule`, `maintenance_start`, `maintenance_step`), the time of each step from
+`maintenance get`, and the probe: for each step its exit code and output. MP-E8's lines are the probe's steps: console owner (`console`),
+sessions (`who`), id (`id`), managername (`managername`), the environment (`env`), `sw_vers`; MP-A6's launchd lines are
+`fdesetup_status` and `fdesetup_supportsauthrestart`.
+Decides:
+- `id` uid 0 and `managername` `System` -> the hook's steps run as root in the System domain; anything else -> stop, nothing of design 5.5
+  can be concluded from a launchd job.
+- `console` `root` and `who` empty -> nobody was logged in for the run, and MP-E7 has nothing to do; a user -> the run saw a logged-in
+  Mac, record it as such (design 10.3), and MP-E7 is the owner's before a "nobody logged in" result.
+- `env` empty -> every program the hook runs gets no environment, as built; a program that needs one shows it in its own step's output.
+- `fdesetup_status` `FileVault is Off.` and `fdesetup_supportsauthrestart` `true`, each exit 0 -> MP-A6's decisions, from launchd as from
+  the shell (`maintenance_mac.rs` unchanged when both agree with design 10.1.2's shell half).
+- the Mac not in the run (`nothing_due`) -> its report lists no `probe` on demand: the Mac's daemon or the coordinator predates it.
+- refused `last_host` -> the Mac is the only host of its group (after MP-E3, `mac-proof`): run the same command with
+  `--take-last-host true`.
+- the turn halts `probe_unwritten` or `probe_missing` -> the probe file beside the run record could not be written or read; the Mac stays
+  cordoned until Put back.
 
 ## 2. The archive checks on the operator's Mac (section 2.0): `hk xcode verify`
 
@@ -683,7 +746,7 @@ Decides:
 
 ### MP-A6 FileVault state and `supportsauthrestart`
 
-Settles section 5.5 line 481 ([V]: FileVault on needs a FileVault-user update account and `supportsauthrestart` true). Root shell. Needs MP-E8. Run with FileVault off, and again after A7. Merged: `maintenance_mac.rs:35` (`/usr/bin/fdesetup`), `:41` (`status`), `:44` (`supportsauthrestart`), `:171-179`, parsers `:199-231` (only `true`/`false`, exit 0).
+Settles section 5.5 line 481 ([V]: FileVault on needs a FileVault-user update account and `supportsauthrestart` true). Root shell. Needs MP-E8. Run with FileVault off, and again after A7. The launchd half with FileVault off is MP-E13's steps `fdesetup_status` and `fdesetup_supportsauthrestart`, run by the maintenance hook as the update path runs them; the harness below is for the run after A7. Merged: `maintenance_mac.rs:35` (`/usr/bin/fdesetup`), `:41` (`status`), `:44` (`supportsauthrestart`), `:171-179`, parsers `:199-231` (only `true`/`false`, exit 0).
 
 ```sh
 # harness of MP-E8, stdin /dev/null
@@ -1416,7 +1479,7 @@ launchctl print system | grep -c 'hk-proof'   # must print 0
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups move --node-id <node-id> --host-group <original-group> --reason "Mac proof finished: back in its group"
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> --response-file $P/get-after.json hosts get --node-id <node-id>
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> host-groups remove --host-group mac-proof --reason "Mac proof finished: group not needed"
-# last, once the Mac is back in its group and as it was: lift MP-E6's cordon
+# last, once the Mac is back in its group and as it was: lift MP-E6's cordon, if one was placed (MP-E13's run lifts its own)
 js --server https://<job-service> --token-file <js-operator-token> host uncordon --host-id <js-host-id>
 js --server https://<job-service> --token-file <js-operator-token> --json host list > $P/js-after.json
 ```

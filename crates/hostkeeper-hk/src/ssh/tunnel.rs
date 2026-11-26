@@ -1,10 +1,14 @@
 //! The byte stream: `Ssh/Tunnel` between this process's stdin and stdout and the host's
 //! port 22 (docs/design/ssh-through-coordinator.md section 7).
 
+use std::pin::Pin;
+
 use hostkeeper_proto::hostkeeper::operator::v1::{Close, Open, TunnelFrame, tunnel_frame};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::{mpsc, watch};
+use tokio_stream::wrappers::{ReceiverStream, SignalStream};
+use tokio_stream::{Stream, StreamExt as _};
 use tonic::Streaming;
 
 use crate::ssh::client::{Client, from_status};
@@ -57,23 +61,70 @@ async fn open(client: &mut Client, host: &str, serial: u64) -> Result<Opened, Er
     }
 }
 
+/// A signal that stops a proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// SIGHUP: ssh sends it to its `ProxyCommand` when it exits, and a terminal that closes sends
+    /// it too, so two can come for one end.
+    Hangup,
+    /// SIGTERM.
+    Terminate,
+}
+
+/// The signals that stop a proxy, one item each time one comes.
+pub(crate) type Signals = Pin<Box<dyn Stream<Item = Stop> + Send>>;
+
+/// SIGHUP and SIGTERM as [`Signals`]. From here on neither ends the process: [`proxy`] does.
+pub(crate) fn stop_signals() -> Result<Signals, Error> {
+    let watch = |kind| {
+        signal(kind).map(SignalStream::new).map_err(|source| {
+            Error::Unusable(format!(
+                "cannot watch for the signals that stop the proxy: {source}"
+            ))
+        })
+    };
+    let hangup = watch(SignalKind::hangup())?.map(|()| Stop::Hangup);
+    let terminate = watch(SignalKind::terminate())?.map(|()| Stop::Terminate);
+    Ok(Box::pin(hangup.merge(terminate)))
+}
+
 /// Relays `input` to the host and the host to `output` until the host closes the stream or
 /// the coordinator ends it. End of `input` is sent as `Close{eof}` and the relay goes on until
-/// the host closes (what `scp` and `rsync` need). Returns how the stream ended: `Ok` for the
-/// host's close or an end after `input` did, an error when the coordinator closed it for
-/// another reason.
+/// the host closes (what `scp` and `rsync` need). A first signal of `signals`, and an `output`
+/// that takes no more bytes (ssh has gone), end `input` the same way: `Close{eof}` is sent, once,
+/// and the relay waits for the coordinator to end the stream, dropping what the host still sends
+/// when `output` is gone, so the coordinator records the close's cause and not an error. That
+/// wait lasts until the host closes, or at most until the coordinator's idle or session limit
+/// ends the tunnel. A SIGTERM after a first signal ends the relay at once; a further SIGHUP does
+/// not. A signal before the coordinator's `opened` ends the proxy before any byte moves.
+/// Returns how the stream ended: `Ok` for the host's close or an end after `input` did, an
+/// error when the coordinator closed it for another reason or a signal cut it.
 pub async fn proxy(
     client: &mut Client,
     host: &str,
     serial: u64,
     mut input: Box<dyn AsyncRead + Unpin + Send>,
     output: &mut (dyn AsyncWrite + Unpin),
+    mut signals: Signals,
 ) -> Result<(), Error> {
-    let (sender, mut answers) = open(client, host, serial).await?;
+    let (sender, mut answers) = tokio::select! {
+        opened = open(client, host, serial) => opened?,
+        Some(_) = signals.next() => {
+            return Err(Error::Unusable(
+                "a signal ended the proxy before the tunnel opened".into(),
+            ));
+        }
+    };
+    // Set when `input` is to be taken as ended: at a signal, or when `output` fails.
+    let (stop, mut stopped) = watch::channel(false);
     let upstream = tokio::spawn(async move {
         let mut buffer = vec![0_u8; FRAME];
         loop {
-            let read = input.read(&mut buffer).await.unwrap_or(0);
+            let read = tokio::select! {
+                biased;
+                _ = stopped.wait_for(|stop| *stop) => 0,
+                read = input.read(&mut buffer) => read.unwrap_or(0),
+            };
             let next = if read == 0 {
                 frame(tunnel_frame::Frame::Close(Close {
                     cause: "eof".into(),
@@ -91,14 +142,34 @@ pub async fn proxy(
         // stream, and with it the half-close the host's reply still needs.
         sender
     });
+    let mut signalled = false;
+    // Whether `output` still takes bytes.
+    let mut delivering = true;
     let ended = loop {
-        match answers.message().await {
+        let answer = tokio::select! {
+            answer = answers.message() => answer,
+            Some(signal) = signals.next() => {
+                if signalled && signal == Stop::Terminate {
+                    break Err(Error::Unusable(
+                        "SIGTERM after a first signal ended the proxy before the tunnel closed"
+                            .into(),
+                    ));
+                }
+                signalled = true;
+                stop.send_replace(true);
+                continue;
+            }
+        };
+        match answer {
             Ok(Some(TunnelFrame {
                 frame: Some(tunnel_frame::Frame::Data(bytes)),
             })) => {
-                let delivered = output.write_all(&bytes).await.and(output.flush().await);
-                if delivered.is_err() {
-                    break Ok(());
+                if delivering {
+                    let delivered = output.write_all(&bytes).await.and(output.flush().await);
+                    if delivered.is_err() {
+                        delivering = false;
+                        stop.send_replace(true);
+                    }
                 }
             }
             Ok(Some(TunnelFrame {
