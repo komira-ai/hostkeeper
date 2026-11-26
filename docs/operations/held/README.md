@@ -5,9 +5,10 @@ workflow, test or other script runs them. Each one:
 
 - changes nothing by default: it makes its reads and prints each change it would make as
   `DRY-RUN: <command>`, and acts only with `--apply`;
-- prints every call before it makes it: `READ:` a read, `+` a change;
-- never forces: it passes no flag that overrides a refusal (such as `--take-last-host`), and stops
-  at the first refusal or failure rather than going on;
+- prints every call before it makes it: `READ:` a read, `+` a change (a read repeated while it
+  waits, once);
+- never forces: it passes no flag that overrides a refusal (such as `--take-last-host`), and with
+  `--apply` stops at the first refusal or failure rather than going on to the next change;
 - takes its settings as flags, and reaches the coordinator through `hk` and its settings file
   (`hk settings init`, [docs/cli.md](../../cli.md)), so it holds no address, token or path of its
   own;

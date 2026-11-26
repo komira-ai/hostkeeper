@@ -23,7 +23,8 @@
 #   the run ended
 # It never passes --take-last-host, and never retries a refused call.
 #
-# Every read and change is printed before it runs: `READ:` a read, `+` a change.
+# Every read and change is printed before it runs: `READ:` a read, `+` a change; a run's reads
+# are printed once, before the first. The dry run reads every Mac, ready or not.
 # With --record DIR (an existing directory, the workspace scratch directory and not /tmp),
 # each answer is also written there as <mac>-<what>.json, and the audit lines as
 # <mac>-audit.txt; a file already there is never overwritten.
@@ -41,6 +42,7 @@ RECORD=""
 POLL=15
 DRAIN=""
 LOOK_TRIES=20
+READ_TRIES=40
 
 usage() {
     cat <<'EOF'
@@ -170,6 +172,11 @@ BUILD=$(printf '%s' "$store" | jq -r --arg v "$VERSION" \
     '[.archives[]? | select(.version == $v)][0].build // empty')
 SIZE=$(printf '%s' "$store" | jq -r --arg v "$VERSION" \
     '[.archives[]? | select(.version == $v)][0].sizeBytes // "0"')
+BUILDS=$(printf '%s' "$store" | jq -r --arg v "$VERSION" '[.archives[]? | select(.version == $v)] | length')
+if [ "$BUILDS" -gt 1 ]; then
+    say "the store holds $BUILDS builds of Xcode $VERSION: remove the one not wanted first (hk xcode remove)"
+    exit 1
+fi
 if [ -z "$BUILD" ]; then
     say "the store holds no Xcode $VERSION: bring it in first (hk xcode add $VERSION)"
     exit 1
@@ -204,9 +211,14 @@ ready() {
     record "$mac-host-$2.json" "$host"
     say "$mac:"
     facts "$host"
+    xdue=$(printf '%s' "$host" | jq -r '[.host.maintenance.due[]? | select(.kind == "MAINTENANCE_KIND_XCODE")] | length')
     if installed "$host"; then
-        say "$mac: Xcode $VERSION ($BUILD) is installed already; nothing to do"
-        return 3
+        if [ "$xdue" = 0 ]; then
+            say "$mac: Xcode $VERSION ($BUILD) is installed already; nothing to do"
+            return 3
+        fi
+        say "$mac: not ready: Xcode $VERSION is installed, but xcode is still due (the group's xcode_default): not this script's turn"
+        return 1
     fi
     daemon=$(printf '%s' "$host" | jq -r '.host.heartbeat.agent.version // ""')
     if ! printf '%s' "$host" | jq -e '.host.live == true' >/dev/null; then
@@ -222,9 +234,9 @@ ready() {
         return 1
     fi
     if ! printf '%s' "$host" | jq -e --arg v "$VERSION" \
-        '[.host.maintenance.due[]? | select(.kind == "MAINTENANCE_KIND_XCODE" and .to == $v)] | length > 0' \
-        >/dev/null; then
-        say "$mac: not ready: Xcode $VERSION is not due on it (its group's xcode_keep, or the store)"
+        --arg b "$BUILD" '[.host.maintenance.due[]? | select(.kind == "MAINTENANCE_KIND_XCODE"
+            and .to == $v and .label == $b)] | length > 0' >/dev/null; then
+        say "$mac: not ready: Xcode $VERSION ($BUILD) is not due on it (its group's xcode_keep, or the store)"
         return 1
     fi
     free=$(printf '%s' "$host" | jq -r '.host.maintenance.mac.dataFreeBytes // "0"')
@@ -250,8 +262,9 @@ ready() {
 audit() {
     entries=$(read_hk audit list --node-id "$1" --since-seq "$3") || { say "$1: the audit log could not be read"; return 1; }
     lines=$(printf '%s' "$entries" | jq -r --arg t "run $2" '.entries[]?
-        | select(.reason == $t or (.reason | startswith($t + " ")) or (.reason | endswith(" " + $t)))
-        | "audit \(.seq) \(.atUnix // "-") \(.action) by \(.byName // .by) node \(.nodeId // "-"): \(.reason)"')
+        | (.reason // "") as $r
+        | select($r == $t or ($r | startswith($t + " ")) or ($r | endswith(" " + $t)))
+        | "audit \(.seq) \(.atUnix // "-") \(.action) by \(.byName // .by) node \(.nodeId // "-"): \($r)"')
     record "$1-audit.txt" "$4
 $lines"
     say "$4"
@@ -272,9 +285,12 @@ turn() {
     [ -n "$run" ] || { say "$mac: the answer names no run: $resp"; return 1; }
     say "$mac: run $run scheduled"
 
+    say "READ: hk maintenance get --run-id $run, every $POLL s until the turn ends" >&2
     last=""
+    failed=0
     while :; do
         if got=$(hk maintenance get --run-id "$run"); then
+            failed=0
             step=$(printf '%s' "$got" | jq -r --arg m "$mac" '[.hosts[]? | select(.hostId == $m)][0].step // "-"')
             state=$(printf '%s' "$got" | jq -r '.run.state // "-"')
             if [ "$step" != "$last" ]; then
@@ -283,12 +299,24 @@ turn() {
             fi
             case $step in
                 *_DONE | *_DEFERRED | *_HALTED | *_NOT_BACK | *_NOT_REACHED | *_SKIPPED) break ;;
-            esac
-            case $state in
-                *_DONE | *_CANCELLED | *_WINDOW_ENDED) break ;;
+                *_STAGING | *_DRAINING | *_APPLYING | *_REBOOTING | *_CHECKING | *_PUTTING_BACK) ;;
+                *)
+                    # Not in its turn: a run that ended, or halted in another host, never starts it.
+                    case $state in
+                        *_DONE | *_CANCELLED | *_WINDOW_ENDED | *_HALTED) break ;;
+                    esac
+                    ;;
             esac
         else
-            say "$mac: run $run could not be read; it goes on, and is read again"
+            failed=$((failed + 1))
+            say "$mac: run $run could not be read ($failed in a row); it goes on, and is read again"
+            if [ "$failed" -ge "$READ_TRIES" ]; then
+                say "$mac: stopped following run $run after $failed failed reads; the run goes on. Read it with"
+                say "  hk maintenance get --run-id $run"
+                say "and, once the Mac's turn is halted, retry-host or put-back it as below; or cancel it:"
+                say "  hk maintenance cancel --run-id $run --reason \"<why>\""
+                return 1
+            fi
         fi
         sleep "$POLL"
     done
@@ -348,10 +376,12 @@ turn() {
     return 0
 }
 
+MODE=dry
+[ "$APPLY" -eq 0 ] || MODE=apply
 status=0
 for mac in $MACS; do
     rc=0
-    ready "$mac" before || rc=$?
+    ready "$mac" "$MODE" || rc=$?
     if [ "$rc" -eq 3 ]; then
         continue
     fi
