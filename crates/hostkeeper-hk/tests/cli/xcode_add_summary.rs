@@ -3,250 +3,13 @@
 //! `HostGroups.List` in pages, `Maintenance.List`, `Maintenance.Get` and `Maintenance.Schedule`
 //! as the test says, in front of the fake store.
 
-use std::collections::BTreeMap;
-
 use serde_json::{Value, json};
 
-use crate::add_rig::{Add, FLEET, Store, archive_bytes, puts, sha256};
-use crate::rig::{Ran, Reply, Request, Server, TOKEN};
-
-const HOSTS: &str = FLEET[0];
-const GROUPS: &str = FLEET[1];
-const RUNS: &str = FLEET[2];
-const GET: &str = "/hostkeeper.operator.v1.Maintenance/Get";
-const SCHEDULE: &str = "/hostkeeper.operator.v1.Maintenance/Schedule";
-
-const MAC: &str = "PLATFORM_DARWIN_ARM64";
-const XCODE: &str = "MAINTENANCE_KIND_XCODE";
-
-/// The line a store that already holds the release makes the run say first.
-const HELD: &str = "already in the store: Xcode 27.2 (27B52)\n";
-
-/// The line `hk maintenance schedule ...` that stores the run of `group`.
-fn command(group: &str) -> String {
-    format!(
-        "    hk maintenance schedule --host-group {group} --kinds xcode --reason \"Xcode 27.2\" \
-         --confirm true\n"
-    )
-}
-
-/// What the fake gateway answers; a path in `broken` answers that reply in place of its own.
-#[derive(Clone, Default)]
-struct Fleet {
-    /// The pages of `Hosts.List`.
-    hosts: Vec<Value>,
-    /// The pages of `HostGroups.List`.
-    groups: Vec<Value>,
-    /// The open runs `Maintenance.List` names.
-    runs: Vec<Value>,
-    /// The answer of `Maintenance.Get`, by run id.
-    turns: BTreeMap<String, Value>,
-    /// The answer of `Maintenance.Schedule`, by group: its status and body.
-    schedule: BTreeMap<String, (u16, String)>,
-    broken: Option<(&'static str, Reply)>,
-}
-
-/// A host that is a Mac with a maintenance report listing `xcodes`: `(version, build, selected,
-/// foreign)`.
-fn mac(id: &str, group: &str, xcodes: &[(&str, &str, bool, bool)]) -> Value {
-    let xcodes: Vec<Value> = xcodes
-        .iter()
-        .map(|(version, build, selected, foreign)| {
-            let mut one = json!({
-                "version": version,
-                "build": build,
-                "path": format!("/Applications/Xcode-{version}.app"),
-            });
-            if *selected {
-                one["selected"] = json!(true);
-            }
-            if *foreign {
-                one["foreign"] = json!(true);
-            }
-            one
-        })
-        .collect();
-    let mut host = json!({
-        "nodeId": id,
-        "heartbeat": {"platform": MAC},
-        "maintenance": {"xcodes": xcodes},
-    });
-    if !group.is_empty() {
-        host["hostGroup"] = json!(group);
-    }
-    host
-}
-
-/// A group whose Macs keep `keep` Xcodes, in batches of `batch`, with `default` selected.
-fn group(name: &str, keep: u32, batch: Option<u32>, default: Option<&str>) -> Value {
-    let mut maintenance = json!({"xcodeKeep": keep});
-    if let Some(batch) = batch {
-        maintenance["batch"] = json!(batch);
-    }
-    if let Some(default) = default {
-        maintenance["xcodeDefault"] = json!(default);
-    }
-    json!({"group": {"name": name, "policy": {"maintenance": maintenance}}, "generation": "1"})
-}
-
-/// A run, as `Maintenance.List` and `Maintenance.Get` name it.
-fn run(id: &str, state: &str) -> Value {
-    json!({"id": id, "state": format!("MAINTENANCE_STATE_{state}")})
-}
-
-/// A host's turn of a run.
-fn turn(id: &str, step: &str, kinds: &[&str]) -> Value {
-    json!({"hostId": id, "step": format!("MAINTENANCE_HOST_STEP_{step}"), "kinds": kinds})
-}
-
-/// A preview of a run that would take `taken` and skip `skipped` `(host, MAINTENANCE_SKIP_*)`.
-fn preview(taken: &[&str], skipped: &[(&str, &str)], batch: Option<u32>) -> (u16, String) {
-    let mut hosts: Vec<Value> = taken
-        .iter()
-        .map(|id| turn(id, "WAITING", &[XCODE]))
-        .collect();
-    for (id, why) in skipped {
-        let mut skipped = turn(id, "SKIPPED", &[]);
-        skipped["skippedBecause"] = json!(why);
-        hosts.push(skipped);
-    }
-    let mut run = json!({"kinds": [XCODE]});
-    if let Some(batch) = batch {
-        run["batch"] = json!(batch);
-    }
-    (200, json!({"run": run, "hosts": hosts}).to_string())
-}
-
-/// The refusal the gateway answers.
-fn refusal(code: &str, reason: &str) -> Reply {
-    Reply::new(
-        400,
-        format!("{{\"code\":\"{code}\",\"reason\":\"{reason}\"}}"),
-    )
-}
-
-/// The same refusal as a preview's answer: its status and body.
-fn refused(code: &str, reason: &str) -> (u16, String) {
-    let reply = refusal(code, reason);
-    (reply.status, String::from_utf8(reply.body).expect("text"))
-}
-
-impl Fleet {
-    /// `pages` as the pages of a list: page `n` names page `n + 1` as the next.
-    fn page(pages: &[Value], request: &Request) -> Reply {
-        let asked: Value = serde_json::from_slice(&request.body).expect("a JSON body");
-        let at = match asked["pageToken"].as_str().unwrap_or_default() {
-            "" => 0,
-            token => token
-                .strip_prefix("page-")
-                .and_then(|n| n.parse().ok())
-                .expect("a token this fleet gave"),
-        };
-        let mut page = pages[at].clone();
-        if at + 1 < pages.len() {
-            page["nextPageToken"] = json!(format!("page-{}", at + 1));
-        }
-        Reply::new(200, page.to_string())
-    }
-
-    fn answer(&self, request: &Request) -> Option<Reply> {
-        if let Some((path, reply)) = &self.broken
-            && request.target == *path
-        {
-            return Some(reply.clone());
-        }
-        let body: Value = serde_json::from_slice(&request.body).unwrap_or_default();
-        match request.target.as_str() {
-            HOSTS => Some(Fleet::page(&self.hosts, request)),
-            GROUPS => Some(Fleet::page(&self.groups, request)),
-            RUNS => Some(Reply::new(200, json!({"runs": self.runs}).to_string())),
-            GET => {
-                let id = body["runId"].as_str().expect("a run id");
-                Some(Reply::new(200, self.turns[id].to_string()))
-            }
-            SCHEDULE => {
-                let group = body["hostGroup"].as_str().expect("a group");
-                let (status, text) = self.schedule[group].clone();
-                Some(Reply::new(status, text))
-            }
-            _ => None,
-        }
-    }
-
-    /// `run` and its turns, as `Maintenance.List` and `Maintenance.Get` answer them.
-    fn with_run(mut self, run: Value, turns: Vec<Value>) -> Fleet {
-        let id = run["id"].as_str().expect("an id").to_owned();
-        self.turns
-            .insert(id, json!({"run": run.clone(), "hosts": turns}));
-        self.runs.push(run);
-        self
-    }
-
-    fn with_preview(mut self, group: &str, answer: (u16, String)) -> Fleet {
-        self.schedule.insert(group.to_owned(), answer);
-        self
-    }
-
-    fn broken(mut self, path: &'static str, reply: Reply) -> Fleet {
-        self.broken = Some((path, reply));
-        self
-    }
-}
-
-/// The store of most tests: it holds the archive of the tests as 27.2 (27B52) and, besides, the
-/// releases `others` as `(version, build)`.
-fn store(others: &[(&str, &str)]) -> Store {
-    let mut store = Store::default().holding(&archive_bytes(), "27.2", "27B52");
-    for (n, (version, build)) in others.iter().enumerate() {
-        store = store.holding_sha(&format!("{n:064x}"), version, build);
-    }
-    store
-}
-
-/// `hk xcode add <archive>` against `store` behind `fleet`.
-fn add(name: &str, store: Store, fleet: &Fleet) -> (Add, Server, Ran) {
-    let add = Add::new(&format!("summary-{name}"));
-    let path = add.file("Xcode_27.2.xip", &archive_bytes(), 100);
-    let fleet = fleet.clone();
-    let server = store.serve_with(&add.rig, move |request| fleet.answer(request));
-    let ran = add.add(&server, &[&path]);
-    (add, server, ran)
-}
-
-/// The JSON bodies the server saw on `path`.
-fn bodies(server: &Server, path: &str) -> Vec<Value> {
-    server
-        .seen()
-        .iter()
-        .filter(|seen| seen.target == path)
-        .map(|seen| serde_json::from_slice(&seen.body).expect("a JSON body"))
-        .collect()
-}
-
-/// The fleet of the first test: mac-build's Macs and mac-proof's, in two pages of each list, with
-/// a Linux host among them.
-fn two_groups() -> Fleet {
-    let linux = json!({"nodeId": "build-1", "hostGroup": "linux", "heartbeat": {"platform": "PLATFORM_LINUX_X86_64"}});
-    Fleet {
-        hosts: vec![
-            json!({"hosts": [
-                mac("mac-01", "mac-build", &[]),
-                mac("mac-02", "mac-build", &[("27.1", "27A10", true, false)]),
-                linux,
-            ]}),
-            json!({"hosts": [mac("mac-03", "mac-build", &[]), mac("mac-04", "mac-proof", &[])]}),
-        ],
-        groups: vec![
-            json!({"hostGroups": [group("mac-build", 2, Some(1), None)]}),
-            json!({"hostGroups": [group("mac-proof", 0, None, None)]}),
-        ],
-        ..Fleet::default()
-    }
-    .with_preview(
-        "mac-build",
-        preview(&["mac-01", "mac-02", "mac-03"], &[], None),
-    )
-}
+use crate::add_rig::{Store, archive_bytes, puts, sha256};
+use crate::rig::{Reply, TOKEN};
+use crate::summary_rig::*;
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 /// Proves: the summary of design section 1 for a store that already holds the release: after
 /// `already in the store:` it says the Macs due it by group with the group's `xcode_keep` and
@@ -313,12 +76,19 @@ fn the_macs_due_the_release_are_listed_by_group_with_the_line_that_stores_the_ru
 #[test]
 fn a_mac_whose_due_item_names_a_newer_release_is_due_that_one_then_this_in_the_same_turn() {
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "g", &[("27.1", "27A10", true, false)]),
             mac("mac-02", "g", &[("27.3", "27C10", true, false)]),
-            mac("mac-03", "g", &[("27.3", "27C10", true, false), ("27.2", "27B52", false, false)]),
-        ]})],
-        groups: vec![json!({"hostGroups": [{"group": {"name": "g", "policy": {"maintenance": {"xcodeKeep": 2}}}}]})],
+            mac(
+                "mac-03",
+                "g",
+                &[
+                    ("27.3", "27C10", true, false),
+                    ("27.2", "27B52", false, false),
+                ],
+            ),
+        ]],
+        groups: vec![vec![group("g", 2, None, None)]],
         ..Fleet::default()
     }
     .with_preview("g", preview(&["mac-01", "mac-02"], &[], None));
@@ -352,7 +122,7 @@ fn a_mac_with_it_installed_is_due_to_select_it_only_while_it_is_the_groups_defau
         ]
     };
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "latest", &both("26.4")),
             mac("mac-02", "latest", &both("27.2")),
             mac("mac-03", "pinned", &both("26.4")),
@@ -361,14 +131,17 @@ fn a_mac_with_it_installed_is_due_to_select_it_only_while_it_is_the_groups_defau
             mac(
                 "mac-06",
                 "latest",
-                &[("27.2", "27B52", false, false), ("27.2", "27B52", true, true)],
+                &[
+                    ("27.2", "27B52", false, false),
+                    ("27.2", "27B52", true, true),
+                ],
             ),
-        ]})],
-        groups: vec![json!({"hostGroups": [
+        ]],
+        groups: vec![vec![
             group("latest", 2, None, Some("latest")),
             group("pinned", 2, None, Some("26.4")),
             group("gone", 2, None, Some("25.0")),
-        ]})],
+        ]],
         ..Fleet::default()
     }
     .with_preview("latest", preview(&["mac-01", "mac-06"], &[], None));
@@ -391,12 +164,12 @@ fn a_mac_with_it_installed_is_due_to_select_it_only_while_it_is_the_groups_defau
 #[test]
 fn an_xcode_installed_elsewhere_or_of_another_build_does_not_count() {
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "g", &[("27.2", "27B52", true, true)]),
             mac("mac-02", "g", &[("27.2", "27B51", true, false)]),
             mac("mac-03", "g", &[]),
-        ]})],
-        groups: vec![json!({"hostGroups": [group("g", 1, None, None)]})],
+        ]],
+        groups: vec![vec![group("g", 1, None, None)]],
         ..Fleet::default()
     }
     .with_preview("g", preview(&["mac-01", "mac-02", "mac-03"], &[], None));
@@ -420,30 +193,34 @@ fn an_xcode_installed_elsewhere_or_of_another_build_does_not_count() {
 /// that no run takes.
 #[test]
 fn a_mac_in_a_run_that_takes_xcode_says_the_run_and_its_window() {
-    let mut window = run("r-win", "SCHEDULED");
-    window["windowStartUnix"] = json!("1790000000");
-    window["windowEndUnix"] = json!(1_790_009_000);
+    let mut window = run("r-win", proto::MaintenanceState::Scheduled);
+    window.window_start_unix = 1_790_000_000;
+    window.window_end_unix = 1_790_009_000;
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "g", &[]),
             mac("mac-02", "g", &[]),
             mac("mac-03", "h", &[]),
-        ]})],
-        groups: vec![json!({"hostGroups": [group("g", 1, None, None), group("h", 1, None, None)]})],
+        ]],
+        groups: vec![vec![group("g", 1, None, None), group("h", 1, None, None)]],
         ..Fleet::default()
     }
     .with_run(
-        run("r-now", "RUNNING"),
+        run("r-now", proto::MaintenanceState::Running),
         vec![
-            turn("mac-02", "WAITING", &["MAINTENANCE_KIND_MACOS", XCODE]),
-            turn("mac-03", "DONE", &[XCODE]),
+            turn(
+                "mac-02",
+                proto::MaintenanceHostStep::Waiting,
+                &[agent::MaintenanceKind::Macos, XCODE],
+            ),
+            turn("mac-03", proto::MaintenanceHostStep::Done, &[XCODE]),
         ],
     )
     .with_run(
         window,
         vec![
-            turn("mac-01", "WAITING", &[XCODE]),
-            turn("mac-03", "NOT_REACHED", &[XCODE]),
+            turn("mac-01", proto::MaintenanceHostStep::Waiting, &[XCODE]),
+            turn("mac-03", proto::MaintenanceHostStep::NotReached, &[XCODE]),
         ],
     )
     .with_preview("h", preview(&["mac-03"], &[], None));
@@ -467,17 +244,57 @@ fn a_mac_in_a_run_that_takes_xcode_says_the_run_and_its_window() {
     assert_eq!(asked[0]["hostGroup"], "h");
 }
 
+/// Proves: the summary reads a window written as numbers as well as one written as strings (the
+/// gateway writes strings; a number is what a reader of 64-bit values is to accept too): the
+/// answer of `Maintenance.Get` is the gateway's own with the two numbers written as numbers.
+#[test]
+fn a_window_written_as_numbers_is_read_as_one_written_as_strings() {
+    let mut window = run("r-win", proto::MaintenanceState::Scheduled);
+    window.window_start_unix = 1_790_000_000;
+    window.window_end_unix = 1_790_009_000;
+    let turns = vec![turn(
+        "mac-01",
+        proto::MaintenanceHostStep::Waiting,
+        &[XCODE],
+    )];
+    let mut numbers = answer_of(&window, &turns);
+    assert_eq!(numbers["run"]["windowStartUnix"], "1790000000");
+    numbers["run"]["windowStartUnix"] = json!(1_790_000_000_u64);
+    numbers["run"]["windowEndUnix"] = json!(1_790_009_000_u64);
+    let fleet = Fleet {
+        hosts: vec![vec![mac("mac-01", "g", &[])]],
+        groups: vec![vec![group("g", 1, None, None)]],
+        ..Fleet::default()
+    }
+    .with_run(window, turns)
+    .broken(GET, Reply::new(200, numbers.to_string()));
+    let (_add, _server, ran) = add("numbers", store(&[]), &fleet);
+    assert!(
+        ran.stdout.contains(
+            "    mac-01: in run r-win, window 2026-09-21 14:13 UTC to 2026-09-21 16:43 UTC\n"
+        ),
+        "{ran:?}"
+    );
+}
+
 /// Proves: a window with no end says `to no end`.
 #[test]
 fn a_window_with_no_end_says_so() {
-    let mut window = run("r-win", "SCHEDULED");
-    window["windowStartUnix"] = json!("1790000000");
+    let mut window = run("r-win", proto::MaintenanceState::Scheduled);
+    window.window_start_unix = 1_790_000_000;
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [mac("mac-01", "g", &[])]})],
-        groups: vec![json!({"hostGroups": [group("g", 1, None, None)]})],
+        hosts: vec![vec![mac("mac-01", "g", &[])]],
+        groups: vec![vec![group("g", 1, None, None)]],
         ..Fleet::default()
     }
-    .with_run(window, vec![turn("mac-01", "WAITING", &[XCODE])]);
+    .with_run(
+        window,
+        vec![turn(
+            "mac-01",
+            proto::MaintenanceHostStep::Waiting,
+            &[XCODE],
+        )],
+    );
     let (_add, _server, ran) = add("no-end", store(&[]), &fleet);
     assert!(
         ran.stdout
@@ -493,31 +310,44 @@ fn a_window_with_no_end_says_so() {
 /// a Mac whose turn is done has one.
 #[test]
 fn a_mac_in_a_run_that_does_not_take_xcode_has_no_schedule_line() {
-    let mut halted = run("r-halt", "HALTED");
-    halted["haltedGroups"] = json!(["i"]);
+    let mut halted = run("r-halt", proto::MaintenanceState::Halted);
+    halted.halted_groups = vec!["i".to_owned()];
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "g", &[]),
             mac("mac-02", "g", &[]),
             mac("mac-03", "g", &[]),
             mac("mac-04", "h", &[]),
             mac("mac-05", "i", &[]),
-        ]})],
-        groups: vec![json!({"hostGroups": [
-            group("g", 1, None, None), group("h", 1, None, None), group("i", 1, None, None)
-        ]})],
+        ]],
+        groups: vec![vec![
+            group("g", 1, None, None),
+            group("h", 1, None, None),
+            group("i", 1, None, None),
+        ]],
         ..Fleet::default()
     }
     .with_run(
-        run("r-old", "RUNNING"),
+        run("r-old", proto::MaintenanceState::Running),
         vec![
-            turn("mac-01", "WAITING", &["MAINTENANCE_KIND_MACOS"]),
-            turn("mac-02", "STAGING", &[XCODE]),
-            turn("mac-03", "DEFERRED", &[XCODE]),
-            turn("mac-04", "DONE", &[XCODE]),
+            turn(
+                "mac-01",
+                proto::MaintenanceHostStep::Waiting,
+                &[agent::MaintenanceKind::Macos],
+            ),
+            turn("mac-02", proto::MaintenanceHostStep::Staging, &[XCODE]),
+            turn("mac-03", proto::MaintenanceHostStep::Deferred, &[XCODE]),
+            turn("mac-04", proto::MaintenanceHostStep::Done, &[XCODE]),
         ],
     )
-    .with_run(halted, vec![turn("mac-05", "WAITING", &[XCODE])])
+    .with_run(
+        halted,
+        vec![turn(
+            "mac-05",
+            proto::MaintenanceHostStep::Waiting,
+            &[XCODE],
+        )],
+    )
     .with_preview("h", preview(&["mac-04"], &[], None));
     let (_add, server, ran) = add("no-xcode", store(&[]), &fleet);
     assert_eq!(
@@ -543,13 +373,16 @@ fn a_mac_in_a_run_that_does_not_take_xcode_has_no_schedule_line() {
 #[test]
 fn skipped_hosts_are_printed_with_the_coordinators_reason_and_the_batch_of_the_run() {
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
-            mac("mac-01", "g", &[]), mac("mac-02", "g", &[]), mac("mac-03", "g", &[]),
+        hosts: vec![vec![
+            mac("mac-01", "g", &[]),
+            mac("mac-02", "g", &[]),
+            mac("mac-03", "g", &[]),
             mac("mac-04", "h", &[]),
-        ]})],
-        groups: vec![
-            json!({"hostGroups": [group("g", 1, Some(2), None), group("h", 1, None, None)]}),
-        ],
+        ]],
+        groups: vec![vec![
+            group("g", 1, Some(2), None),
+            group("h", 1, None, None),
+        ]],
         ..Fleet::default()
     }
     .with_preview(
@@ -557,8 +390,8 @@ fn skipped_hosts_are_printed_with_the_coordinators_reason_and_the_batch_of_the_r
         preview(
             &["mac-01"],
             &[
-                ("mac-02", "MAINTENANCE_SKIP_NO_UPDATE_ACCOUNT"),
-                ("mac-03", "MAINTENANCE_SKIP_FILEVAULT_NOT_READY"),
+                ("mac-02", proto::MaintenanceSkip::NoUpdateAccount),
+                ("mac-03", proto::MaintenanceSkip::FilevaultNotReady),
             ],
             None,
         ),
@@ -584,8 +417,8 @@ fn skipped_hosts_are_printed_with_the_coordinators_reason_and_the_batch_of_the_r
 #[test]
 fn a_refused_run_is_printed_with_the_coordinators_reason_and_last_host_names_its_flag() {
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [mac("mac-01", "g", &[]), mac("mac-02", "h", &[])]})],
-        groups: vec![json!({"hostGroups": [group("g", 1, None, None), group("h", 1, None, None)]})],
+        hosts: vec![vec![mac("mac-01", "g", &[]), mac("mac-02", "h", &[])]],
+        groups: vec![vec![group("g", 1, None, None), group("h", 1, None, None)]],
         ..Fleet::default()
     }
     .with_preview("g", refused("FAILED_PRECONDITION", "last_host"))
@@ -614,20 +447,16 @@ fn a_refused_run_is_printed_with_the_coordinators_reason_and_last_host_names_its
 /// says so and nothing is scheduled.
 #[test]
 fn macs_that_will_not_install_it_are_left_out_with_the_reason() {
-    let report_less =
-        json!({"nodeId": "mac-05", "hostGroup": "g1", "heartbeat": {"platform": MAC}});
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "g0", &[]),
             mac("mac-02", "g1", &[]),
             mac("mac-03", "", &[]),
             mac("mac-04", "zz", &[]),
-            report_less,
+            mac_without_report("mac-05", "g1"),
             mac("mac-06", "g0", &[]),
-        ]})],
-        groups: vec![
-            json!({"hostGroups": [group("g0", 0, None, None), group("g1", 1, None, None)]}),
-        ],
+        ]],
+        groups: vec![vec![group("g0", 0, None, None), group("g1", 1, None, None)]],
         ..Fleet::default()
     };
     let (_add, server, ran) = add("left-out", store(&[("27.3", "27C10")]), &fleet);
@@ -648,8 +477,8 @@ fn macs_that_will_not_install_it_are_left_out_with_the_reason() {
 #[test]
 fn the_group_keeps_the_newest_releases_and_this_one_only_while_it_is_among_them() {
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [mac("mac-01", "g", &[])]})],
-        groups: vec![json!({"hostGroups": [group("g", 2, None, None)]})],
+        hosts: vec![vec![mac("mac-01", "g", &[])]],
+        groups: vec![vec![group("g", 2, None, None)]],
         ..Fleet::default()
     }
     .with_preview("g", preview(&["mac-01"], &[], None));
@@ -676,13 +505,14 @@ fn the_group_keeps_the_newest_releases_and_this_one_only_while_it_is_among_them(
 #[test]
 fn a_release_just_stored_is_among_the_releases_the_group_keeps() {
     let fleet = Fleet {
-        hosts: vec![json!({"hosts": [
+        hosts: vec![vec![
             mac("mac-01", "two", &[("27.3", "27C10", true, false)]),
             mac("mac-02", "one", &[("27.3", "27C10", true, false)]),
-        ]})],
-        groups: vec![
-            json!({"hostGroups": [group("two", 2, None, None), group("one", 1, None, None)]}),
-        ],
+        ]],
+        groups: vec![vec![
+            group("two", 2, None, None),
+            group("one", 1, None, None),
+        ]],
         ..Fleet::default()
     }
     .with_preview("two", preview(&["mac-01"], &[], None));
@@ -708,9 +538,7 @@ fn a_release_just_stored_is_among_the_releases_the_group_keeps() {
 #[test]
 fn with_no_mac_stdout_holds_the_answer_alone() {
     let fleet = Fleet {
-        hosts: vec![
-            json!({"hosts": [{"nodeId": "build-1", "heartbeat": {"platform": "PLATFORM_LINUX_X86_64"}}]}),
-        ],
+        hosts: vec![vec![linux("build-1", "")]],
         ..Fleet::default()
     };
     let (_add, server, ran) = add("no-mac", store(&[]), &fleet);
@@ -732,18 +560,19 @@ fn with_no_mac_stdout_holds_the_answer_alone() {
 fn a_call_that_fails_leaves_the_archive_stored_and_says_summary_unavailable() {
     let fleet = || {
         Fleet {
-            hosts: vec![json!({"hosts": [mac("mac-01", "g", &[])]})],
-            groups: vec![json!({"hostGroups": [group("g", 1, None, None)]})],
+            hosts: vec![vec![mac("mac-01", "g", &[])]],
+            groups: vec![vec![group("g", 1, None, None)]],
             ..Fleet::default()
         }
         .with_run(
-            run("r-1", "RUNNING"),
-            vec![turn("mac-01", "DONE", &[XCODE])],
+            run("r-1", proto::MaintenanceState::Running),
+            vec![turn("mac-01", proto::MaintenanceHostStep::Done, &[XCODE])],
         )
     };
     let html = || Reply::new(502, "<html>bad gateway</html>");
-    let mut bad_window = run("r-1", "RUNNING");
-    bad_window["windowStartUnix"] = json!("soon");
+    // The one answer the gateway does not give: a window start that is no number.
+    let mut bad_window = answer_of(&run("r-1", proto::MaintenanceState::Running), &[]);
+    bad_window["run"]["windowStartUnix"] = json!("soon");
     let cases: Vec<(&str, Fleet, &str)> = vec![
         (
             "Hosts.List",
@@ -767,10 +596,7 @@ fn a_call_that_fails_leaves_the_archive_stored_and_says_summary_unavailable() {
         ),
         (
             "bad number",
-            fleet().broken(
-                GET,
-                Reply::new(200, json!({"run": bad_window, "hosts": []}).to_string()),
-            ),
+            fleet().broken(GET, Reply::new(200, bad_window.to_string())),
             "Maintenance.Get: the answer is not the coordinator's JSON (",
         ),
         (
@@ -839,7 +665,15 @@ fn a_page_token_that_does_not_change_ends_the_summary() {
         HOSTS,
         Reply::new(
             200,
-            json!({"hosts": [], "nextPageToken": "same"}).to_string(),
+            gateway_json(
+                "Hosts",
+                "List",
+                &proto::ListHostsResponse {
+                    hosts: vec![],
+                    next_page_token: "same".to_owned(),
+                },
+            )
+            .to_string(),
         ),
     );
     let (_add, server, ran) = add("loop", store(&[]), &fleet);

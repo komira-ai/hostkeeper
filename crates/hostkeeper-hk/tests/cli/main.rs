@@ -31,6 +31,8 @@
 //! - `xcode_add_checks`: the checks before the upload, one by one;
 //! - `xcode_add_summary`: the Macs summary that ends it, from a fake gateway's `Hosts.List`,
 //!   `HostGroups.List`, `Maintenance.List`, `Maintenance.Get` and `Maintenance.Schedule`;
+//! - `summary_rig`: the fake gateway of the summary's tests, whose answers are the real messages
+//!   written as the coordinator's gateway writes them;
 //! - `verify_rig`: what the next two share, the stand-ins of the Mac's programs for `hk xcode verify`, a
 //!   clock of the tests' own and a root certificate of their own making;
 //! - `xcode_verify`: `hk xcode verify`'s record, arguments, refusals and help;
@@ -52,6 +54,7 @@ mod rig;
 mod secrets;
 mod settings;
 mod ssh;
+mod summary_rig;
 mod surface;
 mod tailnet_wait;
 mod transport;
