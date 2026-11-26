@@ -162,9 +162,9 @@ return rows;"#,
     assert_eq!(
         page,
         json!([
-            "Seq|Time|By|Who|Action|Service|Host|Reason",
-            format!("{first}|2027-01-15 08:00:00 UTC|operator|alice|hold|api|web-1|-"),
-            format!("{second}|-|ci|-|unhold|api|web-1|-"),
+            "Seq|Time|By|Who|Token|Action|Service|Host|Reason",
+            format!("{first}|2027-01-15 08:00:00 UTC|operator|alice|-|hold|api|web-1|-"),
+            format!("{second}|-|ci|-|-|unhold|api|web-1|-"),
         ])
     );
     let last = ui.run(&steps(

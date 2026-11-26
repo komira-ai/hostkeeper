@@ -268,8 +268,8 @@ by their route and are not in the menu.
 - **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, owner, maker and time. Create
   takes a name, makes a token owned by the signed-in user and shows it once, as Users does a password. Revoke asks first and is offered for the tokens of the
   store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name, by an API token's owner with the token in
-  `api_token`, or by a tokens file token's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name, by an API token's owner with the token
+  (the entry's `api_token`) in its Token column, or by a tokens file token's name; a change made without an API token has `-` there. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
