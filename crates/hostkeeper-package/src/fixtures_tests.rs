@@ -173,6 +173,7 @@ impl Runner for FakeGh {
                 timed_out: false,
                 stderr: b"gh: bundle file extension not supported, must be json or jsonl\n"
                     .to_vec(),
+                ..Ran::default()
             });
         }
         let text = std::fs::read(bundle_path)?;
@@ -227,6 +228,7 @@ impl Runner for FakeGh {
                 code: Some(1),
                 timed_out: false,
                 stderr: format!("gh: {flag}\nmore detail").into_bytes(),
+                ..Ran::default()
             },
         })
     }

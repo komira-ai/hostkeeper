@@ -112,6 +112,8 @@ pub struct Ran {
     pub timed_out: bool,
     /// The first [`STDERR_BYTES`] of its standard error.
     pub stderr: Vec<u8>,
+    /// The first [`STDERR_BYTES`] of its standard output.
+    pub stdout: Vec<u8>,
 }
 
 /// Runs a program to its end or its deadline.
@@ -120,8 +122,8 @@ pub trait Runner {
     fn run(&self, spawn: &Spawn) -> io::Result<Ran>;
 }
 
-/// The [`Runner`] of a host: a child process with no input, its output dropped and its
-/// standard error kept in a staging file in `cwd`, polled once a second on `clock` and killed at
+/// The [`Runner`] of a host: a child process with no input, its standard output and its
+/// standard error each kept (the first [`STDERR_BYTES`]) in a staging file in `cwd`, polled once a second on `clock` and killed at
 /// the deadline. A deadline that has passed before the start starts nothing, and one that passes
 /// while the child runs wins over the child's exit seen at the same poll.
 pub struct SystemRunner {
@@ -143,13 +145,14 @@ impl Runner for SystemRunner {
             });
         }
         let (stderr, kept) = stage::create(&spawn.cwd, stage::names())?;
+        let (stdout, kept_out) = stage::create(&spawn.cwd, stage::names())?;
         let mut child = Command::new(&spawn.program)
             .args(&spawn.args)
             .env_clear()
             .envs(spawn.env.iter().map(|pair| (&pair.0, &pair.1)))
             .current_dir(&spawn.cwd)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(stdout)
             .stderr(stderr)
             .spawn()?;
         let (code, timed_out) = loop {
@@ -164,19 +167,25 @@ impl Runner for SystemRunner {
             }
             self.clock.sleep_secs(1);
         };
-        let mut text = Vec::new();
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(kept.path())?
-            .take(STDERR_BYTES)
-            .read_to_end(&mut text)?;
         Ok(Ran {
             code,
             timed_out,
-            stderr: text,
+            stderr: read_kept(kept.path())?,
+            stdout: read_kept(kept_out.path())?,
         })
     }
+}
+
+/// The first [`STDERR_BYTES`] of the staging file at `path`, never through a link.
+fn read_kept(path: &Path) -> io::Result<Vec<u8>> {
+    let mut text = Vec::new();
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?
+        .take(STDERR_BYTES)
+        .read_to_end(&mut text)?;
+    Ok(text)
 }
 
 /// Whether a file may be believed without reading its content.

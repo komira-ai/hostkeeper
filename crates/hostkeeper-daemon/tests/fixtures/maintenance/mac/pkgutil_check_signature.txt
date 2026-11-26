@@ -1,0 +1,20 @@
+Package "Xcode_27.2.xip":
+   Status: signed Apple Software
+   Certificate Chain:
+    1. Software Signing
+       Expires: 2030-10-24 17:39:41 +0000
+       SHA256 Fingerprint:
+           D8 4D 83 B0 5C 8F 1C 4A 0D 2B 7C 9A 66 52 41 1F 8B 9D 02 30 59 7A 6E 1D
+           3C 8C 1F 40 A4 11 22 33
+       ------------------------------------------------------------------------
+    2. Apple Code Signing Certification Authority
+       Expires: 2030-10-24 17:39:41 +0000
+       SHA256 Fingerprint:
+           AA BB CC DD EE FF 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF 00 11
+           22 33 44 55 66 77 88 99
+       ------------------------------------------------------------------------
+    3. Apple Root CA
+       Expires: 2035-02-09 21:40:36 +0000
+       SHA256 Fingerprint:
+           B0 B1 73 0E CB C7 FF 45 05 14 2C 49 F1 29 5E 6E DA 6B CA ED 7E 2C 68 C5
+           BE 91 B5 A1 10 01 F0 24
