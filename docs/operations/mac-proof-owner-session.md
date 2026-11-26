@@ -107,7 +107,7 @@ No macOS update can run through hostkeeper on a Mac without the update account (
 a run leaves such a Mac out with `no_update_account`. Every farm Mac lacks it today. On a Mac enrolled before its keys existed, the
 only way built is a `sudo` line by hand, which this proof does not use. Its Secure Token is granted with the administrator's
 password, which the built path reads from the Blueprint's hostkeeper settings, `dev.hostkeeper.config`, the file B2's
-B2's `stat` describes.
+`stat` describes.
 
 - **Command.** One answer, to the lead:
   - **If B2's `stat` shows the file readable by root alone:** "Blueprint". The owner then adds the four keys
