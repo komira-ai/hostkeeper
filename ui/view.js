@@ -182,7 +182,60 @@ function build(doc, node, hooks) {
   return element;
 }
 
-// Replaces what `root` shows with `tree`.
+// The elements under `node` whose `name` attribute is `name`, in document order.
+function namedUnder(node, name, out) {
+  const all = out || [];
+  for (const child of Array.from(node.children || [])) {
+    if (child.nodeType !== 1) {
+      continue;
+    }
+    if (child.getAttribute("name") === name) {
+      all.push(child);
+    }
+    namedUnder(child, name, all);
+  }
+  return all;
+}
+
+// The control under `root` that has the focus, as its name, which of the elements of that name it
+// is, its tag and type, and its selection when it has one; null when the focus is on no named
+// element under `root`.
+function focused(doc, root) {
+  const active = doc.activeElement;
+  if (!active || active.nodeType !== 1) {
+    return null;
+  }
+  const name = active.getAttribute("name");
+  if (name === null || name === "") {
+    return null;
+  }
+  const index = namedUnder(root, name).indexOf(active);
+  if (index < 0) {
+    return null;
+  }
+  const selection = typeof active.selectionStart === "number"
+    ? [active.selectionStart, active.selectionEnd, active.selectionDirection]
+    : null;
+  return { name, index, tag: active.tagName, type: active.getAttribute("type"), selection };
+}
+
+// Gives the focus back to the control of the new elements that is the one `focused` described, with
+// its selection when it is the same kind of control; nothing when there is no such control.
+function refocus(root, { name, index, tag, type, selection }) {
+  const again = namedUnder(root, name)[index];
+  if (again === undefined) {
+    return;
+  }
+  again.focus({ preventScroll: true });
+  if (selection !== null && again.tagName === tag && again.getAttribute("type") === type) {
+    again.setSelectionRange(...selection);
+  }
+}
+
+// Replaces what `root` shows with `tree`. Every draw makes new elements, so the control that had the
+// focus (the same name, and the same one of the elements of that name) takes it back, with the
+// caret where it was: a page drawn again by its repeat or a status line does not take the focus from
+// a field the operator is typing in. A `mounted` hook that gives the focus elsewhere runs after.
 export function mount(doc, root, tree) {
   const hooks = [];
   const built = build(doc, tree, hooks);
@@ -191,7 +244,11 @@ export function mount(doc, root, tree) {
     on.removeEventListener(type, listener);
   }
   windowListeners = [];
+  const kept = focused(doc, root);
   root.replaceChildren(built);
+  if (kept !== null) {
+    refocus(root, kept);
+  }
   for (const { event, element, handler } of hooks) {
     if (event === "mounted") {
       handler({ currentTarget: element });
