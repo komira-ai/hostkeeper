@@ -732,6 +732,7 @@ be.
 | `--reason` | STRING | Why; the audit entry carries it. Needed with `confirm`; a call without it may leave it out. |
 | `--take-last-host` | true\|false | Take every host of a group, the one host of a group of one included; otherwise such a run is refused (`last_host`). |
 | `--confirm` | true\|false | Store the run. Without it nothing is stored, no host is ordered, and the answer is the run as it would be. |
+| `--xcode-sha256` | STRING | With `kinds` exactly `[probe]`: the SHA-256 of an archive the Xcode store holds, 64 lower-case hex characters, for each host's probe to check instead of making its reads: fetched from the store while the host serves, then, drained, Apple's signature, the expansion, the version and build, and the app's code signature (docs/operations/maintenance.md, "Probe: check an Xcode archive"). Such a run holds only a host whose group keeps Xcode (`xcode_keep` 1 or more), the hosts that may read the store. Empty: none. With another kind, not 64 lower-case hex, or naming an archive the store does not hold: `invalid_request`. |
 
 #### `hk maintenance list`
 

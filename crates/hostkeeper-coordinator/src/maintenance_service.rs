@@ -210,6 +210,7 @@ pub(crate) fn run_proto(run: &Run, now: u64) -> proto::MaintenanceRun {
         ended_unix,
         halted_groups: run.halted_groups(),
         host_count: u32::try_from(run.hosts.len()).unwrap_or(u32::MAX),
+        xcode_sha256: String::new(),
     }
 }
 

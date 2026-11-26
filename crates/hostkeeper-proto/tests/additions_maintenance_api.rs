@@ -56,6 +56,7 @@ fn run() -> op::MaintenanceRun {
         ended_unix: 1_800_004_000,
         halted_groups: vec!["macs".to_owned()],
         host_count: 2,
+        xcode_sha256: "a".repeat(64),
     }
 }
 
@@ -104,6 +105,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 reason: "monthly update".to_owned(),
                 take_last_host: true,
                 confirm: true,
+                xcode_sha256: "a".repeat(64),
             }),
         ),
         (
@@ -599,6 +601,7 @@ fn every_maintenance_request_field_is_a_flag_and_none_is_secret() {
             ("schedule", "reason"),
             ("schedule", "take-last-host"),
             ("schedule", "confirm"),
+            ("schedule", "xcode-sha256"),
             ("list", "states"),
             ("list", "limit"),
             ("get", "run-id"),

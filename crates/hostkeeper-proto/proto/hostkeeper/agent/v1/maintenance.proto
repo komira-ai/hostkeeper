@@ -286,7 +286,9 @@ message Maintain {
   optional uint64 drain_deadline_secs = 5;
   // For `macos`: whether the daemon installs the update or waits for device management to.
   MacosPath macos_path = 6;
-  // For `xcode`: the Xcodes of the coordinator's store the host is to have, at most 8.
+  // For `xcode`: the Xcodes of the coordinator's store the host is to have, at most 8. For `probe`:
+  // at most one, the archive of the store the probe checks instead of making its reads; a daemon
+  // that does not know this makes its reads.
   repeated XcodeEntry xcodes = 7;
   // For `xcode`: the versions of Xcode to remove from the host, at most 8, each at most 16 bytes.
   repeated string xcode_remove = 8;
