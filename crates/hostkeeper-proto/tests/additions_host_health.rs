@@ -1,6 +1,6 @@
 //! What host health adds to the wire, new since the committed baseline
 //! (`proto/compat/baseline.binpb`, the release before), docs/design/host-health-alerts.md
-//! section 4.1: `HeartbeatRequest.health` (21) with `HostHealth`, `HardwareEvent`, `Baseline` and
+//! section 4.1: the heartbeat's `health` (21) with `HostHealth`, `HardwareEvent`, `Baseline` and
 //! `SourceState`; `ServiceBeat.health_reason`, `health_body` and `restarts` (16 to 18);
 //! `HeartbeatResponse.health_written` (10); `MAINTENANCE_KIND_REPAIR` (6); the operator API's
 //! `Alert` fields 15 to 19 and `AlertKind` 25 to 32; and `InventoryRecord.installed_memory_bytes`

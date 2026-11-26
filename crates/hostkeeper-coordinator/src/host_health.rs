@@ -1,5 +1,5 @@
 //! Host health (docs/design/host-health-alerts.md): the name of the feature by which a daemon
-//! reports its host's hardware health (`HeartbeatRequest.health`) and is answered the records
+//! reports its host's hardware health (the heartbeat's field `health`) and is answered the records
 //! written (`HeartbeatResponse.health_written`).
 //!
 //! This coordinator reads none of it: [`FEATURE`] is in neither [`crate::features::FEATURES`]

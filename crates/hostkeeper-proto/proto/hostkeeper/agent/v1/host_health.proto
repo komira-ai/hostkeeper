@@ -1,5 +1,5 @@
 // hostkeeper.agent.v1: host health (docs/design/host-health-alerts.md sections 2 and 4.1): what a
-// host's daemon reports of its hardware in its heartbeat (`HeartbeatRequest.health`, `HostHealth`):
+// host's daemon reports of its hardware in its heartbeat (the field `health`, a `HostHealth`):
 // the hardware event records it holds that the coordinator has not yet written to the host's
 // hardware event log, the host's capacity now (`Baseline`), its boot, and whether each source it
 // reads could be read (`SourceState`). The rest of the package is agent.proto (`Heartbeat`,
