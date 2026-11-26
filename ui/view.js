@@ -219,16 +219,16 @@ function focused(doc, root) {
   return { name, index, tag: active.tagName, type: active.getAttribute("type"), selection };
 }
 
-// Gives the focus back to the control of the new elements that is the one `kept` describes, with
+// Gives the focus back to the control of the new elements that is the one `focused` described, with
 // its selection when it is the same kind of control; nothing when there is no such control.
-function refocus(root, kept) {
-  const again = namedUnder(root, kept.name)[kept.index];
+function refocus(root, { name, index, tag, type, selection }) {
+  const again = namedUnder(root, name)[index];
   if (again === undefined) {
     return;
   }
   again.focus({ preventScroll: true });
-  if (kept.selection !== null && again.tagName === kept.tag && again.getAttribute("type") === kept.type) {
-    again.setSelectionRange(...kept.selection);
+  if (selection !== null && again.tagName === tag && again.getAttribute("type") === type) {
+    again.setSelectionRange(...selection);
   }
 }
 
