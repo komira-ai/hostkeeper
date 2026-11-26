@@ -91,7 +91,7 @@ pub trait ProcessProbe: Send + Sync {
 }
 
 /// What a health URL answered.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HealthReply {
     /// The HTTP status code.
     pub status: u16,
