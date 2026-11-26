@@ -104,7 +104,11 @@ fn the_release_before_runs_on_a_database_with_0030_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 29 ORDER BY version"),
-        [vec![Some("30".to_owned())], vec![Some("31".to_owned())]],
-        "0030 and 0031 after it ran"
+        [
+            vec![Some("30".to_owned())],
+            vec![Some("31".to_owned())],
+            vec![Some("32".to_owned())]
+        ],
+        "0030 to 0032 after it ran"
     );
 }

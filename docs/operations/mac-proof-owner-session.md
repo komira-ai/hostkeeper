@@ -19,13 +19,14 @@ The lead does each of these, in this order, and checks it, before the session. N
 
 | # | What | Check |
 |---|---|---|
-| B1 | The coordinator and the proof Mac run a hostkeeper release with the probe kind, the daemon's start that turns macOS's own install off, and the Xcode stage's signature check | the Mac's report lists `MAINTENANCE_KIND_PROBE` in `maintenance.onDemand`, and its daemon's version is that release's or newer |
+| B1 | The coordinator and the proof Mac run a hostkeeper release with the probe kind and its Xcode archive check, the daemon's start that turns macOS's own install off, and the Xcode stage's signature check; the lead's box has the `hk` of that release | the Mac's report lists `MAINTENANCE_KIND_PROBE` in `maintenance.onDemand`, and its daemon's version is that release's or newer |
 | B2 | One probe run on the proof Mac ([mac-proof.md](mac-proof.md) MP-E13), and two reads in the administrator's `hk ssh` session, with no `sudo` (both files are readable without root): `defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates` and `stat -f "%Sp %Su %Sg" "/Library/Managed Preferences/dev.hostkeeper.config.plist"` | the probe says `id` uid 0, `managername` `System`, `env` empty; the `defaults` read says `0` (the daemon turned macOS's own install off); the `stat` says who can read the file that carries the Blueprint's hostkeeper settings, the answer step 4 turns on |
 | B3 | The proof Mac out of builds for the session: the job scheduler's operator cordon ([mac-proof.md](mac-proof.md) MP-E6), placed for the session and lifted after step 3's check | the job scheduler shows the cordon and no job on the Mac |
 | B4 | The proof Mac in a host group of its own, `mac-proof`, with the same packages and versions and `xcode_keep` 1 ([mac-proof.md](mac-proof.md) MP-E3) | `hostGroup` is `mac-proof`, its services unchanged; no other Mac's group keeps Xcode |
-| B5 | The Xcode store is there and names the release to download | `xcode list` answers `configured` true and a `waiting` release (its `version` and `build`) |
+| B5 | The Xcode store is there and names the release to download | `xcode list` answers `configured` true and a `waiting` release (its `version` and `build`; on Linux, `hk xcode add` takes the build from there) |
 | B6 | Nothing the Apple Business settings could install: no macOS update due on the proof Mac, no device-management conflict | the Mac's `maintenance.due` holds no `macos`, `maintenance.mac.mdmConflicts` is empty |
 | B7 | The lead's box has room for the archive: at least 20 GB free in `~/Downloads` | `df -h ~/Downloads` |
+| B8 | The lead's `hk` settings file names the proof Mac as the Mac that checks an Xcode archive: `xcode_mac = "<node-id>"` in `~/.hostkeeper/hk.toml`, beside the endpoint, CA and token file `hk settings init` wrote ([xcode-releases.md](xcode-releases.md#from-a-linux-box-hk-xcode-add---mac)) | the file holds the line, and the Mac it names is B4's, in `mac-proof`, which keeps Xcode |
 
 The reads of B1, B2, B4, B5 and B6:
 
@@ -39,32 +40,43 @@ hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-
 ## The owner's steps
 
 About 25 minutes of the owner's hands, plus the archive's download. Steps 2 and 3 are one sitting in Apple Business; step 3's
-removal follows the lead's read, about 15 minutes later. Step 1's download runs while the owner does steps 2 and 3.
+removal follows the lead's read, about 15 minutes later. Step 1's download runs while the owner does steps 2 and 3, and its
+`hk xcode add` runs once the download has finished. The proof Mac is in one run at a time: while its check run goes on, the lead's
+probe runs of steps 2 and 3 are refused `host_in_maintenance` and wait for it to end.
 
-### 1. Download the Xcode archive
+### 1. Download the Xcode archive, then `hk xcode add`
 
-- **Click.** On the lead's Linux box, in a browser: Apple's developer downloads page, signed in with the organisation's developer
-  account (answer the two-factor prompt on the account's trusted device), then the `Xcode_<version>.xip` of the release the lead
-  names, saved into `~/Downloads`. Not a beta and not a release candidate: the store refuses those.
-- **Unlocks.** The Xcode store, and on the proof Mac, in one maintenance run: Apple's signature checked by `pkgutil` on a real
-  archive (MP-X2's positive case), the expansion (MP-I1), the move, licence and first launch (MP-I3), and the install probed by
-  js-agent before and after (MP-I5).
-- **Time.** About 5 minutes of the owner's hands. The download, about 12 GB, runs by itself (about 16 minutes at 100 Mbit/s).
-- **The lead, right after.** Puts the archive into the store with the store's upload route, from the lead's box
-  ([xcode-releases.md](xcode-releases.md), "Pushing an archive"): the first four bytes `xar!`, the SHA-256 and size computed there,
-  the version from the file's name and the build the coordinator lists for it, and the token in a header read from its file, never
-  in an argument. Linux has no `pkgutil` or `xip`: Apple's signature, the version and the build are checked by the proof Mac's
-  stage, before anything is installed ([maintenance.md](maintenance.md#the-private-store-xcode_keep-and-xcode_default)). Then one
-  run of `xcode` on the proof Mac:
+- **Click, then one command.** On the lead's Linux box, in a browser: Apple's developer downloads page, signed in with the
+  organisation's developer account (answer the two-factor prompt on the account's trusted device). Then download the
+  `Xcode_<version>.xip` of the release the lead names into `~/Downloads`. Not a beta and not a release candidate: the store
+  refuses those. When the download has finished, in a terminal on the same box:
+
+  ```
+  hk xcode add
+  ```
+
+  It takes the newest `Xcode_*.xip` in `~/Downloads` and uploads it to the store; a cut-off upload continues on the next run. Then
+  it has the proof Mac (B8) check it in one probe run: Apple's signature by `pkgutil`, the expansion by `xip`, the version and
+  build, and `codesign`. Each step of that run is shown as it is reached. It ends with `checked on <node-id> (run <id>): pass`,
+  and the record is kept in `~/.hostkeeper/xcode/`. A check that fails removes the archive from the store and says
+  `refused: ...`. A check that could not be made leaves the archive stored and says why; the lead takes it from there.
+- **Unlocks.** The Xcode store holds a checked archive; MP-X2's positive case (Apple's signature checked by `pkgutil` on a
+  real archive, on the proof Mac) is in the record. Then, on the proof Mac, in one maintenance run: the expansion (MP-I1), the
+  move, licence and first launch (MP-I3), and the install probed by js-agent before and after (MP-I5).
+- **Time.** About 5 minutes of the owner's hands. The download, about 12 GB, runs by itself (about 16 minutes at 100 Mbit/s);
+  the upload and the proof Mac's check run by themselves after it, most of the check's time being the expansion.
+- **The lead, right after.** Reads the record and the run (`hk xcode add` names it), then runs `xcode` on the proof Mac, which
+  installs the release:
 
   ```
   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode list
   hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> maintenance schedule --kinds xcode --host-ids <node-id> --take-last-host true --confirm true --reason "Mac proof: Xcode from the store"
   ```
 
-  A stage that refuses the archive defers the turn and installs nothing; its reason names the check
-  (`xcode_archive_not_apple`, `xcode_expand_failed`, `xcode_build_mismatch`, `xcode_signature_invalid`). The lead records the run
-  and the Mac's `maintenance.xcodes` after it in section 10.
+  The proof Mac's stage checks the archive again before it installs anything. A stage that refuses the archive defers the turn
+  and installs nothing; its reason names the check (`xcode_archive_not_apple`, `xcode_expand_failed`, `xcode_build_mismatch`,
+  `xcode_signature_invalid`). The lead records the check's record, the run and the Mac's `maintenance.xcodes` after it in
+  section 10.
 
 ### 2. Apple Business: the proof Mac on a Blueprint of its own
 
@@ -132,7 +144,7 @@ password, which the built path reads from the Blueprint's hostkeeper settings, `
 
 | Was | Now | Why |
 |---|---|---|
-| Download the Xcode `.xip` | step 1, on the lead's Linux box | Apple's developer download needs the Apple Account and its two-factor prompt. Everything after it is the lead's and the farm's: the upload, and the checks a Mac's tools make, in the proof Mac's stage |
+| Download the Xcode `.xip` | step 1, on the lead's Linux box: the download, then `hk xcode add` | Apple's developer download needs the Apple Account and its two-factor prompt. Everything after it is one command, and the farm's: the upload, and the checks a Mac's tools make, on the proof Mac in one probe run |
 | The administrator's password | step 4 decides where it goes | It is in a file on the lead's box that the lead does not read: the lead never puts it on a Mac by hand. It is used only for the update account's Secure Token, through the route step 4 picks |
 | FileVault on, and its password at the pre-boot screen | off the list | The coordinator never orders `macos` on a Mac whose FileVault is not off (`filevault_not_ready`), and the ruling is FileVault off on build Macs (design, question 4). MP-A7, MP-A8, MP-U4, MP-U5 and MP-U8's FileVault-on case show a path no run takes. They come back only if FileVault is ever wanted on build Macs |
 | Apple Business settings on the proof Mac's Blueprint | steps 2 and 3 | Apple Business's API cannot make these Configurations (design 5.5.1). One sitting instead of one setting at a time: the daemon names each setting it finds, and the lead reads them from its report, not from a root shell |

@@ -4,7 +4,9 @@
 //! A kind, a step and a reason a host is left out are written by their names; a value a run
 //! leaves out (no group, no batch, no drain deadline, no cancel) is `NULL`. A host's offers after
 //! a deferral and its bake are the columns `0030` adds, and the act an operator queued for a halted
-//! host with the last try of its order, those `0031` adds.
+//! host with the last try of its order, those `0031` adds. The SHA-256 of the Xcode archive a run
+//! of `probe` checks is the column `0032` adds to `maintenance_runs`: `NULL` for a run that checks
+//! none, and so for a row written before.
 
 use super::at::At;
 use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
@@ -31,6 +33,7 @@ pub(crate) const RUNS: Table = Table {
         ("scheduled_unix", Ty::Int),
         ("cancelled_unix", Ty::Int),
         ("position", Ty::Int),
+        ("xcode_sha256", Ty::Text),
     ],
 };
 
@@ -91,6 +94,7 @@ pub(crate) fn insert_runs(runs: &[Run], tables: &mut Tables) -> Result<(), Store
                 Val::Int(int(run.scheduled_unix)?),
                 int_or_null(run.cancelled_unix)?,
                 Val::Int(int(position as u64)?),
+                Val::text_or_null(Some(run.xcode_sha256.as_str()).filter(|sha| !sha.is_empty())),
             ],
         );
         for (position, host) in run.hosts.iter().enumerate() {
@@ -195,6 +199,7 @@ pub(crate) fn runs_of(tables: &Tables) -> Result<Vec<Run>, OpsError> {
             by: at.required(9)?,
             scheduled_unix: at.count(10)?,
             cancelled_unix: count_or_null(&at, 11)?,
+            xcode_sha256: at.text(13)?.unwrap_or_default(),
             hosts: Vec::new(),
         };
         runs.push((at.position(12)?, run, Vec::new()));

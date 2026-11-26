@@ -1,4 +1,5 @@
-hk xcode-push <version> | <archive.xip>
+hk xcode-push [--mac NODE-ID] <version> | <archive.xip>
     A second name of hk xcode add, kept for one release, that takes exactly one version or path.
     It writes `hk xcode-push is now hk xcode add` on stderr, then does what hk xcode add does
-    with the same argument; hk xcode add --help says each step.
+    with the same argument and the same --mac (off macOS, the farm Mac that checks the archive;
+    a usage error on macOS); hk xcode add --help says each step.

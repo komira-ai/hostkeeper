@@ -27,6 +27,12 @@
 //! the versions to remove and the default ([`crate::decide_maintenance`]). A store that cannot be
 //! read makes nothing due and is logged; a turn that holds `xcode` is then not started, nor its
 //! `RUN` sent again, until it can be (an operator's act on a halted turn still goes).
+//!
+//! A run of `probe` may name one archive of the store to check ([`crate::maintenance_runs::Run`]'s
+//! `xcode_sha256`, held by [`Coordinator::require_archive`] when it is scheduled): each of its
+//! probe turns is ordered that one archive ([`check_order`]), whatever the group's `xcode_keep`
+//! and the Mac's installed Xcodes say, and the check installs nothing. The same rules for a store
+//! that cannot be read apply.
 
 use std::collections::BTreeSet;
 
@@ -125,22 +131,33 @@ impl Plan {
     /// What a `maintain` with `xcode` carries of the plan; none when it keeps no release.
     pub(crate) fn order(&self) -> Option<XcodeOrder> {
         (!self.kept.is_empty()).then(|| XcodeOrder {
-            entries: self
-                .kept
-                .iter()
-                .map(|archive| agent::XcodeEntry {
-                    version: archive.id.version.as_str().to_owned(),
-                    build: archive.id.build.clone(),
-                    size: archive.size,
-                    sha256: archive.sha256.clone(),
-                })
-                .collect(),
+            entries: self.kept.iter().map(entry_of).collect(),
             remove: self.remove.clone(),
             default: self
                 .default
                 .as_ref()
                 .map(|archive| archive.id.version.as_str().to_owned()),
         })
+    }
+}
+
+/// `archive` as a `maintain` names it: version, build, size and SHA-256.
+fn entry_of(archive: &Archive) -> agent::XcodeEntry {
+    agent::XcodeEntry {
+        version: archive.id.version.as_str().to_owned(),
+        build: archive.id.build.clone(),
+        size: archive.size,
+        sha256: archive.sha256.clone(),
+    }
+}
+
+/// What the `maintain` of a probe turn that checks `archive` carries: that one entry, no version
+/// to remove and no default.
+pub(crate) fn check_order(archive: &Archive) -> XcodeOrder {
+    XcodeOrder {
+        entries: vec![entry_of(archive)],
+        remove: Vec::new(),
+        default: None,
     }
 }
 
@@ -178,9 +195,26 @@ impl Coordinator {
         match store.archives() {
             Ok(archives) => Some(archives),
             Err(why) => {
-                tracing::warn!(%why, "the Xcode store cannot be read: no Mac is shown due an Xcode, and no turn with xcode starts");
+                tracing::warn!(%why, "the Xcode store cannot be read: no Mac is shown due an Xcode, and no turn with xcode or with an archive to check starts");
                 None
             }
+        }
+    }
+
+    /// Whether the Xcode store holds the archive `sha256`, for a run of `probe` that names it
+    /// (`Maintenance.Schedule`'s `xcode_sha256`).
+    ///
+    /// # Errors
+    /// `invalid_request`: the store does not hold it, or the coordinator has no store.
+    /// `store_failed`: the store cannot be read ([`Self::xcode_archives`] logs it).
+    pub(crate) fn require_archive(&self, sha256: &str) -> Result<(), proto::MaintenanceRefusal> {
+        let archives = self
+            .xcode_archives()
+            .ok_or(proto::MaintenanceRefusal::StoreFailed)?;
+        if archives.iter().any(|archive| archive.sha256 == sha256) {
+            Ok(())
+        } else {
+            Err(proto::MaintenanceRefusal::InvalidRequest)
         }
     }
 
@@ -246,3 +280,7 @@ impl Coordinator {
 #[cfg(test)]
 #[path = "maintenance_xcode_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "maintenance_xcode_check_tests.rs"]
+mod check_tests;

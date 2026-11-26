@@ -94,6 +94,7 @@ fn hand_run() -> Run {
         by: "alice".to_owned(),
         scheduled_unix: 1_900_000_000,
         cancelled_unix: None,
+        xcode_sha256: String::new(),
         hosts: vec![
             host("h1", Step::Waiting, None),
             host("h2", Step::Skipped, Some(Skip::Held)),
@@ -158,6 +159,62 @@ fn an_ops_file_with_a_run_is_refused_by_the_release_before_and_read_back() {
     );
     let back = files_over(dir.path()).load_ops().expect("loads");
     assert_eq!(back.maintenance_runs, after.maintenance_runs);
+}
+
+/// Proves: a run that checks an Xcode archive writes it as the key `xcode_sha256` and a run that
+/// checks none writes no such key; an ops file with the key reads the SHA-256 back after a
+/// restart, one without it (as the release before wrote it) reads an empty `xcode_sha256`, and a
+/// key that is not text is refused at load.
+///
+/// Catches: an archive lost at a restart (a probe run that then checks nothing), a key written
+/// for a run that checks none, and a file written before the key that no longer loads.
+#[test]
+fn the_archive_a_run_checks_is_a_key_written_only_when_set() {
+    let dir = scratch("files-maintenance-archive");
+    let mut after = rich_ops();
+    let mut probe = hand_run();
+    probe.kinds = vec![Kind::Probe];
+    probe.xcode_sha256 = "0123456789abcdef".repeat(4);
+    after.maintenance_runs = vec![
+        probe.clone(),
+        Run {
+            id: "run-1900000000-2".to_owned(),
+            ..hand_run()
+        },
+    ];
+    commit_ops(&files_over(dir.path()), &after).expect("committed");
+    let value: serde_json::Value = serde_json::from_slice(&ops_text(dir.path())).expect("JSON");
+    assert_eq!(
+        value["maintenance_runs"][0]["xcode_sha256"],
+        serde_json::json!("0123456789abcdef".repeat(4))
+    );
+    assert!(value["maintenance_runs"][1].get("xcode_sha256").is_none());
+    let back = files_over(dir.path()).load_ops().expect("loads");
+    assert_eq!(back.maintenance_runs, after.maintenance_runs);
+    assert_eq!(back.maintenance_runs[1].xcode_sha256, "");
+
+    let mut edited = value;
+    edited["maintenance_runs"][0]
+        .as_object_mut()
+        .expect("a run")
+        .remove("xcode_sha256");
+    fs::write(
+        dir.path().join("desired.json.ops"),
+        serde_json::to_vec(&edited).expect("JSON"),
+    )
+    .expect("written");
+    let before = files_over(dir.path())
+        .load_ops()
+        .expect("loads without the key");
+    assert_eq!(before.maintenance_runs[0].xcode_sha256, "");
+
+    edited["maintenance_runs"][0]["xcode_sha256"] = serde_json::json!(7);
+    fs::write(
+        dir.path().join("desired.json.ops"),
+        serde_json::to_vec(&edited).expect("JSON"),
+    )
+    .expect("written");
+    assert!(files_over(dir.path()).load_ops().is_err());
 }
 
 /// Proves: the runs a coordinator committed (every shape the sample holds) are held by a

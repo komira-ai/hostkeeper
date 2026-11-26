@@ -1,378 +1,18 @@
-//! The tests of the stage of the `xcode` kind, over a scratch directory standing for the Mac's
-//! files, a fake store that serves one archive by its SHA-256 and can break a read part way, a
-//! fake `xip` that makes an app from a fixture version list, a scripted `codesign`, and a fake
-//! free space. Each deferral is asserted by equality of its reason and its whole detail, each run
+//! The tests of the stage of the `xcode` kind, over the fakes of [`super::super::fakes`]: a scratch
+//! directory standing for the Mac's files, a fake store that serves one archive by its SHA-256 and
+//! can break a read part way, a fake `xip` that makes an app from a fixture version list, a
+//! scripted `codesign`, and a fake free space. Each deferral is asserted by equality of its reason and its whole detail, each run
 //! of a program and each read of the store by equality of the whole list.
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fs::{self, DirBuilder};
-use std::io;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_link::LinkError;
-use hostkeeper_testkit::Scratch;
 
 use super::*;
-use crate::maintenance_hook::xcode::signature::tests::APPLE_REPORT;
-use crate::maintenance_plist::HostPlists;
-use crate::testing::FakeClock;
-
-const V27: &[u8] = include_bytes!("../../../tests/fixtures/maintenance/xcode/version-27.2.plist");
-const V26: &[u8] = include_bytes!("../../../tests/fixtures/maintenance/xcode/version-26.3.plist");
-const NO_BUILD: &[u8] =
-    include_bytes!("../../../tests/fixtures/maintenance/xcode/version-no-build.plist");
-const INTEGER: &[u8] =
-    include_bytes!("../../../tests/fixtures/maintenance/xcode/version-integer.plist");
-
-/// The archive the store serves: an `xar` header and some bytes.
-const ARCHIVE_BYTES: &[u8] = b"xar!\x00\x1c\x00\x01 the bytes of an Xcode archive";
-
-fn scratch(name: &str) -> Scratch {
-    let exe = std::env::current_exe().expect("the test binary");
-    let target = exe.ancestors().nth(3).expect("the target directory");
-    Scratch::under(&target.join("tmp"), name).expect("a scratch directory")
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
-}
-
-/// The order's entry of `bytes`: Xcode 27.2 (27B52).
-fn entry_of(bytes: &[u8]) -> XcodeEntry {
-    XcodeEntry {
-        version: "27.2".to_owned(),
-        build: "27B52".to_owned(),
-        size: bytes.len() as u64,
-        sha256: sha256(bytes),
-    }
-}
-
-/// What one read of the fake store does after it gives the bytes it gives.
-#[derive(Clone, Debug)]
-enum Read {
-    /// Gives everything from `first` on.
-    Whole,
-    /// Gives `count` bytes from `first`, then fails with the error.
-    Breaks(u64, GetError),
-    /// Gives nothing and fails.
-    Fails(StoreError),
-}
-
-/// A store that holds `bytes` at `/v1/xcode/<sha256 of held>` and plays `reads` in order (then
-/// [`Read::Whole`]), recording each `(path, first)` it is asked.
-#[derive(Clone)]
-struct FakeStore {
-    path: String,
-    bytes: Vec<u8>,
-    reads: Arc<Mutex<Vec<Read>>>,
-    asked: Arc<Mutex<Vec<(String, u64)>>>,
-}
-
-impl FakeStore {
-    fn holding(held: &[u8], bytes: &[u8]) -> FakeStore {
-        FakeStore {
-            path: format!("/v1/xcode/{}", sha256(held)),
-            bytes: bytes.to_vec(),
-            reads: Arc::default(),
-            asked: Arc::default(),
-        }
-    }
-
-    fn playing(self, reads: Vec<Read>) -> FakeStore {
-        *lock(&self.reads) = reads;
-        self
-    }
-
-    fn asked(&self) -> Vec<(String, u64)> {
-        lock(&self.asked).clone()
-    }
-}
-
-impl Store for FakeStore {
-    fn get_from(
-        &self,
-        path: &str,
-        first: u64,
-        limit: Limit,
-        sink: &mut dyn FnMut(&[u8]) -> io::Result<()>,
-    ) -> Result<Got, StoreError> {
-        lock(&self.asked).push((path.to_owned(), first));
-        if path != self.path {
-            return Ok(Got::NotFound);
-        }
-        let read = {
-            let mut reads = lock(&self.reads);
-            match reads.is_empty() {
-                true => Read::Whole,
-                false => reads.remove(0),
-            }
-        };
-        let rest = &self.bytes[usize::try_from(first).expect("small")..];
-        let length = rest.len() as u64;
-        if length > limit.max_bytes {
-            return Err(StoreError::Get(GetError::TooLong {
-                length,
-                max: limit.max_bytes,
-            }));
-        }
-        match read {
-            Read::Whole => {
-                sink(rest).map_err(|e| StoreError::Get(GetError::Sink(e.kind())))?;
-                Ok(Got::Body(length))
-            }
-            Read::Breaks(count, error) => {
-                let count = usize::try_from(count).expect("small");
-                sink(&rest[..count]).map_err(|e| StoreError::Get(GetError::Sink(e.kind())))?;
-                Err(StoreError::Get(error))
-            }
-            Read::Fails(error) => Err(error),
-        }
-    }
-}
-
-/// What a fake program does when it is run.
-type Program = Box<dyn Fn(&Spawn) -> io::Result<Ran> + Send>;
-
-/// A runner of fake programs by path, recording each run and, for `xip`, the archive's bytes
-/// when it ran.
-#[derive(Clone, Default)]
-struct FakeRunner {
-    programs: Arc<Mutex<BTreeMap<PathBuf, Program>>>,
-    ran: Arc<Mutex<Vec<Spawn>>>,
-    archives: Arc<Mutex<Vec<Vec<u8>>>>,
-}
-
-impl FakeRunner {
-    fn answers(&self, program: &str, answer: Program) {
-        lock(&self.programs).insert(PathBuf::from(program), answer);
-    }
-
-    fn ran(&self) -> Vec<Spawn> {
-        lock(&self.ran).clone()
-    }
-}
-
-impl Runner for FakeRunner {
-    fn run(&self, spawn: &Spawn) -> io::Result<Ran> {
-        lock(&self.ran).push(spawn.clone());
-        if spawn.program == Path::new(XIP) {
-            let archive = fs::read(&spawn.args[1]).unwrap_or_default();
-            lock(&self.archives).push(archive);
-        }
-        let programs = lock(&self.programs);
-        let program = programs
-            .get(&spawn.program)
-            .expect("a program the test answers");
-        program(spawn)
-    }
-}
-
-/// A program that exits `code` saying `stderr`.
-fn exits(code: i32, stderr: &str) -> Program {
-    let stderr = stderr.as_bytes().to_vec();
-    Box::new(move |_| {
-        Ok(Ran {
-            code: Some(code),
-            timed_out: false,
-            stderr: stderr.clone(),
-            ..Ran::default()
-        })
-    })
-}
-
-/// An `xip` that makes `<cwd>/<name>` with `plist` as its version list, and exits 0.
-fn xip_making(name: &'static str, plist: &'static [u8]) -> Program {
-    Box::new(move |spawn| {
-        let contents = spawn.cwd.join(name).join("Contents");
-        fs::create_dir_all(&contents)?;
-        fs::write(contents.join("version.plist"), plist)?;
-        Ok(Ran {
-            code: Some(0),
-            ..Ran::default()
-        })
-    })
-}
-
-/// A free space of `bytes`, or one that cannot be read; counts its reads.
-#[derive(Clone)]
-struct FakeSpace {
-    free: Result<u64, String>,
-    reads: Arc<Mutex<u32>>,
-    /// A directory made, mode 0755, when the space is read: one put in the staging directory's
-    /// place between the stage's first look at it and the fetch.
-    swap_in: Option<PathBuf>,
-}
-
-impl FreeSpace for FakeSpace {
-    fn free_bytes(&self) -> Result<u64, String> {
-        *lock(&self.reads) += 1;
-        if let Some(dir) = &self.swap_in {
-            fs::create_dir(dir).expect("the swapped-in directory");
-            fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
-        }
-        self.free.clone()
-    }
-}
-
-/// A Mac with its files under a scratch directory.
-struct Mac {
-    root: Scratch,
-    store: FakeStore,
-    runner: FakeRunner,
-    space: FakeSpace,
-    clock: Arc<dyn Clock>,
-}
-
-/// The free space the archive [`ARCHIVE_BYTES`] needs to be staged: itself and its expansion.
-fn needed() -> u64 {
-    ARCHIVE_BYTES.len() as u64 * 4
-}
-
-impl Mac {
-    /// A Mac whose store holds [`ARCHIVE_BYTES`], whose `xip` makes Xcode 27.2 (27B52), whose
-    /// `codesign` accepts it, with exactly the space staging needs free.
-    fn new(name: &str) -> Mac {
-        let runner = FakeRunner::default();
-        runner.answers(PKGUTIL, signature::reports(APPLE_REPORT));
-        runner.answers(XIP, xip_making("Xcode.app", V27));
-        runner.answers(CODESIGN, exits(0, ""));
-        let clock: Arc<dyn Clock> = FakeClock::new();
-        let root = scratch(name);
-        fs::create_dir(root.path().join("Applications")).expect("the Applications directory");
-        Mac {
-            root,
-            store: FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES),
-            runner,
-            space: FakeSpace {
-                free: Ok(needed()),
-                reads: Arc::default(),
-                swap_in: None,
-            },
-            clock,
-        }
-    }
-
-    fn stage(&self) -> Stage {
-        Stage {
-            store: Box::new(self.store.clone()),
-            runner: Box::new(self.runner.clone()),
-            space: Box::new(self.space.clone()),
-            plists: Box::new(HostPlists::new(HostRoot::at(self.root.path()))),
-            root: HostRoot::at(self.root.path()),
-            clock: Arc::clone(&self.clock),
-        }
-    }
-
-    fn run(&self, entries: &[XcodeEntry]) -> Result<(), KindError> {
-        self.stage().run(entries)
-    }
-
-    /// The host's `path` under the scratch root.
-    fn path(&self, path: &str) -> PathBuf {
-        self.root.path().join(path.trim_start_matches('/'))
-    }
-
-    /// The names in the host's directory `path`, sorted; none when it is not there.
-    fn names(&self, path: &str) -> Vec<String> {
-        let Ok(listed) = fs::read_dir(self.path(path)) else {
-            return Vec::new();
-        };
-        let mut names: Vec<String> = listed
-            .map(|item| {
-                item.expect("an entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// The staging directory as the stage makes it: the test's user's, mode 0700.
-    fn trusted_staging(&self) {
-        DirBuilder::new()
-            .mode(0o700)
-            .create(self.path(STAGING))
-            .expect("the staging directory");
-    }
-
-    /// The host's file `path`, with `bytes`.
-    fn file(&self, path: &str, bytes: &[u8]) {
-        let path = self.path(path);
-        fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
-        fs::write(path, bytes).expect("the file");
-    }
-
-    /// The deadline of a program run now for `secs`.
-    fn deadline(&self, secs: u64) -> Stamp {
-        let now = Stamp::now(&*self.clock);
-        Stamp {
-            boot_id: now.boot_id,
-            mono_secs: now.mono_secs + secs,
-        }
-    }
-
-    /// The run of `xip` on the archive of `entry`.
-    fn xip_run(&self, entry: &XcodeEntry) -> Spawn {
-        let dir = self.path(&format!("{STAGING}/{}", entry.sha256));
-        Spawn {
-            program: PathBuf::from(XIP),
-            args: vec![
-                OsString::from("--expand"),
-                dir.join(ARCHIVE).into_os_string(),
-            ],
-            env: vec![(
-                "PATH".to_owned(),
-                "/usr/bin:/bin:/usr/sbin:/sbin".to_owned(),
-            )],
-            cwd: dir.join(EXPAND),
-            deadline: self.deadline(XIP_SECS),
-        }
-    }
-
-    /// The run of `codesign` on the app at the host's `app`.
-    fn codesign_run(&self, app: &str) -> Spawn {
-        Spawn {
-            program: PathBuf::from(CODESIGN),
-            args: vec![
-                OsString::from("--verify"),
-                OsString::from("--deep"),
-                OsString::from("--strict"),
-                self.path(app).into_os_string(),
-            ],
-            env: vec![(
-                "PATH".to_owned(),
-                "/usr/bin:/bin:/usr/sbin:/sbin".to_owned(),
-            )],
-            cwd: self.path(STAGING),
-            deadline: self.deadline(CODESIGN_SECS),
-        }
-    }
-
-    /// Nothing of a stage is left: no staging directory, nothing in `/Applications`.
-    fn assert_clean(&self) {
-        assert!(
-            !self.path(STAGING).exists(),
-            "the staging directory is removed"
-        );
-        assert_eq!(self.names(APPLICATIONS), Vec::<String>::new());
-    }
-}
-
-fn deferral(reason: &'static str, detail: &str) -> Result<(), KindError> {
-    Err(KindError::Deferred {
-        reason,
-        detail: detail.to_owned(),
-    })
-}
+use crate::maintenance_hook::xcode::fakes::*;
 
 /// Proves: a good archive, with exactly the space it needs free, is read once from the store by
 /// its SHA-256 from byte 0, `xip --expand` runs on the archive when it holds exactly the store's
@@ -495,12 +135,12 @@ fn a_size_or_sha256_mismatch_is_refused_before_xip_runs() {
 fn a_broken_download_resumes_by_range() {
     let mut mac = Mac::new("xcs-resume");
     mac.store = mac.store.clone().playing(vec![
-        Read::Breaks(5, GetError::Truncated),
-        Read::Breaks(
+        Play::Breaks(5, GetError::Truncated),
+        Play::Breaks(
             3,
             GetError::Link(LinkError::Transport(io::ErrorKind::ConnectionReset)),
         ),
-        Read::Breaks(0, GetError::Deadline),
+        Play::Breaks(0, GetError::Deadline),
     ]);
     let entry = entry_of(ARCHIVE_BYTES);
     assert_eq!(mac.run(std::slice::from_ref(&entry)), Ok(()));
@@ -527,7 +167,7 @@ fn a_broken_download_resumes_by_range() {
 fn a_download_that_keeps_breaking_defers_after_its_attempts() {
     let mut mac = Mac::new("xcs-breaking");
     mac.store = mac.store.clone().playing(vec![
-        Read::Breaks(1, GetError::Truncated);
+        Play::Breaks(1, GetError::Truncated);
         MAX_FETCH_ATTEMPTS as usize
     ]);
     let entry = entry_of(ARCHIVE_BYTES);
@@ -592,7 +232,7 @@ fn the_orders_sha256_is_the_only_fetch_path_used() {
     let mac = Mac::new("xcs-one-path");
     mac.store
         .clone()
-        .playing(vec![Read::Breaks(2, GetError::Truncated)]);
+        .playing(vec![Play::Breaks(2, GetError::Truncated)]);
     assert_eq!(mac.run(std::slice::from_ref(&good)), Ok(()));
     let paths: Vec<String> = mac
         .store
@@ -757,12 +397,12 @@ fn a_store_that_gives_no_archive_defers() {
         ),
         (
             FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES)
-                .playing(vec![Read::Fails(StoreError::Get(GetError::Status(403)))]),
+                .playing(vec![Play::Fails(StoreError::Get(GetError::Status(403)))]),
             REASON_FETCH_FAILED,
             format!("{path} from byte 0, connection 1: the coordinator answered 403"),
         ),
         (
-            FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES).playing(vec![Read::Fails(
+            FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES).playing(vec![Play::Fails(
                 StoreError::Unusable("no config".to_owned()),
             )]),
             REASON_FETCH_FAILED,
@@ -782,7 +422,7 @@ fn a_store_that_gives_no_archive_defers() {
         mac.assert_clean();
     }
     let mut mac = Mac::new("xcs-sink");
-    mac.store = FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES).playing(vec![Read::Fails(
+    mac.store = FakeStore::holding(ARCHIVE_BYTES, ARCHIVE_BYTES).playing(vec![Play::Fails(
         StoreError::Get(GetError::Sink(io::ErrorKind::StorageFull)),
     )]);
     let refused = mac.run(std::slice::from_ref(&entry));

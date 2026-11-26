@@ -385,18 +385,19 @@ fn the_maintenance_runbook_check_refuses_each_defect() {
         edit("## Refusals\n", "## Refused\n"),
         ["no section `## Refusals`"]
     );
-    // An Xcode call no line makes: both adds named by a method of `xcode` hk does not have.
+    // An Xcode call no line makes: the three adds (two from a Mac, one from a Linux box with
+    // `--mac`) named by a method of `xcode` hk does not have.
     let add = "\nhk xcode add ";
-    assert_eq!(doc.matches(add).count(), 2);
+    assert_eq!(doc.matches(add).count(), 3);
     let found = problems(&doc.replace(add, "\nhk xcode upload "));
-    assert_eq!(found.len(), 3, "{found:?}");
-    for parse in &found[..2] {
+    assert_eq!(found.len(), 4, "{found:?}");
+    for parse in &found[..3] {
         assert!(
             parse.ends_with("the service xcode has no method upload; 'hk xcode --help' lists them"),
             "{found:?}"
         );
     }
-    assert_eq!(found[2], "no command line calls `hk xcode add`");
+    assert_eq!(found[3], "no command line calls `hk xcode add`");
     // The store's removal left uncalled.
     let remove = "    xcode remove --sha256 <sha256>";
     let found = edit(remove, "    xcode list --sha256 <sha256>");

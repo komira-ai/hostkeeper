@@ -19,7 +19,9 @@
 //! moves them into place, accepts their licences, runs their first launch, selects the default
 //! and removes the old Xcodes the order names, and its `verify` checks each, and every step of
 //! `probe` ([`ProbeKind`]): its `cutover` runs a fixed list of read-only programs and keeps what
-//! they gave beside the run record, which the daemon's report carries; every other step of
+//! they gave beside the run record, which the daemon's report carries; when the order names one
+//! Xcode archive, its `prepare` fetches the archive from the store into a check directory and its
+//! `cutover` runs Apple's checks on it in place of the list, installing nothing; every other step of
 //! every kind is `unsupported_kind` until its own change. The steps run each kind of the run in [`Kind::ALL`]'s order, macOS before Xcode,
 //! whatever order the parameters give:
 //!
@@ -248,7 +250,8 @@ fn bounded(detail: &str) -> String {
 /// parameters; `None` for parameters on standard input, where no `cutover` runs), and `xcode`
 /// ([`XcodeKind`]), whose `prepare` stages the order's Xcodes and whose `cutover` and `verify`
 /// install and check them, and `probe` ([`ProbeKind`]), whose `cutover` runs the probe's
-/// programs and keeps what they gave in `run_dir`; `reboot` keeps its stub.
+/// programs (or, for an order that names an Xcode archive, the archive's check) and keeps what
+/// they gave in `run_dir`; `reboot` keeps its stub.
 pub fn registry_for(
     platform: &Platform,
     lock_wait_secs: u64,

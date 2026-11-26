@@ -33,13 +33,13 @@ use crate::xcode_feed::{XcodeId, XcodeVersion};
 use crate::xcode_store::{Archive, Digesting, XcodeStore};
 
 /// The Mac of the tests.
-const MAC: &str = "m1";
+pub(super) const MAC: &str = "m1";
 
 /// A Linux host of the Mac's group.
 const LINUX_HOST: &str = "l1";
 
 /// The order id of the first run's `maintain`.
-const ORDER: &str = "maintain-run-1900000000-1";
+pub(super) const ORDER: &str = "maintain-run-1900000000-1";
 
 /// The time the archives of the tests were stored, in unix seconds.
 const AT: u64 = 1_800_000_000;
@@ -113,16 +113,16 @@ fn mac_beat(xcodes: &[agent::InstalledXcode]) -> Heartbeat {
 }
 
 /// A world of groups whose coordinator keeps Xcode archives in a directory of its own.
-struct Farm {
-    world: World,
-    store: Arc<XcodeStore>,
-    dir: PathBuf,
+pub(super) struct Farm {
+    pub(super) world: World,
+    pub(super) store: Arc<XcodeStore>,
+    pub(super) dir: PathBuf,
 }
 
 impl Farm {
     /// A farm named `name` with the group [`GROUP`] of batch 1, `min_serving` 0 and the Xcode
     /// settings `keep` and `default` (none: `latest`), holding `hosts`, not heard.
-    fn new(name: &str, keep: u32, default: Option<&str>, hosts: &[&str]) -> Self {
+    pub(super) fn new(name: &str, keep: u32, default: Option<&str>, hosts: &[&str]) -> Self {
         let mut world = World::new(name);
         let dir = world.rig.dir.path().join("xcode");
         fs::create_dir(&dir).expect("the store's directory");
@@ -141,7 +141,7 @@ impl Farm {
     }
 
     /// Puts [`GROUP`] again with the Xcode settings `keep` and `default` (none: `latest`).
-    fn settings(&self, keep: u32, default: Option<&str>) {
+    pub(super) fn settings(&self, keep: u32, default: Option<&str>) {
         let mut settings = table(1, 0);
         settings.xcode_keep = keep;
         settings.xcode_default = default.map(str::to_owned);
@@ -163,7 +163,7 @@ impl Farm {
 
     /// Stores an archive of `version` and `build` whose bytes name the build, as an operator's
     /// push does.
-    fn add(&self, version: &str, build: &str) -> Archive {
+    pub(super) fn add(&self, version: &str, build: &str) -> Archive {
         let bytes = format!("xip of {build}").into_bytes();
         let mut digest = Digesting::default();
         digest.feed(&bytes);
@@ -235,7 +235,7 @@ impl Farm {
     }
 
     /// The kinds of [`MAC`]'s turn in the first run the world stores, and its step.
-    fn turn(&self) -> (Vec<Kind>, Step) {
+    pub(super) fn turn(&self) -> (Vec<Kind>, Step) {
         let host = self.world.ops().maintenance_runs[0]
             .hosts
             .iter()
@@ -246,7 +246,10 @@ impl Farm {
     }
 
     /// The `maintain` the coordinator answers `beat` of [`MAC`] with, if any.
-    fn maintain(&self, beat: Heartbeat) -> Option<(crate::orders::Maintain, agent::Order)> {
+    pub(super) fn maintain(
+        &self,
+        beat: Heartbeat,
+    ) -> Option<(crate::orders::Maintain, agent::Order)> {
         let order = tell(&self.world, MAC, beat)?;
         let wire = order.to_proto();
         let Order::Maintain {
@@ -274,7 +277,7 @@ fn due_item(from: &str, to: &str, build: &str) -> agent::DueItem {
 }
 
 /// `archive` as a `maintain` names it.
-fn entry_of(archive: &Archive) -> agent::XcodeEntry {
+pub(super) fn entry_of(archive: &Archive) -> agent::XcodeEntry {
     agent::XcodeEntry {
         version: archive.id.version.as_str().to_owned(),
         build: archive.id.build.clone(),

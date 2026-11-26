@@ -50,8 +50,9 @@ ssh-status <host-id>` shows the host keys pinned for a host and the certificate 
 certificates and the pins in `$HOME/.hostkeeper/ssh`, and read the token from its file. `hk \
 ssh-known-host` is run by ssh itself, as the `KnownHostsCommand` of `hk ssh`, and not by hand.
 
-`hk xcode add [<version> | <archive.xip>]` is a method of the service `xcode` that is not a \
-gateway call: on macOS only, it brings an Xcode release into the coordinator's Xcode store. With \
+`hk xcode add [--mac NODE-ID] [<version> | <archive.xip>]` is a method of the service `xcode` \
+that is not a gateway call: on macOS, or with `--mac` on a system without macOS's programs, it \
+brings an Xcode release into the coordinator's Xcode store. With \
 no argument it takes the newest `Xcode_<version>.xip` in `$HOME/Downloads` (or the release \
 waiting in the store, downloaded); given a version it takes that release's archive from \
 `$HOME/Downloads` or downloads it with `xcodes download <version>` in the operator's own \
@@ -66,25 +67,35 @@ connection, an `offset_mismatch` or a `partial_locked` is tried again from the o
 reports (five tries in all, after waits of 2, 4, 8 and 16 seconds), and a run that stops (`the \
 upload stopped at 7.31 of 11.92 GB; run hk xcode add again to continue`, exit 1) is continued by \
 the next run; a coordinator that cannot resume (its query answers 405) gets the whole archive in \
-one request; a step that fails uploads nothing. It needs \
+one request; a step that fails uploads nothing. Off macOS there is no `pkgutil`, `xip` or \
+`codesign` to run, and `--mac NODE-ID` (or `xcode_mac` of the settings file) names a farm Mac \
+that checks the archive in their place, as a maintenance run of the kind `probe` that names the \
+archive in the store (`hk` waits for the Mac's turn, saying each step, and an archive that fails \
+is removed from the store); on macOS `--mac` is a usage error. It needs \
 --endpoint, --ca-file and --token-file (or the settings file), and takes no other credential; \
 `hk xcode add --help` says each step. `hk xcode-push <version> | <archive.xip>` is a second name \
 for it for one release.
 
-`hk xcode verify [--apple-root FILE] <archive.xip>` is a method of the service `xcode` that is \
-not a gateway call: on macOS only, it runs every check of the Mac proof's operator steps on an \
-Xcode archive (the programs, the archive's kind, Apple's signature and published root, a damaged \
-copy and a file that is no archive, the table of contents, and the expansion with its version \
-and build), writes the record of what it found to `$HOME/.hostkeeper/xcode/<sha256>.json` and \
-to stdout, and exits 0 when its verdict is pass and 1 otherwise. It asks no coordinator; \
-`hk xcode verify --help` says each check.
+`hk xcode verify [--apple-root FILE | --mac NODE-ID] <archive.xip>` is a method of the service \
+`xcode` that is not a gateway call: on macOS it runs every check of the Mac proof's operator \
+steps on an Xcode archive (the programs, the archive's kind, Apple's signature and published \
+root, a damaged copy and a file that is no archive, the table of contents, and the expansion \
+with its version and build), writes the record of what it found to \
+`$HOME/.hostkeeper/xcode/<sha256>.json` and to stdout, and exits 0 when its verdict is pass and \
+1 otherwise, asking no coordinator. Off macOS, `--mac NODE-ID` (or `xcode_mac` of the settings \
+file) has a farm Mac check an archive the coordinator's store holds, as a maintenance run of the \
+kind `probe`, and the record is of the same kind with the key `farm`; it needs --endpoint, \
+--ca-file and --token-file. `hk xcode verify --help` says each check.
 
 `hk settings init --endpoint URL --ca-file PATH --token-file PATH` writes the settings file \
 `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their \
 default for every command that takes them (a call, the ssh commands and `xcode add`; not \
 `tailnet-wait`, which takes no token). A flag on the command line wins over the file; a flag \
 that neither gives is missing, as without a file. The file is a TOML table of the strings \
-`endpoint`, `ca_file` and `token_file`: an address and two paths, never a token. A key of \
+`endpoint`, `ca_file` and `token_file`: an address and two paths, never a token; and, only when \
+written by hand (`settings init` does not write it), `xcode_mac`, the node id of the farm Mac \
+that `xcode add` and `xcode verify` check archives on off macOS, which `--mac` overrides and \
+macOS ignores. A key of \
 another name is ignored, with `hk: <path>: unknown key <name> ignored` on stderr. hk refuses a \
 file, or a `$HOME/.hostkeeper`, that is a link, that another user owns or that its group or \
 others may write, naming the path; `--token-stdin` and `--github-oidc-audience` leave the \
@@ -246,15 +257,21 @@ hk settings init --endpoint URL --ca-file PATH --token-file PATH
 
 The file is read by every command that needs a flag it gives; see `hk --help`. It takes the
 global flags --endpoint, --ca-file, --token-file and --timeout-secs. --token-stdin,
---github-oidc-audience and --response-file are not taken.";
+--github-oidc-audience and --response-file are not taken.
+
+One more key is for the operator to write by hand; init does not write it: xcode_mac = \"<node
+id>\", a string, the farm Mac that hk xcode add and hk xcode verify check archives on when the
+system is not macOS. It is the default of their flag --mac, which wins over it; on macOS it is
+ignored.";
 
 /// The help of `hk xcode add`.
 pub(crate) const XCODE_ADD_HELP: &str = "\
-hk xcode add [<version> | <archive.xip>]
+hk xcode add [--mac NODE-ID] [<version> | <archive.xip>]
     Brings an Xcode release into the coordinator's Xcode store, from the operator's own Mac
-    signed in to the Apple developer account; macOS only. One run at a time per Mac: the lock
-    $HOME/.hostkeeper/xcode/.lock is held to the end, and a second run exits 1 naming the first's
-    process id. In order, and nothing is uploaded when a step fails:
+    signed in to the Apple developer account or, off macOS, from any system, with --mac (see
+    Off macOS below). One run at a time per system: the lock $HOME/.hostkeeper/xcode/.lock is
+    held to the end, and a second run exits 1 naming the first's process id. In order, and
+    nothing is uploaded when a step fails:
     1. The archive. A path: that file. A version (27.2): the newest file named for it in
        $HOME/Downloads or $HOME/Downloads/hk-xcode-push/<version>, else xcodes download
        <version> --directory $HOME/Downloads/hk-xcode-push/<version> in this terminal's session
@@ -322,9 +339,62 @@ hk xcode add [<version> | <archive.xip>]
        archive is stored and the commands hk hosts list and hk maintenance list, and the exit
        is 0. With no Mac known stdout has nothing more and stderr says so.
 
+Off macOS (a system that has none of Apple's programs): --mac NODE-ID, or xcode_mac of
+$HOME/.hostkeeper/hk.toml when the flag is not given, names a farm Mac, a node id of 1 to 64
+letters, digits, '.', '_' or '-' that does not start with '.' or '-'. Neither is a usage error
+(exit 2) said before anything is hashed; on macOS, --mac is a usage error, since the checks run on this Mac, and xcode_mac is
+ignored. The farm Mac must be a Mac whose hostkeeper lists probe on demand, in a host group
+that keeps Xcode (xcode_keep 1 or more), since it reads the archive from the store. The steps
+differ:
+    1. A version with no file in $HOME/Downloads is not downloaded (xcodes is a macOS program):
+       the run fails (exit 1, nothing uploaded) telling to download Xcode_<version>.xip from
+       Apple's developer downloads page in a browser into $HOME/Downloads, and to run hk xcode
+       add again.
+    5, 6. No pkgutil, no free space check and no expansion. The version is the one given or
+       waiting, else the one the file's name carries (Xcode_<version>.xip or Xcode-<version>.xip;
+       a name with none fails, exit 1, nothing uploaded); the build is that of the coordinator's
+       waiting release of that version (hk xcode list shows it), else the run fails the same way.
+       A passing record of these bytes gives the version and the build instead.
+    4. An archive the store holds, with a passing record of these bytes, ends the run as above.
+       Without one it is checked as in 10, then already in the store: and the check line are
+       printed, and the Macs.
+    10. The check, after stored: (or, for an archive held already, in its place). A maintenance
+       run is scheduled on the farm Mac alone: Maintenance.Schedule with the kind probe, the
+       host, take_last_host, confirm, xcode_sha256 the archive's SHA-256 and the reason hk xcode
+       add: check Xcode 27.2 (27B52), sha256 <the first 12 hex digits>. A refusal is said in
+       words with the coordinator's code (nothing_due: not a Mac that lists probe on demand, or
+       in a group that keeps no Xcode; host_in_maintenance: in another run, run this again when
+       it ends; unknown_host; invalid_request: the store holds no archive of these bytes, or the
+       request was refused) and exits as any call does (2 or 1). A coordinator whose run does not
+       name the archive cannot order the check: the run is cancelled and hk exits 1. stderr then
+       names the run, the Mac and the line that stops it, hk maintenance cancel --run-id <id>
+       --reason <why>. hk reads Maintenance.Get every 15 seconds and says each step once
+       (waiting; staging: fetching the archive from the store; draining; applying: checking the
+       archive; checking; putting back) until the Mac's turn ends; there is no limit of time, the
+       turn ends by itself. Then:
+       - done: the probe the Mac reports (Hosts.Get) must be of this run and have a verdict step:
+         exit 0 and pass is a pass, exit 1 an archive failure (<reason>: <detail>), no exit means
+         the check did not finish. Another probe means the Mac's hostkeeper made its reads and
+         is older than this hk, or the store no longer held the archive when the turn started;
+       - deferred: the run is cancelled, so that the Mac is not offered the turn again; the
+         reasons xcode_archive_mismatch and xcode_archive_encrypted are archive failures, any
+         other (free_space_short among them) is not checked;
+       - halted: not checked; the Mac stays drained until an operator acts, with the lines hk
+         maintenance retry-host and hk maintenance put-back that say how;
+       - not back, not reached, skipped, or a run that was cancelled or whose window ended: not
+         checked.
+    A pass writes the record hk-xcode-verify-v1 of hk xcode verify, with the key farm, and prints
+    checked on <mac> (run <id>): pass on stdout before the Macs. An archive failure writes the
+    record too, prints refused: <verdict> on stdout, removes the archive from the store
+    (Xcode.Remove, the reason hk xcode add: the check on <mac> (run <id>) failed: <reason>) and
+    exits 1; a removal that fails says so with the hk xcode remove line. A check that gave no
+    verdict is exit 1 with the archive stored, no record, why on stderr and the line hk xcode
+    verify --mac <mac> <archive> that checks it again.
+
 Exit codes: 0 stored, already held, or nothing to add; 1 a check failed, a program could not run,
-another run holds the lock, the upload stopped, the coordinator has no store; 2 usage, not_an_xip
-or a refusal of the store; 3 unauthorized or forbidden.
+another run holds the lock, the upload stopped, the coordinator has no store, the farm Mac gave
+no verdict or refused the archive; 2 usage, not_an_xip or a refusal of the store; 3 unauthorized
+or forbidden.
 
 It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
 last required (or given by the settings file). The token is read from its file into memory and
@@ -333,18 +403,20 @@ an output line. --token-stdin, --github-oidc-audience and --response-file are no
 
 /// The help of `hk xcode-push`, the second name of `hk xcode add` for one release.
 pub(crate) const XCODE_PUSH_HELP: &str = "\
-hk xcode-push <version> | <archive.xip>
+hk xcode-push [--mac NODE-ID] <version> | <archive.xip>
     A second name of hk xcode add, kept for one release, that takes exactly one version or path.
     It writes `hk xcode-push is now hk xcode add` on stderr, then does what hk xcode add does
-    with the same argument; hk xcode add --help says each step.";
+    with the same argument and the same --mac (off macOS, the farm Mac that checks the archive;
+    a usage error on macOS); hk xcode add --help says each step.";
 
 /// The help of `hk xcode verify`.
 pub(crate) const XCODE_VERIFY_HELP: &str = "\
-hk xcode verify [--apple-root FILE] <archive.xip>
-    Checks an Xcode archive on the operator's own Mac, as the operator's user; macOS only. It
-    reads the archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside
-    it (removed afterwards) and its record; it asks no coordinator. In order, ending at the first
-    check that fails (the parts after it are null in the record):
+hk xcode verify [--apple-root FILE | --mac NODE-ID] <archive.xip>
+    Checks an Xcode archive on the operator's own Mac, as the operator's user. It reads the
+    archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside it
+    (removed afterwards) and its record; it asks no coordinator. Off macOS it takes --mac
+    instead, and the archive is checked on a farm Mac (see Off macOS below). In order, ending at
+    the first check that fails (the parts after it are null in the record):
     1. The programs: sw_vers and uname -sm; each program's path must be a file (pkgutil, xip,
        plutil, codesign, spctl, xar, sw_vers, uname, cp, df); xcodes version; the first lines
        of xip --help; which of archiveutil, aa and aea exist.
@@ -375,4 +447,29 @@ whatever the verdict, replacing the file that is there, and printed on stdout. T
 pass and 1 otherwise.
 
 --apple-root FILE is Apple's root certificate (DER or PEM). The global flag --timeout-secs limits
-the fetch of that certificate; the other global flags are not used.";
+the fetch of that certificate; the other global flags are not used. --mac NODE-ID is a usage
+error on macOS, where the checks run on this Mac.
+
+Off macOS there are no programs of Apple's to run, and --apple-root is a usage error (exit 2).
+--mac NODE-ID, or xcode_mac of $HOME/.hostkeeper/hk.toml when the flag is not given, names the
+farm Mac that checks the archive (neither is a usage error, said before anything is hashed): a
+Mac whose hostkeeper lists probe on demand, in a host group that keeps Xcode (xcode_keep 1 or
+more). The archive must be in the coordinator's store, which the farm Mac reads it from: its
+SHA-256 and first four bytes are read, Xcode.List must hold these bytes, else the run fails
+(exit 1) saying hk xcode add <path> uploads it and checks it. The check is the one of hk xcode
+add --help (step 10): a maintenance run of the kind probe on that Mac alone, read every 15
+seconds with each step said once on stderr until the Mac's turn ends, with no limit of time and
+the line hk maintenance cancel --run-id <id> --reason <why> that stops it. Needs --endpoint,
+--ca-file and --token-file (or the settings file). Then:
+    - the Mac gave a verdict (a pass, an archive failure, or a deferral naming
+      xcode_archive_mismatch or xcode_archive_encrypted): the record is written to
+      $HOME/.hostkeeper/xcode/<sha256>.json (mode 0600) and printed on stdout, and stderr says
+      verdict <verdict>; record kept in <path>. Its macos is the Mac's sw_vers and uname steps;
+      programs, signature, tamper and toc are null; expansion holds the xip, app, version and
+      codesign steps it ran; farm names the Mac and the run (host, run, probed_unix, steps, and
+      reason for a deferral). The exit is 0 on pass and 1 otherwise; an archive that failed is
+      not removed from the store (hk xcode add removes it): stderr names the line hk xcode remove
+      --sha256 <sha256> --reason <why>;
+    - no verdict (halted, not back, not reached, skipped, cancelled, deferred for any other
+      reason, a probe that is not this run's or has no verdict step, or a check that did not
+      finish): exit 1, no record, stderr says why.";

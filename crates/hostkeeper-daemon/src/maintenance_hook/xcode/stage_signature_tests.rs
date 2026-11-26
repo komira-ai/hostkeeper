@@ -2,18 +2,7 @@
 //! --check-signature`, step 8), over the fakes of the stage's tests.
 
 use super::*;
-
-/// A `pkgutil` that exits 0 saying `report` on its standard output.
-pub(super) fn reports(report: &str) -> Program {
-    let stdout = report.as_bytes().to_vec();
-    Box::new(move |_| {
-        Ok(Ran {
-            code: Some(0),
-            stdout: stdout.clone(),
-            ..Ran::default()
-        })
-    })
-}
+use crate::maintenance_hook::xcode::signature::tests::APPLE_REPORT;
 
 impl Mac {
     /// The run of `pkgutil --check-signature` on the archive of `entry`.

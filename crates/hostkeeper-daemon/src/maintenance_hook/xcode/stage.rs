@@ -48,6 +48,9 @@
 //! step that does not succeed is [`KindError::Deferred`] (the host never left service) and the
 //! whole staging directory is removed. Each program runs as root by absolute path, with no
 //! standard input and only [`PROGRAM_ENV`] as its environment, killed at its deadline.
+//!
+//! The probe's check of an archive (`super::check`) reuses this stage's fetch, archive check,
+//! program runner and entry check, over the same ports, in its own directory.
 
 use std::ffi::OsStr;
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -141,7 +144,7 @@ pub const REASON_SIGNATURE_INVALID: &str = "xcode_signature_invalid";
 pub const REASON_STAGING_FAILED: &str = "xcode_staging_failed";
 
 /// A deferral for `reason`.
-fn deferred(reason: &'static str, detail: String) -> KindError {
+pub(super) fn deferred(reason: &'static str, detail: String) -> KindError {
     KindError::Deferred { reason, detail }
 }
 
@@ -359,7 +362,12 @@ impl Stage {
 
     /// Fetches the archive of `entry` into `archive`, from its byte `have` on: what the file
     /// holds past `have` (none, or all of a file that was not a part of the archive) is cut.
-    fn fetch(&self, entry: &XcodeEntry, archive: &Path, mut have: u64) -> Result<(), KindError> {
+    pub(super) fn fetch(
+        &self,
+        entry: &XcodeEntry,
+        archive: &Path,
+        mut have: u64,
+    ) -> Result<(), KindError> {
         let path = format!("{STORE_PREFIX}{}", entry.sha256);
         let mut file = OpenOptions::new()
             .create(true)
@@ -450,7 +458,7 @@ impl Stage {
     }
 
     /// Runs `program` with `args` in `cwd`, killed after `secs`.
-    fn run_program(
+    pub(super) fn run_program(
         &self,
         program: &str,
         args: &[&OsStr],
@@ -507,7 +515,7 @@ pub(super) fn is_valid_entry(entry: &XcodeEntry) -> bool {
 }
 
 /// Step 1 of the module's header.
-fn check_entry(entry: &XcodeEntry) -> Result<(), KindError> {
+pub(super) fn check_entry(entry: &XcodeEntry) -> Result<(), KindError> {
     if is_valid_entry(entry) {
         return Ok(());
     }
@@ -530,7 +538,7 @@ fn mismatch(entry: &XcodeEntry, found: &str) -> KindError {
 }
 
 /// Steps 6 and 7: the archive at `path` is the order's size and SHA-256, and not encrypted.
-fn check_archive(entry: &XcodeEntry, path: &Path) -> Result<(), KindError> {
+pub(super) fn check_archive(entry: &XcodeEntry, path: &Path) -> Result<(), KindError> {
     let mut file = File::open(path).map_err(|error| staging_failed(path, "open", &error))?;
     let mut hash = Sha256::new();
     let mut size = 0_u64;
@@ -571,20 +579,32 @@ fn check_archive(entry: &XcodeEntry, path: &Path) -> Result<(), KindError> {
 
 /// The name of the one app `xip` made in `expand`.
 fn only_app(expand: &Path) -> Result<String, KindError> {
-    let apps: Vec<String> = fs::read_dir(expand)
+    let apps = apps_in(expand)?;
+    match apps.as_slice() {
+        [app] => Ok(app.clone()),
+        _ => Err(not_one_app(apps.len())),
+    }
+}
+
+/// The names of the `.app` directories in `expand`, sorted.
+pub(super) fn apps_in(expand: &Path) -> Result<Vec<String>, KindError> {
+    let mut apps: Vec<String> = fs::read_dir(expand)
         .map_err(|error| staging_failed(expand, "read", &error))?
         .filter_map(Result::ok)
         .filter(|item| item.path().is_dir())
         .filter_map(|item| item.file_name().into_string().ok())
         .filter(|name| name.ends_with(".app"))
         .collect();
-    match apps.as_slice() {
-        [app] => Ok(app.clone()),
-        _ => Err(deferred(
-            REASON_EXPAND_FAILED,
-            format!("xip --expand made {} apps, not one Xcode", apps.len()),
-        )),
-    }
+    apps.sort();
+    Ok(apps)
+}
+
+/// The refusal of an expansion that made `count` apps, not one.
+pub(super) fn not_one_app(count: usize) -> KindError {
+    deferred(
+        REASON_EXPAND_FAILED,
+        format!("xip --expand made {count} apps, not one Xcode"),
+    )
 }
 
 /// Fails `reason` unless the program that `ran` exited 0.
@@ -593,18 +613,24 @@ fn program_ok(ran: &io::Result<Ran>, what: &str, reason: &'static str) -> Result
         Ok(ran) => ran,
         Err(error) => return Err(deferred(reason, format!("{what} could not start: {error}"))),
     };
+    match (ran.timed_out, ran.code) {
+        (false, Some(0)) => Ok(()),
+        _ => Err(deferred(reason, ended_detail(ran, what))),
+    }
+}
+
+/// What to say of the program `what` whose run `ran` did not exit 0: how it ended, then the first
+/// line of its standard error when it has one.
+pub(super) fn ended_detail(ran: &Ran, what: &str) -> String {
     let ended = match (ran.timed_out, ran.code) {
-        (false, Some(0)) => return Ok(()),
         (true, _) => "was killed at its deadline".to_owned(),
         (false, Some(code)) => format!("exited {code}"),
         (false, None) => "was ended by a signal".to_owned(),
     };
     let stderr = String::from_utf8_lossy(&ran.stderr);
     match stderr.lines().next().map(str::trim) {
-        Some(first) if !first.is_empty() => {
-            Err(deferred(reason, format!("{what} {ended}: {first}")))
-        }
-        _ => Err(deferred(reason, format!("{what} {ended}"))),
+        Some(first) if !first.is_empty() => format!("{what} {ended}: {first}"),
+        _ => format!("{what} {ended}"),
     }
 }
 
@@ -640,7 +666,7 @@ pub(super) fn make_dir(path: &Path) -> Result<(), KindError> {
 }
 
 /// The deferral of a file of the staging directory that could not be read or written.
-fn staging_failed(path: &Path, what: &str, error: &io::Error) -> KindError {
+pub(super) fn staging_failed(path: &Path, what: &str, error: &io::Error) -> KindError {
     deferred(
         REASON_STAGING_FAILED,
         format!("cannot {what} {}: {error}", path.display()),

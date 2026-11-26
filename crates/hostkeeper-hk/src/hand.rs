@@ -35,36 +35,65 @@ pub(crate) const METHODS: &[Method] = &[
     Method {
         service: "xcode",
         method: "add",
-        doc: "Brings an Xcode release into the coordinator's store from the operator's own Mac, \
-              macOS only: `hk xcode add` takes the newest Xcode_<version>.xip in ~/Downloads (or \
-              the release waiting, downloaded with xcodes), `hk xcode add 27.2` the archive of that \
-              version (downloaded with xcodes when ~/Downloads has none), `hk xcode add <path>` \
-              that file. It checks the archive's kind and Apple's signature, reads its version and \
-              build from the expanded app (keeping a record that saves the next expansion), asks \
-              the store first (an archive it holds ends the run with exit 0), uploads with progress, \
-              resuming where the store holds a part of the archive (a run that stops says how far \
-              it got, and running it again continues), and ends with the Macs that are due the release and when, as the coordinator's \
-              Schedule preview answers it. One run at a time per Mac. Not a gateway call. `hk xcode add --help` says \
-              each step; `hk xcode-push` is a second name for one release.",
-        flags: &[],
+        doc: "Brings an Xcode release into the coordinator's store, from the operator's own Mac or, \
+              with --mac, from a system without macOS's programs: `hk xcode add` takes the newest \
+              Xcode_<version>.xip in ~/Downloads (or the release waiting, downloaded with xcodes), \
+              `hk xcode add 27.2` the archive of that version (downloaded with xcodes when \
+              ~/Downloads has none), `hk xcode add <path>` that file. On macOS it checks the \
+              archive's kind and Apple's signature, reads its version and build from the expanded \
+              app (keeping a record that saves the next expansion), asks the store first (an \
+              archive it holds ends the run with exit 0), uploads with progress, resuming where \
+              the store holds a part of the archive (a run that stops says how far it got, and \
+              running it again continues), and ends with the Macs that are due the release and \
+              when, as the coordinator's Schedule preview answers it. Off macOS, `--mac <node-id>` \
+              (or xcode_mac in ~/.hostkeeper/hk.toml) names a farm Mac: the archive is not \
+              downloaded or expanded here, it is uploaded as above (its version and build are the \
+              file's name and the coordinator's waiting release), and then a maintenance run of \
+              the kind probe has that Mac check it from the store (Apple's signature, the \
+              expansion, the version and build, the app's code signature) while `hk` waits and \
+              says each step; a pass writes the record, and an archive that fails is removed from \
+              the store. One run at a time per system. Not a gateway call. `hk xcode add --help` \
+              says each step; `hk xcode-push` is a second name for one release.",
+        flags: &[Flag {
+            name: "--mac",
+            value: "NODE-ID",
+            help: "Off macOS: the node id of the farm Mac that checks the archive, in place of \
+               xcode_mac in ~/.hostkeeper/hk.toml; it must be a Mac whose hostkeeper lists probe \
+               on demand, in a host group that keeps Xcode (xcode_keep 1 or more). A usage error \
+               on macOS, where the checks run on this Mac.",
+        }],
         run: crate::xcode_add::xcode_add,
     },
     Method {
         service: "xcode",
         method: "verify",
-        doc: "Checks an Xcode archive on the operator's own Mac, macOS only, and writes the record of \
-          what it found to ~/.hostkeeper/xcode/<sha256>.json, mode 0600, and to stdout: the \
-          programs, the archive's kind, Apple's signature and published root, a damaged copy and a \
-          file that is no archive, the archive's table of contents, and the expansion with the \
-          version and build read from the app. Not a gateway call: no coordinator is asked. \
-          Exits 0 when the verdict is pass and 1 otherwise; `hk xcode verify --help` says each \
-          check.",
-        flags: &[Flag {
-            name: "--apple-root",
-            value: "FILE",
-            help: "Apple's root certificate (DER or PEM), in place of fetching it over HTTPS from \
-               Apple's certificate authority page.",
-        }],
+        doc: "Checks an Xcode archive on the operator's own Mac, or, with --mac, on a farm Mac, and \
+          writes the record of what it found to ~/.hostkeeper/xcode/<sha256>.json, mode 0600, and \
+          to stdout. On macOS: the programs, the archive's kind, Apple's signature and published \
+          root, a damaged copy and a file that is no archive, the archive's table of contents, \
+          and the expansion with the version and build read from the app; no coordinator is \
+          asked. Off macOS, `--mac <node-id>` (or xcode_mac in ~/.hostkeeper/hk.toml) names the \
+          farm Mac, and the archive must be in the coordinator's store: a maintenance run of the \
+          kind probe has that Mac check it (Apple's signature, the expansion, the version and \
+          build, the app's code signature) while `hk` waits, and the record holds the Mac's \
+          steps. Not a gateway call. Exits 0 when the verdict is pass and 1 otherwise; `hk xcode \
+          verify --help` says each check.",
+        flags: &[
+            Flag {
+                name: "--apple-root",
+                value: "FILE",
+                help: "Apple's root certificate (DER or PEM), in place of fetching it over HTTPS \
+                   from Apple's certificate authority page. A usage error off macOS.",
+            },
+            Flag {
+                name: "--mac",
+                value: "NODE-ID",
+                help: "Off macOS: the node id of the farm Mac that checks the archive, in place \
+                   of xcode_mac in ~/.hostkeeper/hk.toml; it must be a Mac whose hostkeeper lists \
+                   probe on demand, in a host group that keeps Xcode (xcode_keep 1 or more). A \
+                   usage error on macOS, where the checks run on this Mac.",
+            },
+        ],
         run: crate::xcode_verify::xcode_verify,
     },
 ];

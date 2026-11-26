@@ -171,7 +171,8 @@ hk xcode add ~/Downloads/Xcode_27.2.xip
 
 `hk xcode add` (named `hk xcode-push` until [xcode-one-action.md](xcode-one-action.md) X3, and still a second name of it for one release) is, like `hk ssh`, not a gateway call: it is a verb of the `hk` program (Rust)
 that calls `xcodes`, `pkgutil`, `xip`, `plutil` and `codesign` on the operator's Mac, hashes the archive itself and uploads it over its own HTTPS client
-(Built: `crates/hostkeeper-hk/src/xcode_add/` and `src/xcode_push/`; macOS only **[V]**, section 10), and `docs/cli.md`'s list of commands that
+(Built: `crates/hostkeeper-hk/src/xcode_add/` and `src/xcode_push/`; on macOS **[V]**, section 10; off macOS its checks are made by a farm
+Mac, `src/xcode_farm/`, xcode-one-action.md section 2.8), and `docs/cli.md`'s list of commands that
 are not gateway calls gains it. The steps below are the first form of it; its checks, record, lock and progress are
 [xcode-one-action.md](xcode-one-action.md) section 2. In order:
 
@@ -191,11 +192,14 @@ The Macs then install it from the store in their own drained turn (2.4), where t
 Apple session on any farm Mac; the cost is one command by a person per release.
 
 **From a box that is not a Mac (owner's direction, 2026-11-25).** The owner may download the archive in a browser on an operator's Linux
-box, where `pkgutil`, `xip` and `plutil` do not exist. The archive then reaches the store through the same `PUT`, with the version from
-the archive's name and the build the coordinator lists for that release (the alert's), and steps 2 and 3's checks are made by the Mac
-that stages it, before anything is installed: `pkgutil --check-signature` with the same rule as step 2, then `xip --expand` and the
-build (2.4, Built). A mislabelled or foreign archive is held in the store but never installed: every Mac's stage defers it, and an
-operator removes it (`hk xcode remove`). `docs/operations/mac-proof-owner-session.md` step 1 is this route.
+box, where `pkgutil`, `xip` and `plutil` do not exist. `hk xcode add` runs there too (Built,
+`crates/hostkeeper-hk/src/xcode_farm/`; xcode-one-action.md section 2.8). The archive reaches the store through the same `PUT`,
+with the version from the archive's name and the build the coordinator lists for that release (the alert's). Steps 2 and 3's checks
+are then made by a farm Mac the operator names, in one `probe` run that names the stored archive: the Mac fetches it while it
+serves, and checks it drained with the stage's own code (`pkgutil --check-signature` with the same rule as step 2, `xip --expand`,
+the build, `codesign`). It installs nothing, and `hk` removes an archive that fails from the store. Every Mac's stage still makes
+the same checks before it installs anything (2.4, Built), so an archive that was never checked is still never installed.
+`docs/operations/mac-proof-owner-session.md` step 1 is this route.
 
 **The alternative: the fetcher Mac (section 2.2).** A farm Mac holds the Apple session and logs its account in at boot; a person signs in
 on it when Apple has ended the session. It is kept only for the case where no operator's Mac can push.
@@ -900,9 +904,10 @@ was run on a Mac: each line is a decision and what it rests on, and the runs it 
 is left for the owner is one session, `docs/operations/mac-proof-owner-session.md`.
 
 - **The Xcode archive.** Stays the owner's (the Apple Account's two-factor prompt, 2.0), now in a browser on an operator's Linux box
-  (2.0, "From a box that is not a Mac"). The checks `xcode-push` made on the operator's Mac move to the Mac that stages it: the stage
-  now runs `pkgutil --check-signature` with the same rule before `xip` (2.4, Built). So MP-X2's positive case and MP-I1, MP-I3 and
-  MP-I5 are one `xcode` run on the proof Mac, from the store. MP-X1 (paths on the operator's Mac) and MP-X3 to MP-X6 (what the
+  (2.0, "From a box that is not a Mac"). The checks `xcode-push` made on the operator's Mac move to a farm Mac: `hk xcode add` on the
+  Linux box has the proof Mac check the stored archive in one `probe` run (`pkgutil --check-signature` with the same rule, `xip`, the
+  build, `codesign`; xcode-one-action.md section 2.8, Built), and the stage runs the same checks again before `xip` (2.4, Built). So
+  MP-X2's positive case is that probe's record, and MP-I1, MP-I3 and MP-I5 are one `xcode` run on the proof Mac, from the store. MP-X1 (paths on the operator's Mac) and MP-X3 to MP-X6 (what the
   operator's `pkgutil` and `xip` say of a damaged archive and its table of contents) are not run on this route: the stage's verdict
   and its deferral reasons are tested over fixtures, and the real archive's run shows the positive case.
 - **The administrator's password.** Handed over (a file on the operator's side) but not used: the lead does not put it on a Mac by
