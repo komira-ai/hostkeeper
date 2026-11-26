@@ -87,6 +87,14 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 `HEALTH_UNHEALTHY` means "does not, or the daemon cannot tell"; the reason token tells the cases
 apart.
 
+The daemon's heartbeat carries no `HEALTH_UNSPECIFIED`: a coordinator reads a service's health as
+healthy, unhealthy or absent. An `unmonitored` service with no `[health]` (a configuration package,
+which only places files: no run units, no health URL) is sent `HEALTH_HEALTHY`, as a `live`
+service with no `[health]` is, since nothing of it can fail to serve. Sent unhealthy, it would keep
+its host from ever counting as serving in a maintenance run (`min_serving`) and from baking after
+its turn (`docs/operations/maintenance.md`, "Who is taken, and when"). Its detail stays
+`unmonitored`.
+
 `HEALTH_SILENT` is not in the table: no daemon sends it. The coordinator answers it in place of the
 health a host last reported, in a service's view of a host that is not live (the `health` of a
 `HostService` in `Releases.Status`, `Hosts.List` and `Hosts.Get`), since that report is 45 seconds old or more. The
