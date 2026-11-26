@@ -215,3 +215,71 @@ fn the_vendored_viewer_answers_a_macs_handshake_and_draws_its_first_frame() {
     assert_eq!(out["told"], json!([["connect"], ["disconnect", true]]));
     assert_eq!(out["closes"], json!(1));
 }
+
+/// The opening of a lab Mac's Screen Sharing as the Mac sends it: its version `RFB 003.889`, then
+/// the four security types it offers, Apple's (30) first, then 33, 36 and 35. The viewer is told
+/// nothing more: it must ask the page for the Mac's login before it reads Apple's key exchange.
+const MAC_OFFER: &str = r#"
+import { runTimers } from "../test/novnc_browser.js";
+import RFB from "./vendor/novnc/core/rfb.js";
+import { screenViewer } from "./screen.js";
+export async function main() {
+  const sent = [];
+  const socket = {
+    send(data) { sent.push(...Array.from(new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength))); },
+    close() { socket.closes += 1; },
+    closes: 0, binaryType: "blob", onerror: null, onmessage: null, onopen: null, onclose: null,
+    protocol: "hostkeeper.console.v1", readyState: 1,
+  };
+  const told = [];
+  const viewer = screenViewer(RFB)(document.createElement("div"), { socket }, {
+    connect: () => told.push(["connect"]),
+    credentials: (types) => told.push(["credentials", types]),
+    securityFailure: (reason) => told.push(["securityFailure", reason]),
+    disconnect: (clean) => told.push(["disconnect", clean]),
+  });
+  runTimers();
+  const take = () => sent.splice(0, sent.length);
+  const say = (bytes) => {
+    socket.onmessage({ data: new Uint8Array(bytes).buffer });
+    runTimers();
+    return take();
+  };
+  const version = say(Array.from("RFB 003.889\n", (c) => c.charCodeAt(0)));
+  const security = say([4, 30, 33, 36, 35]);
+  const asked = told.slice();
+  viewer.disconnect();
+  runTimers();
+  return { version, security, asked, told, closes: socket.closes };
+}"#;
+
+/// Proves: given the opening a lab Mac's Screen Sharing sends (version `RFB 003.889`, security
+/// types 30, 33, 36 and 35), the viewer the Desktop page builds answers `RFB 003.008`, picks
+/// Apple's type 30, and tells the page the Mac asks for a user name and a password, before it
+/// sends anything more; so the page shows both fields. Closing it then closes the socket.
+///
+/// Catches: a viewer that refuses Apple's version string or its offer (the Desktop page would end
+/// before any login), one that picks a type the Mac does not run first, and a login form with no
+/// user name field, which Apple's type needs.
+#[test]
+fn the_vendored_viewer_asks_a_user_name_and_password_for_a_macs_offer() {
+    let out = run_with_novnc(MAC_OFFER);
+    assert_eq!(bytes(&out["version"]), b"RFB 003.008\n");
+    assert_eq!(
+        out["security"],
+        json!([30]),
+        "Apple's type, the Mac's first"
+    );
+    assert_eq!(
+        out["asked"],
+        json!([["credentials", ["username", "password"]]])
+    );
+    assert_eq!(
+        out["told"],
+        json!([
+            ["credentials", ["username", "password"]],
+            ["disconnect", true]
+        ])
+    );
+    assert_eq!(out["closes"], json!(1));
+}

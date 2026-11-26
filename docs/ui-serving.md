@@ -249,7 +249,9 @@ by their route and are not in the menu.
 - **Desktop** (`ui/pages/desktop.js`, reached from the Desktop link of Home's list of servers on the row of each host whose last
   heartbeat says `PLATFORM_DARWIN_ARM64`; design: [console design](design/console-broker.md) sections 3 and 11.2): a Mac's screen
   through the coordinator. The page names who holds the Mac's console (`Console.List`), with a **Close it** that asks first and
-  calls `Console.Close`. **Open the desktop** calls `Console.Open` with the host and a reason (as the Console page), opens one socket
+  calls `Console.Close`. **Open the desktop** calls `Console.Open` with the host and a reason (as the Console page; a refusal is said
+  in the Console page's words, but `no_address`, which for a Mac names the console targets file and the data MACs of the Mac's
+  inventory record, and `console_busy`, which says to open the page again to see who holds it), opens one socket
   to `/console/v1/stream/<session>` with the same two subprotocols, and in the socket's `open` handler hands it, open, to the vendored
   noVNC viewer (`ui/screen.js`, `ctx.viewScreen`), which is never given an address. When the Mac asks for its login the page shows a
   form for what it asks and hands what is typed to the viewer alone, keeping no copy of the password. A close is said in the Console
