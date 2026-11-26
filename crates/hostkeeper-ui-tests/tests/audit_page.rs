@@ -109,8 +109,8 @@ return { rows, again: names.includes("newest-page"), first: names.includes("firs
     assert_eq!(
         out["out"]["rows"],
         json!([
-            "Seq|Time|By|Who|Action|Service|Host|Reason",
-            "7|2027-01-15 08:00:00 UTC|operator|alice|hold|-|-|-",
+            "Seq|Time|By|Who|Token|Action|Service|Host|Reason",
+            "7|2027-01-15 08:00:00 UTC|operator|alice|-|hold|-|-|-",
         ])
     );
     assert_eq!(out["out"]["again"], json!(false));
@@ -120,6 +120,40 @@ return { rows, again: names.includes("newest-page"), first: names.includes("firs
         json!([
             {"name": "audit", "params": {"byName": "alice", "newest": "1"}},
             {"name": "audit", "params": {"byName": "bob"}},
+        ])
+    );
+}
+
+#[test]
+fn a_change_made_with_an_api_token_shows_its_owner_and_the_token() {
+    // Catches: a row of a change made with an API token that shows only the owner, so it reads as
+    // the owner signed in, and a row of a signed-in user or of the coordinator that shows a token.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Audit/List"),
+        json!({"entries": [
+            {"seq": "8", "by": "ACTOR_OPERATOR", "byName": "carol", "apiToken": "build-script",
+             "action": "retry", "nodeId": "web-1"},
+            {"seq": "9", "by": "ACTOR_OPERATOR", "byName": "carol", "action": "retry",
+             "nodeId": "web-1"},
+            {"seq": "10", "by": "ACTOR_COORDINATOR", "byName": "coordinator", "action": "halt"},
+        ], "nextSeq": "10"}),
+    );
+    let out = ui.run(&page_driver(
+        "audit",
+        "{}",
+        "[]",
+        r#"
+return nodes(tree).filter((n) => n.tag === "tr").map((r) => r.children.map(text).join("|"));
+"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!([
+            "Seq|Time|By|Who|Token|Action|Service|Host|Reason",
+            "8|-|operator|carol|build-script|retry|-|web-1|-",
+            "9|-|operator|carol|-|retry|-|web-1|-",
+            "10|-|coordinator|coordinator|-|halt|-|-|-",
         ])
     );
 }
