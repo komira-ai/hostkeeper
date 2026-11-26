@@ -340,9 +340,7 @@ jq '(.host // .).maintenance.probe' $P/get-probe.json
 Record: the run id, its audit entries (`maintenance_schedule`, `maintenance_start`, `maintenance_step`), the time of each step from
 `maintenance get`, and the probe: for each step its exit code and output. MP-E8's lines are the probe's steps: console owner (`console`),
 sessions (`who`), id (`id`), managername (`managername`), the environment (`env`), `sw_vers`; MP-A6's launchd lines are
-`fdesetup_status` and `fdesetup_supportsauthrestart`. Two more: `auto_install` (macOS's own setting for installing updates by
-itself, which the daemon turns off at its start: design 5.8) and `managed_settings_mode` (who can read the file that carries the
-Blueprint's hostkeeper settings: design 10.1.3).
+`fdesetup_status` and `fdesetup_supportsauthrestart`.
 Decides:
 - `id` uid 0 and `managername` `System` -> the hook's steps run as root in the System domain; anything else -> stop, nothing of design 5.5
   can be concluded from a launchd job.

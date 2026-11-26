@@ -19,8 +19,8 @@ The lead does each of these, in this order, and checks it, before the session. N
 
 | # | What | Check |
 |---|---|---|
-| B1 | The coordinator and the proof Mac run a hostkeeper release with the probe kind, the probe's `auto_install` and `managed_settings_mode` reads, the daemon's start that turns macOS's own install off, and the Xcode stage's signature check | the Mac's report lists `MAINTENANCE_KIND_PROBE` in `maintenance.onDemand` |
-| B2 | One probe run on the proof Mac ([mac-proof.md](mac-proof.md) MP-E13) | the run is done; its probe says `id` uid 0, `managername` `System`, `env` empty, `auto_install` `0`, and names `managed_settings_mode` (the owner and mode of the file that carries the Blueprint's hostkeeper settings: the answer step 4 turns on) |
+| B1 | The coordinator and the proof Mac run a hostkeeper release with the probe kind, the daemon's start that turns macOS's own install off, and the Xcode stage's signature check | the Mac's report lists `MAINTENANCE_KIND_PROBE` in `maintenance.onDemand`, and its daemon's version is that release's or newer |
+| B2 | One probe run on the proof Mac ([mac-proof.md](mac-proof.md) MP-E13), and two reads in the administrator's `hk ssh` session, with no `sudo` (both files are readable without root): `defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates` and `stat -f "%Sp %Su %Sg" "/Library/Managed Preferences/dev.hostkeeper.config.plist"` | the probe says `id` uid 0, `managername` `System`, `env` empty; the `defaults` read says `0` (the daemon turned macOS's own install off); the `stat` says who can read the file that carries the Blueprint's hostkeeper settings, the answer step 4 turns on |
 | B3 | The proof Mac out of builds for the session: the job scheduler's operator cordon ([mac-proof.md](mac-proof.md) MP-E6), placed for the session and lifted after step 3's check | the job scheduler shows the cordon and no job on the Mac |
 | B4 | The proof Mac in a host group of its own, `mac-proof`, with the same packages and versions and `xcode_keep` 1 ([mac-proof.md](mac-proof.md) MP-E3) | `hostGroup` is `mac-proof`, its services unchanged; no other Mac's group keeps Xcode |
 | B5 | The Xcode store is there and names the release to download | `xcode list` answers `configured` true and a `waiting` release (its `version` and `build`) |
@@ -33,6 +33,7 @@ The reads of B1, B2, B4, B5 and B6:
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> hosts get --node-id <node-id>
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> xcode list
 hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> maintenance schedule --kinds probe --host-ids <node-id> --take-last-host true --confirm true --reason "Mac proof: owner session, before"
+hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> ssh <node-id> --reason "Mac proof: owner session, two reads without sudo"
 ```
 
 ## The owner's steps
@@ -72,7 +73,7 @@ removal follows the lead's read, about 15 minutes later. Step 1's download runs 
 - **Unlocks.** Step 3 on one Mac: a software-update setting made on the copy reaches no build Mac.
 - **Time.** About 5 minutes, and the Mac's next check-in (minutes).
 - **The lead, right after.** A probe run (the command of "Before the owner starts"; the daemon looks again as soon as the turn ends)
-  and `hosts get`: the Mac still heartbeats, `managed_settings_mode` still names hostkeeper's settings file, `mdmConflicts` is empty,
+  and `hosts get`: the Mac still heartbeats, B2's `stat` still finds hostkeeper's settings file, `mdmConflicts` is empty,
   every service is as before. A difference means the copy is not the original: the owner assigns the Mac back.
 
 ### 3. Apple Business: the software-update settings, then their removal
@@ -106,10 +107,10 @@ No macOS update can run through hostkeeper on a Mac without the update account (
 a run leaves such a Mac out with `no_update_account`. Every farm Mac lacks it today. On a Mac enrolled before its keys existed, the
 only way built is a `sudo` line by hand, which this proof does not use. Its Secure Token is granted with the administrator's
 password, which the built path reads from the Blueprint's hostkeeper settings, `dev.hostkeeper.config`, the file B2's
-`managed_settings_mode` describes.
+B2's `stat` describes.
 
 - **Command.** One answer, to the lead:
-  - **If `managed_settings_mode` shows the file readable by root alone:** "Blueprint". The owner then adds the four keys
+  - **If B2's `stat` shows the file readable by root alone:** "Blueprint". The owner then adds the four keys
     (`update_account_name`, `update_account_password`, `admin_name`, `admin_password`) to `dev.hostkeeper.config` on the `mac-proof`
     Blueprint, typing each password into the form, and the lead builds the daemon writing the update-account file from those keys
     when it is missing.
@@ -136,5 +137,5 @@ password, which the built path reads from the Blueprint's hostkeeper settings, `
 | FileVault on, and its password at the pre-boot screen | off the list | The coordinator never orders `macos` on a Mac whose FileVault is not off (`filevault_not_ready`), and the ruling is FileVault off on build Macs (design, question 4). MP-A7, MP-A8, MP-U4, MP-U5 and MP-U8's FileVault-on case show a path no run takes. They come back only if FileVault is ever wanted on build Macs |
 | Apple Business settings on the proof Mac's Blueprint | steps 2 and 3 | Apple Business's API cannot make these Configurations (design 5.5.1). One sitting instead of one setting at a time: the daemon names each setting it finds, and the lead reads them from its report, not from a root shell |
 | Choose a Mac for a major upgrade | nothing to choose now | Every farm Mac runs macOS 27, the newest major release (design 10.1.1). A major upgrade cannot be undone, so it stays the owner's choice when macOS 28 ships: turn `macos_major` on for one Mac's group of its own, as [maintenance.md](maintenance.md#major-macos-upgrades-macos_major) says |
-| Decide on the Mac's own `AutomaticallyInstallMacOSUpdates` 1 | decided: off | With it on, macOS installs a macOS update and restarts the Mac by itself, with no drain, in the middle of a build: what design 5.8 rules out. A Mac's daemon now turns it off at each start, as it keeps the Mac awake ([macos.md](../macos.md#macos-installs-no-update-by-itself)), and the probe's `auto_install` shows it |
+| Decide on the Mac's own `AutomaticallyInstallMacOSUpdates` 1 | decided: off | With it on, macOS installs a macOS update and restarts the Mac by itself, with no drain, in the middle of a build: what design 5.8 rules out. A Mac's daemon now turns it off at each start, as it keeps the Mac awake ([macos.md](../macos.md#macos-installs-no-update-by-itself)), and B2's `defaults` read shows it |
 | Watch the screen during the first installs | off the list | A Mac that stops on a screen does not come back by itself: the run raises `maintenance_not_back` after the group's `return_secs`, and only then does a person look (maintenance.md, "A Mac that is not back") |

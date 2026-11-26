@@ -635,8 +635,8 @@ setting appears on a Mac and corrects these keys.
 Mac's own `/Library/Preferences/com.apple.SoftwareUpdate.plist`, and sets it to 1 by default; the farm Macs have it so (10.1.2). On, it
 installs a macOS update and restarts the Mac without a drain, which this section rules out. It is not a conflict to report, since no
 one sets it on purpose: a Mac's daemon turns it off at each start, the way it keeps the Mac awake (Built:
-`crates/hostkeeper-daemon/src/auto_install.rs`; `docs/macos.md`, "macOS installs no update by itself"), and the probe's `auto_install`
-shows it. The other keys of that file (`AutomaticDownload`, `AutomaticCheckEnabled`, `CriticalUpdateInstall`) install no macOS update
+`crates/hostkeeper-daemon/src/auto_install.rs`; `docs/macos.md`, "macOS installs no update by itself"), and `defaults read` of the key
+(the file is readable without root) shows it. The other keys of that file (`AutomaticDownload`, `AutomaticCheckEnabled`, `CriticalUpdateInstall`) install no macOS update
 and stay as macOS sets them; whether a security response that `CriticalUpdateInstall` lets in ever restarts a Mac is not shown.
 
 ## 6. Builds stay correct across an Xcode change
@@ -907,7 +907,7 @@ is left for the owner is one session, `docs/operations/mac-proof-owner-session.m
 - **The administrator's password.** Handed over (a file on the operator's side) but not used: the lead does not put it on a Mac by
   hand. It serves one purpose, the update account's Secure Token (5.5), and how it reaches a Mac is the owner's choice (the session's
   step 4). Built, it is read from the Blueprint's hostkeeper settings, `/Library/Managed Preferences/dev.hostkeeper.config.plist`;
-  whether other users of the Mac can read that file is not shown, and the probe's `managed_settings_mode` now shows it **[V]**. A
+  whether other users of the Mac can read that file is not shown, and a `stat` of it in the administrator's `hk ssh` session, with no `sudo`, shows it **[V]**. A
   build job runs as a user of the Mac, so if they can, neither password goes there.
 - **FileVault on, and its pre-boot password.** Off the list: a Mac not reported FileVault off is never ordered `macos`
   (`filevault_not_ready`), and the ruling is FileVault off (question 4). MP-A7, MP-A8, MP-U4, MP-U5 and MP-U8's FileVault-on case
@@ -918,7 +918,7 @@ is left for the owner is one session, `docs/operations/mac-proof-owner-session.m
 - **A major upgrade.** Nothing to choose: every farm Mac runs macOS 27, the newest major (10.1.1). It stays the owner's choice when
   macOS 28 ships (`macos_major` on one Mac's own group).
 - **The Mac's own `AutomaticallyInstallMacOSUpdates` 1.** Decided by the lead, as the rule of 5.8 already implies: off. The daemon
-  turns it off at each start (5.8, "The Mac's own setting"; Built), and the probe's `auto_install` shows it **[V]**.
+  turns it off at each start (5.8, "The Mac's own setting"; Built), and a `defaults read` of the key, which needs no root, shows it **[V]**.
 
 **A minor macOS update through a run on the proof Mac** (MP-U1 to MP-U3) still cannot be made: none was offered (10.1.2), and no
 farm Mac has the update account, which a run needs (`no_update_account`). The account waits for the owner's answer to the session's

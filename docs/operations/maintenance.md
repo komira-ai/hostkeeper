@@ -296,8 +296,6 @@ with an empty environment and no standard input, exactly as the Mac's update ste
 | `sw_vers` | `/usr/bin/sw_vers` | the macOS it ran on |
 | `fdesetup_status` | `/usr/bin/fdesetup status` | FileVault, as the update path reads it |
 | `fdesetup_supportsauthrestart` | `/usr/bin/fdesetup supportsauthrestart` | the authenticated restart, as the update path reads it |
-| `auto_install` | `/usr/bin/defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates` | macOS's own setting for installing macOS updates by itself: `0` once the daemon has turned it off at its start ([macos.md](../macos.md#macos-installs-no-update-by-itself)) |
-| `managed_settings_mode` | `/usr/bin/stat -f "%Sp %Su %Sg" "/Library/Managed Preferences/dev.hostkeeper.config.plist"` | the mode, owner and group of the file that carries the Blueprint's hostkeeper settings, so who on the Mac can read a key put there; a Mac with no such file says so |
 
 Read the run until the Mac is done, then the probe, which the Mac's next heartbeat carries in its
 maintenance report and keeps there until its next probe:
@@ -311,7 +309,7 @@ jq '(.host // .).maintenance.probe' probe-host.json
 ```
 
 ```
-{"runId":"run-1796000000-1","probedUnix":"1796000300","steps":[{"name":"console","exitCode":0,"output":"root"},{"name":"who","exitCode":0},{"name":"id","exitCode":0,"output":"uid=0(root) gid=0(wheel) groups=0(wheel),..."},{"name":"managername","exitCode":0,"output":"System"},{"name":"env","exitCode":0},{"name":"sw_vers","exitCode":0,"output":"ProductName:\t\tmacOS; ProductVersion:\t\t27.2.1; BuildVersion:\t\t26B131"},{"name":"fdesetup_status","exitCode":0,"output":"FileVault is Off."},{"name":"fdesetup_supportsauthrestart","exitCode":0,"output":"true"},{"name":"auto_install","exitCode":0,"output":"0"},{"name":"managed_settings_mode","exitCode":0,"output":"<mode> <owner> <group>"}]}
+{"runId":"run-1796000000-1","probedUnix":"1796000300","steps":[{"name":"console","exitCode":0,"output":"root"},{"name":"who","exitCode":0},{"name":"id","exitCode":0,"output":"uid=0(root) gid=0(wheel) groups=0(wheel),..."},{"name":"managername","exitCode":0,"output":"System"},{"name":"env","exitCode":0},{"name":"sw_vers","exitCode":0,"output":"ProductName:\t\tmacOS; ProductVersion:\t\t27.2.1; BuildVersion:\t\t26B131"},{"name":"fdesetup_status","exitCode":0,"output":"FileVault is Off."},{"name":"fdesetup_supportsauthrestart","exitCode":0,"output":"true"}]}
 ```
 
 Each step keeps its exit code (absent when the program did not exit by itself: it did not start, or

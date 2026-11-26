@@ -375,8 +375,9 @@ The change is logged once (`auto_install: AutomaticallyInstallMacOSUpdates was 1
 error and the start goes on. There is no setting to keep it on: no Mac hostkeeper updates should
 install macOS by itself. The other keys of that file (automatic download, checks, security
 responses) are left as they are. Device management's own key of that name is a conflict the daemon
-reports instead ([Maintenance facts](#maintenance-facts)). A maintenance probe's `auto_install` step
-shows the key as the daemon left it.
+reports instead ([Maintenance facts](#maintenance-facts)). The file is readable by every user, so
+`defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates` in
+the administrator's `hk ssh` session, with no `sudo`, shows the key as the daemon left it.
 
 ### Full Disk Access
 
