@@ -1582,7 +1582,7 @@ enabled user cannot be deleted.
 
 ### `xcode`
 
-The service `Xcode` of the package `hostkeeper.operator.v1`. The Xcode store. `Remove` is audited as `xcode_remove` under the caller's name, with the caller's reason, and the archive's version, build and SHA-256 as its subject; `List` changes nothing and writes no audit entry.
+The service `Xcode` of the package `hostkeeper.operator.v1`. The Xcode store. `Remove` is audited as `xcode_remove` (as `xcode_partial_remove` for a partial upload) under the caller's name, with the caller's reason, and the version, build and SHA-256 as its subject; `List` changes nothing and writes no audit entry.
 
 #### `hk xcode list`
 
@@ -1590,7 +1590,8 @@ The service `Xcode` of the package `hostkeeper.operator.v1`. The Xcode store. `R
 
 The archives the store holds, newest release first, the release of the daily list of Xcode
 releases that the store does not hold yet (the one the alert `xcode_release_waiting` names),
-how many releases the store keeps and the most bytes one upload may be. Changes nothing and
+how many releases the store keeps, the most bytes one upload may be, and the uploads in
+progress (`uploads`: the partial uploads the store keeps, oldest first). Changes nothing and
 is not audited. A coordinator started without `--xcode-dir` answers `configured` false.
 
 #### `hk xcode remove`
@@ -1599,7 +1600,10 @@ is not audited. A coordinator started without `--xcode-dir` answers `configured`
 
 Removes one archive from the store, by its SHA-256, and writes the audit entry `xcode_remove`
 first: when the entry cannot be written nothing is removed. The version the archive held is
-free for an upload of another build afterwards.
+free for an upload of another build afterwards. A SHA-256 the store holds no archive of but
+holds as a partial upload (one `List` gives in `uploads`) removes that upload instead, with the
+audit entry `xcode_partial_remove` written first the same way, and is refused `partial_locked`
+while the upload's lock is fresh; a SHA-256 the store holds neither way is `unknown_archive`.
 
 | flag | value | meaning |
 |---|---|---|
