@@ -18,7 +18,9 @@
 //!   its own service live, healthy and at the version it runs on every platform, as it reports
 //!   `hostkeeper.service` on Linux.
 //! - [`host_observer`] builds the observer of a host over `systemctl`, `/proc` and TCP.
-//! - [`service_health`] is the heartbeat's health of a service's observation.
+//! - [`service_health`] is [`beat_health`]'s health of a service's observation, before the
+//!   heartbeat's mapping (`link_adapters::observation`), which sends an unmonitored service with no
+//!   health URL as healthy.
 //!
 //! [`Daemon::status`]: crate::executor::Daemon::status
 
@@ -107,8 +109,9 @@ pub fn observe(
         .map(|input| observer.observe(&input, STATUS_DEADLINE))
 }
 
-/// The health the heartbeat reports of the service `status` describes, and its version, as
-/// [`beat_health`] maps its observation; `None` when it was not observed.
+/// The health of the service `status` describes, and its version, as [`beat_health`] maps its
+/// observation (the heartbeat then sends an unmonitored service with no health URL as healthy);
+/// `None` when it was not observed.
 pub fn service_health(status: &ServiceStatus) -> Option<(Health, Option<String>)> {
     status.observation.as_ref().map(beat_health)
 }
