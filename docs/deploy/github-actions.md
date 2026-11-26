@@ -218,7 +218,7 @@ audience = "hostkeeper-ci"
 repository_id = "123456789"            # gh api repos/komira-ai/hostkeeper --jq .id
 repository = "komira-ai/hostkeeper"
 job_workflow_ref = [
-  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c",
+  "komira-ai/hostkeeper/.github/workflows/set-desired.yml@954cbaeb7ea416315d69894b80ec600c81eae3c5",
 ]
 refs = ["refs/heads/main"]
 event_names = ["workflow_dispatch", "workflow_run", "schedule"]
@@ -250,9 +250,11 @@ the `uses:` line names a commit of this repository with its release as the comme
 OIDC token is a published release, verified before it runs, never the commit being released.
 
 Both callers of this repository, `release.yml` and `hello-desired.yml`, pin one revision: commit
-`2c767d1842a88edb7120073d2dff3b4bfccc834c`, release `v0.1.184`, the first whose
-`set-desired.yml` takes the tailnet tag (`tailnet_tag`), on top of a release's targets and hk
-(one set, and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
+`954cbaeb7ea416315d69894b80ec600c81eae3c5`, release `v0.1.479`, whose `set-desired.yml` runs the
+command line `hk` and, once the runner joins the tailnet, waits for the coordinator with `hk
+tailnet-wait` (bounded attempts, then one rejoin and as many again) before the set, on top of
+the tailnet tag (`tailnet_tag`), the host group (`host_group`) and a release's targets (one set,
+and for `hello-desired.yml` one held wait). A coordinator that does not take `SetDesired` with targets refuses their sets; the
 coordinator is updated to one that does before the pin moves. For a release, the job `coordinator`
 holds `set-desired` until the coordinator runs that release. The workflow
 lint (`cargo test -p xtask --test workflows`, `callers.rs`) names that revision, as

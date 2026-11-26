@@ -88,13 +88,13 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1842a88edb7120073d2dff3b4bfccc834c # v0.1.184
+    uses: komira-ai/hostkeeper/.github/workflows/set-desired.yml@954cbaeb7ea416315d69894b80ec600c81eae3c5 # v0.1.479
     with:
       service: my-service
       version: ${{ needs.release.outputs.version }}
       targets: ${{ needs.release.outputs.targets }}
-      hostkeeper_version: 0.1.184
-      hostkeeper_commit: 2c767d1842a88edb7120073d2dff3b4bfccc834c
+      hostkeeper_version: 0.1.479
+      hostkeeper_commit: 954cbaeb7ea416315d69894b80ec600c81eae3c5
       coordinator_url: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
       coordinator_ca: ${{ vars.HOSTKEEPER_COORDINATOR_CA }}
       audience: ${{ vars.HOSTKEEPER_CI_AUDIENCE }}
@@ -121,12 +121,11 @@ What the lint holds the template to, as it holds `hello-desired.yml`:
 - and every rule of a workflow of this repository: `permissions: {}` at the top, each action
   pinned to a full commit, a GitHub-hosted runner, and each download retried.
 
-**Host groups.** The template passes no host group. `host_group` is an input of the CI client
-from the release after v0.1.184, the revision the template pins; until the pin moves to a
-release whose client takes it, a caller cannot pass it, and the set is one deployment to each
-group that lists the service. A service listed by more than one group is therefore rolled to
-all of them by one call, each by its own group's policy; chaining them (a canary group, a wait,
-then the next group) is a caller's change that comes with the move of the pin.
+**Host groups.** The template passes no host group, so the set is one deployment to each group
+that lists the service. A service listed by more than one group is therefore rolled to all of
+them by one call, each by its own group's policy. The CI client of the revision the template
+pins, v0.1.479, takes `host_group`; chaining groups (a canary group, a wait, then the next
+group) is a caller's change: one call of the client per group, each passing its `host_group`.
 
 ## The checklist
 

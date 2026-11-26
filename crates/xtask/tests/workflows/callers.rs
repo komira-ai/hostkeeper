@@ -14,7 +14,7 @@
 //! - a job of [`CALLERS`] does not run the CI client's revision: its `uses:` is not pinned to
 //!   [`CLIENT_COMMIT`], the version comment on that line does not start with
 //!   `v`[`CLIENT_RELEASE`], or its `with` does not pass `hostkeeper_version: `[`CLIENT_RELEASE`]
-//!   and `hostkeeper_commit: `[`CLIENT_COMMIT`] (the release whose hkctl the job downloads, and
+//!   and `hostkeeper_commit: `[`CLIENT_COMMIT`] (the release whose hk the job downloads, and
 //!   the commit its attestation must name);
 //! - a job of [`CALLERS`] does not pass `tailnet_tag: `[`TAILNET_TAG`], whether or not it joins
 //!   the tailnet: the tag comes from one repository variable, never from the CI client's default
@@ -52,17 +52,18 @@ pub const SET_DESIRED: &str = "komira-ai/hostkeeper/.github/workflows/set-desire
 
 /// The revision of the CI client every job of [`CALLERS`] runs: the commit of this repository
 /// whose `set-desired.yml` it calls, which is also the commit the release [`CLIENT_RELEASE`] was
-/// built from. It is the first release whose `set-desired.yml` takes the tailnet tag,
-/// `tailnet_tag` ([`TAILNET_TAG`]), beside a release's targets (docs/design/packages.md, section
-/// 3.7), on the client of hkctl, one set and one held wait (docs/design/two-programs.md,
-/// section 5). Moving it is one reviewed change: these two
+/// built from. Its `set-desired.yml` runs the command line `hk` and, after the tailnet join,
+/// waits for the coordinator with `hk tailnet-wait` (bounded attempts, then one rejoin) before
+/// the set, beside the tailnet tag, `tailnet_tag` ([`TAILNET_TAG`]), and a release's targets
+/// (docs/design/packages.md, section 3.7): one set and one held wait
+/// (docs/design/two-programs.md, section 5). Moving it is one reviewed change: these two
 /// values, the `uses:` line, `hostkeeper_version` and `hostkeeper_commit` of both callers, and the
 /// coordinator's allow-list entry (docs/deploy/github-actions.md, "The allow-list entry").
-pub const CLIENT_COMMIT: &str = "2c767d1842a88edb7120073d2dff3b4bfccc834c";
+pub const CLIENT_COMMIT: &str = "954cbaeb7ea416315d69894b80ec600c81eae3c5";
 
-/// The release built from [`CLIENT_COMMIT`], X.Y.Z: the one whose `hkctl-<version>` the CI client
-/// downloads and verifies.
-pub const CLIENT_RELEASE: &str = "0.1.184";
+/// The release built from [`CLIENT_COMMIT`], X.Y.Z: the one whose `hk-<version>-linux-x86_64.tar.gz`
+/// the CI client downloads and verifies.
+pub const CLIENT_RELEASE: &str = "0.1.479";
 
 /// What every job of [`CALLERS`] passes as `tailnet_tag`, exactly: the repository variable that
 /// holds the tag the tailnet's trust credential issues (docs/deploy/github-actions.md, "The
