@@ -2,8 +2,9 @@
 //! section 1.4): the order of the group's list.
 //!
 //! A host is offered the install of a package only when every package listed before it is
-//! installed on the host, at any version, or cannot be: the question of that package is one of
-//! the four that say it is no word for this host to act on, [`Skip::NoDesired`],
+//! installed on the host, at any version (an excluded host's beat counts: an exclusion holds a
+//! package back only where the host does not run it), or cannot be: the question of that package
+//! is one of the four that say it is no word for this host to act on, [`Skip::NoDesired`],
 //! [`Skip::NoTarget`], [`Skip::NoPackageForPlatform`] and [`Skip::NoBuildForHost`]. Until then the
 //! later package waits, told [`crate::decide::Gate::InstallOrder`], and takes no place of its plan: the check is
 //! made before the plan's gate, so a config package never reaches a host before the service it
@@ -92,8 +93,8 @@ pub(crate) fn uninstall_waits(
 }
 
 /// Whether `earlier`, which the host `id` is not past, holds the packages listed after it back:
-/// it is not installed on the host, its own decision is not one of the four that say it cannot
-/// be, and the host did not decline its install at the desired version (an open deferral of that
+/// it is not installed on the host, excluded or not ([`installed_on`]), its own decision is not
+/// one of the four that say it cannot be, and the host did not decline its install at the desired version (an open deferral of that
 /// version) while nothing but its wait, its next order or another order on the host stands in its
 /// way.
 fn holds_back(

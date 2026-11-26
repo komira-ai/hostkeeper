@@ -421,9 +421,19 @@ pub(crate) fn heard<'a>(fleet: &'a Fleet, service: &str, id: &HostId) -> Option<
     })
 }
 
-/// Whether the host `id` runs `service`, at any version.
+/// Whether the host `id` runs `service`, at any version, whether or not the service counts the
+/// host: the beat of a service an operator excluded the host from, or whose selector no longer
+/// takes it, is kept apart from the service's hosts ([`Fleet::occupant`]) and counts too. False
+/// for a service the host's last heartbeat no longer lists, as [`heard`] has no word of it.
 pub(crate) fn installed_on(fleet: &Fleet, service: &str, id: &HostId) -> bool {
-    heard(fleet, service, id).is_some_and(|h| h.beat.health != Health::Absent)
+    fleet
+        .occupant(service, id)
+        .filter(|_| {
+            fleet
+                .node(id)
+                .is_none_or(|node| node.announced.contains_key(service))
+        })
+        .is_some_and(|h| h.beat.health != Health::Absent)
 }
 
 /// The rules of the decision that come before the plan, for the host `id`, the assigned `def`
