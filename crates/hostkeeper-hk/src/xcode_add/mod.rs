@@ -1,7 +1,8 @@
-//! `hk xcode add [<version> | <path to .xip>]`: brings an Xcode release into the coordinator's
-//! Xcode store from the operator's own Mac (docs/design/xcode-one-action.md section 2), and
-//! `hk xcode-push <version> | <path>`, its second name for one release, which says
-//! `hk xcode-push is now hk xcode add` on stderr first and then does the same.
+//! `hk xcode add [--mac <node-id>] [<version> | <path to .xip>]`: brings an Xcode release into the
+//! coordinator's Xcode store from the operator's own Mac or, off macOS, from any system
+//! (docs/design/xcode-one-action.md section 2), and `hk xcode-push <version> | <path>`, its second
+//! name for one release, which says `hk xcode-push is now hk xcode add` on stderr first and then
+//! does the same.
 //!
 //! In order, each step ending the run before anything is uploaded when it fails:
 //!
@@ -27,13 +28,30 @@
 //!    refusal said in words, then `stored: ...` on stdout and the Macs summary ([`summary`]), whose
 //!    failure leaves the exit 0.
 //!
+//! On macOS the steps above are the run, and `--mac` is a usage error. Off macOS (`Mac::os` is not
+//! `macos`) the run needs a farm Mac, named by `--mac <node-id>` or the settings key `xcode_mac`
+//! ([`crate::xcode_farm::mac_of`]), and differs ([`farm`]):
+//!
+//! - step 1 never downloads: a version with no file in `~/Downloads` fails, telling the operator
+//!   to download `Xcode_<version>.xip` in a browser and run the verb again;
+//! - steps 5 and 6 run no program: the version is the one given or waiting, or the one the file's
+//!   name carries (`Xcode_<version>.xip`), the build is the one the coordinator's waiting release
+//!   of that version has, and a passing record of these bytes ([`reuse`]) gives both instead;
+//! - after step 8 the farm Mac checks the archive ([`crate::xcode_farm`]): a pass prints
+//!   `checked on <mac> (run <id>): pass` and writes the record before the Macs summary; a failure
+//!   of the archive removes it from the store (`refused: <verdict>`, exit 1); a check that gave no
+//!   verdict is exit 1 with the archive stored and the line that checks it again;
+//! - at step 4 an archive held with no passing record of these bytes is checked on the farm Mac
+//!   too; with one, the run ends as on macOS.
+//!
 //! Progress and what the run is doing go to stderr; stdout holds the answer lines only.
 
+mod farm;
 mod find;
 mod lock;
 pub(crate) mod progress;
 mod reuse;
-mod store;
+pub(crate) mod store;
 mod summary;
 #[cfg(test)]
 mod tests;
@@ -42,7 +60,7 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 
-use crate::args::{Globals, flag_of};
+use crate::args::{Globals, flag_of, value_of};
 use crate::help::{XCODE_ADD_HELP, XCODE_PUSH_HELP};
 use crate::home::Home;
 use crate::xcode_push::archive::{self, Release, digest_blocks, is_version};
@@ -81,6 +99,12 @@ pub(crate) fn xcode_push(w: &mut World<'_>, globals: Globals, args: &[Vec<u8>]) 
     run(w, globals, args, "xcode-push")
 }
 
+/// What follows the verb: its words, and the `--mac` it was given, if any.
+struct Words {
+    words: Vec<Vec<u8>>,
+    mac: Option<Vec<u8>>,
+}
+
 /// The words after the verb `word`, the global flags among them taken; `None` when `--help` was
 /// asked and printed.
 fn parse(
@@ -88,10 +112,12 @@ fn parse(
     globals: &mut Globals,
     args: &[Vec<u8>],
     word: &str,
-) -> Flow<Option<Vec<Vec<u8>>>> {
+) -> Flow<Option<Words>> {
     let mut words = Vec::new();
+    let mut mac: Option<Vec<u8>> = None;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
+        let rest = args.get(at..).unwrap_or_default();
         if matches!(arg.as_slice(), b"--help" | b"-h") {
             let help = if word == "xcode add" {
                 XCODE_ADD_HELP
@@ -101,7 +127,13 @@ fn parse(
             let _ = writeln!(w.stdout, "{help}");
             return Ok(None);
         }
-        if let Some(took) = globals.take(args.get(at..).unwrap_or_default())? {
+        if flag_of(arg) == b"--mac" {
+            let (value, took) = value_of(rest)?;
+            if mac.replace(value.to_vec()).is_some() {
+                return Err(Stop::usage("--mac is given twice"));
+            }
+            at += took;
+        } else if let Some(took) = globals.take(rest)? {
             at += took;
         } else if arg.starts_with(b"-") {
             return Err(Stop::usage(
@@ -116,7 +148,7 @@ fn parse(
             at += 1;
         }
     }
-    Ok(Some(words))
+    Ok(Some(Words { words, mac }))
 }
 
 /// The one thing asked for: nothing (`hk xcode add` alone), a version or a path.
@@ -166,19 +198,16 @@ fn stored(version: &str, build: &str) -> String {
 }
 
 fn run(w: &mut World<'_>, mut globals: Globals, args: &[Vec<u8>], word: &str) -> Flow<()> {
-    let Some(words) = parse(w, &mut globals, args, word)? else {
+    let Some(Words { words, mac }) = parse(w, &mut globals, args, word)? else {
         return Ok(());
     };
-    if w.mac.os != "macos" {
-        return Err(Stop::fail(format!(
-            "{PROGRAM} {word} runs on macOS only, on the Mac signed in to the Apple developer \
-             account: it runs xcodes, pkgutil and xip, which are macOS programs, and this system \
-             is {}",
-            w.mac.os
-        )));
-    }
     let pick = pick_of(&words, word)?;
-    crate::settings::fill(w, &mut globals)?;
+    // Off macOS the farm Mac is chosen first, and reading the settings file for `xcode_mac` also
+    // fills the flags it gives; on macOS the file only fills the flags.
+    let farm = crate::xcode_farm::mac_of(w, &mut globals, word, mac)?;
+    if farm.is_none() {
+        crate::settings::fill(w, &mut globals)?;
+    }
     let target = target(&globals, word)?;
     let Some(home) = Home::of(w) else {
         return Err(Stop::fail(format!(
@@ -187,9 +216,18 @@ fn run(w: &mut World<'_>, mut globals: Globals, args: &[Vec<u8>], word: &str) ->
     };
     let xcode_dir = home.ensure()?;
     let _lock = lock::take(&home, &xcode_dir, word)?;
-    add(w, &globals, &target, &home, &xcode_dir, pick)
+    add(
+        w,
+        &globals,
+        &target,
+        &home,
+        &xcode_dir,
+        pick,
+        farm.as_deref(),
+    )
 }
 
+/// The run, with the farm Mac `farm` that checks the archive when this system is not macOS.
 fn add(
     w: &mut World<'_>,
     globals: &Globals,
@@ -197,6 +235,7 @@ fn add(
     home: &Home,
     xcode_dir: &Path,
     pick: Pick,
+    farm: Option<&str>,
 ) -> Flow<()> {
     let mac = w.mac.clone();
     let downloads = w.home.clone().unwrap_or_default().join(find::DOWNLOADS);
@@ -206,7 +245,7 @@ fn add(
         Pick::Path(path) => (path, "the file given".to_owned()),
         Pick::Version(version) => {
             wanted = Some(version.clone());
-            by_version(w, &mac, &downloads, &version)?
+            by_version(w, &mac, &downloads, &version, farm.is_some())?
         }
         Pick::Newest => match find::newest(&downloads) {
             Some(path) => (
@@ -228,7 +267,7 @@ fn add(
                     return Ok(());
                 };
                 wanted = Some(waiting.version.clone());
-                by_version(w, &mac, &downloads, &waiting.version)?
+                by_version(w, &mac, &downloads, &waiting.version, farm.is_some())?
             }
         },
     };
@@ -242,6 +281,14 @@ fn add(
         .unwrap_or_default();
     let (sha256, size) = hash(w, &mut file)?;
     let listing = store::list(w, globals)?;
+    let record_path = xcode_dir.join(format!("{sha256}.json"));
+    let saved = reuse::release_of(&record_path, w.uid, &sha256, size);
+    let local = record::Archive {
+        name: name.clone(),
+        size,
+        sha256: sha256.clone(),
+        kind: "xar!".to_owned(),
+    };
     if let Some(held) = listing.of_bytes(&sha256) {
         if let Some(asked) = &wanted
             && find::parts(asked) != find::parts(&held.version)
@@ -251,11 +298,28 @@ fn add(
                 stored(&held.version, &held.build)
             )));
         }
+        // Off macOS, held bytes no passing record vouches for are checked on the farm Mac.
+        let checked = match farm {
+            Some(on) if saved.is_none() => Some(
+                farm::Check {
+                    mac: on,
+                    archive: local,
+                    version: &held.version,
+                    build: &held.build,
+                    path: &path,
+                }
+                .run(w, globals, home)?,
+            ),
+            _ => None,
+        };
         let _ = writeln!(
             w.stdout,
             "already in the store: {}",
             stored(&held.version, &held.build)
         );
+        if let Some(line) = checked {
+            let _ = writeln!(w.stdout, "{line}");
+        }
         summary::macs(w, globals, &listing, held);
         if newest && let Some(waiting) = &listing.waiting {
             let _ = writeln!(
@@ -273,24 +337,27 @@ fn add(
             progress::size_text(size)
         ),
     );
-    signature::check(w, &mac, &path)?;
-    let record_path = xcode_dir.join(format!("{sha256}.json"));
-    let (version, build) = match reuse::release_of(&record_path, w.uid, &sha256, size) {
-        Some(found) => {
-            say(
-                w,
-                &format!(
-                    "{}, read from the record kept in {}; the expansion is skipped",
-                    stored(&found.0, &found.1),
-                    record_path.display()
-                ),
-            );
-            found
-        }
-        None => {
-            let release = expand(w, &mac, &path, size)?;
-            keep(w, home, &record_path, &name, &sha256, size, &release)?;
-            (release.version, release.build)
+    let (version, build) = if farm.is_some() {
+        farm::release(w, &listing, saved, wanted.as_deref(), &name, &record_path)?
+    } else {
+        signature::check(w, &mac, &path)?;
+        match saved {
+            Some(found) => {
+                say(
+                    w,
+                    &format!(
+                        "{}, read from the record kept in {}; the expansion is skipped",
+                        stored(&found.0, &found.1),
+                        record_path.display()
+                    ),
+                );
+                found
+            }
+            None => {
+                let release = expand(w, &mac, &path, size)?;
+                keep(w, home, &record_path, &name, &sha256, size, &release)?;
+                (release.version, release.build)
+            }
         }
     };
     if let Some(asked) = &wanted
@@ -320,6 +387,17 @@ fn add(
         "stored: {}, sha256 {sha256}, {size} bytes",
         stored(&version, &build)
     );
+    if let Some(on) = farm {
+        let line = farm::Check {
+            mac: on,
+            archive: local,
+            version: &version,
+            build: &build,
+            path: &path,
+        }
+        .run(w, globals, home)?;
+        let _ = writeln!(w.stdout, "{line}");
+    }
     let release = store::Held {
         sha256,
         version,
@@ -329,15 +407,19 @@ fn add(
     Ok(())
 }
 
-/// The archive named for `version`: in `~/Downloads`, else downloaded; with how it was found.
+/// The archive named for `version`: in `~/Downloads`, else downloaded (off macOS, where `xcodes`
+/// does not run, `off` is set and the failure says to download it in a browser); with how it was
+/// found.
 fn by_version(
     w: &mut World<'_>,
     mac: &Mac,
     downloads: &Path,
     version: &str,
+    off: bool,
 ) -> Flow<(PathBuf, String)> {
     match find::in_downloads(downloads, version) {
         Some(path) => Ok((path, format!("the newest archive named for {version}"))),
+        None if off => Err(failed(&farm::browser(version))),
         None => Ok((
             find::download(w, mac, downloads, version)?,
             format!("downloaded by {}", mac.xcodes.display()),

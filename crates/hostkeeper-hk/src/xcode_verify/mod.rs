@@ -2,7 +2,14 @@
 //! operator steps (MP-X1 to MP-X6, `docs/operations/mac-proof.md`) ask for, on the operator's own
 //! Mac as the operator's user, and the record of what each found. It reads the archive only, makes
 //! nothing outside a scratch directory beside the archive (removed afterwards) and
-//! `~/.hostkeeper/xcode/`, and calls no coordinator. On macOS only, as `hk xcode-push`.
+//! `~/.hostkeeper/xcode/`, and calls no coordinator. That is the run on macOS, where `--mac` is a
+//! usage error.
+//!
+//! Off macOS (`Mac::os` is not `macos`) there are no programs of Apple's to run, and the verb is
+//! `hk xcode verify --mac <node-id> <archive.xip>` ([`farm`]): the archive, which the coordinator's
+//! Xcode store must hold, is checked on that farm Mac ([`crate::xcode_farm`]), and the record is of
+//! the same kind, with the key `farm`. `--apple-root` is a usage error there. The parts below are
+//! the checks on macOS.
 //!
 //! In order, each part ending the run at its first failure with the parts after it `null` in the
 //! record:
@@ -31,6 +38,7 @@
 //! 0 on `pass` and 1 otherwise.
 
 mod expansion;
+mod farm;
 pub(crate) mod free;
 mod programs;
 mod root;
@@ -50,7 +58,7 @@ use crate::args::{Globals, flag_of, value_of};
 use crate::help::XCODE_VERIFY_HELP;
 use crate::home::Home;
 use crate::xcode_push::archive::{Expansion, digest_of, open_file};
-use crate::xcode_push::{Mac, say};
+use crate::xcode_push::{Mac, say, target};
 use crate::xcode_record::{self as record, Archive, PASS, VERIFY, Verify};
 use crate::{Flow, PROGRAM, Stop, World};
 
@@ -84,7 +92,7 @@ fn write_file(path: &Path, bytes: &[u8], part: &str) -> Result<(), String> {
 }
 
 /// The kind of an archive by its first bytes.
-fn kind_of(first: &[u8]) -> &'static str {
+pub(crate) fn kind_of(first: &[u8]) -> &'static str {
     match first {
         b"xar!" => "xar!",
         b"AA01" => "AA01",
@@ -140,16 +148,18 @@ fn checks(w: &mut World<'_>, ctx: &Ctx<'_>, rec: &mut Verify, first: &[u8]) -> R
     expansion::expand(ctx, rec)
 }
 
-/// The path words of `args` and `--apple-root`: what `hk xcode verify` was given.
+/// The path words of `args`, `--apple-root` and `--mac`: what `hk xcode verify` was given.
 struct Given {
     path: Vec<u8>,
     apple_root: Option<Vec<u8>>,
+    mac: Option<Vec<u8>>,
 }
 
 /// Reads the words after `verify`; `None` when `--help` was asked and printed.
 fn parse(w: &mut World<'_>, globals: &mut Globals, args: &[Vec<u8>]) -> Flow<Option<Given>> {
     let mut words: Vec<&[u8]> = Vec::new();
     let mut apple_root: Option<Vec<u8>> = None;
+    let mut mac: Option<Vec<u8>> = None;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         let rest = args.get(at..).unwrap_or_default();
@@ -161,6 +171,12 @@ fn parse(w: &mut World<'_>, globals: &mut Globals, args: &[Vec<u8>]) -> Flow<Opt
             let (value, took) = value_of(rest)?;
             if apple_root.replace(value.to_vec()).is_some() {
                 return Err(Stop::usage("--apple-root is given twice"));
+            }
+            at += took;
+        } else if flag_of(arg) == b"--mac" {
+            let (value, took) = value_of(rest)?;
+            if mac.replace(value.to_vec()).is_some() {
+                return Err(Stop::usage("--mac is given twice"));
             }
             at += took;
         } else if let Some(took) = globals.take(rest)? {
@@ -186,6 +202,7 @@ fn parse(w: &mut World<'_>, globals: &mut Globals, args: &[Vec<u8>]) -> Flow<Opt
     Ok(Some(Given {
         path: path.to_vec(),
         apple_root,
+        mac,
     }))
 }
 
@@ -194,12 +211,16 @@ pub(crate) fn xcode_verify(w: &mut World<'_>, mut globals: Globals, args: &[Vec<
     let Some(given) = parse(w, &mut globals, args)? else {
         return Ok(());
     };
-    if w.mac.os != "macos" {
-        return Err(Stop::fail(format!(
-            "{PROGRAM} xcode verify runs on macOS only, on the Mac the archive was downloaded to: \
-             it runs pkgutil, xip, codesign and other macOS programs, and this system is {}",
-            w.mac.os
-        )));
+    let farm = crate::xcode_farm::mac_of(w, &mut globals, "xcode verify", given.mac)?;
+    if farm.is_some() {
+        if given.apple_root.is_some() {
+            return Err(Stop::usage(format!(
+                "--apple-root is for the check on this Mac, which fetches or reads Apple's root \
+                 certificate itself; this system is {}, and the archive is checked on a farm Mac",
+                w.mac.os
+            )));
+        }
+        target(&globals, "xcode verify")?;
     }
     let Some(home) = Home::of(w) else {
         return Err(Stop::fail(format!(
@@ -216,6 +237,15 @@ pub(crate) fn xcode_verify(w: &mut World<'_>, mut globals: Globals, args: &[Vec<
     say(w, &format!("{}: hashing", archive.display()));
     let (sha256, size) = digest_of(&mut file).map_err(Stop::fail)?;
     let first = first_bytes(&archive).map_err(Stop::fail)?;
+    if let Some(on) = farm {
+        let local = farm::Local {
+            path: &archive,
+            size,
+            sha256: &sha256,
+            kind: kind_of(&first),
+        };
+        return farm::verify(w, &globals, &home, &on, &local);
+    }
     let beside = archive.parent().unwrap_or(Path::new("/"));
     let scratch = beside.join(SCRATCH);
     // What an earlier run stopped by a signal left: it is not there, or it is removed, or making
@@ -253,6 +283,7 @@ pub(crate) fn xcode_verify(w: &mut World<'_>, mut globals: Globals, args: &[Vec<
         tamper: None,
         toc: None,
         expansion: None,
+        farm: None,
         verdict: String::new(),
     };
     let result = checks(w, &ctx, &mut rec, &first);

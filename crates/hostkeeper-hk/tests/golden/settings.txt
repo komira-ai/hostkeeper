@@ -14,3 +14,8 @@ hk settings init --endpoint URL --ca-file PATH --token-file PATH
 The file is read by every command that needs a flag it gives; see `hk --help`. It takes the
 global flags --endpoint, --ca-file, --token-file and --timeout-secs. --token-stdin,
 --github-oidc-audience and --response-file are not taken.
+
+One more key is for the operator to write by hand; init does not write it: xcode_mac = "<node
+id>", a string, the farm Mac that hk xcode add and hk xcode verify check archives on when the
+system is not macOS. It is the default of their flag --mac, which wins over it; on macOS it is
+ignored.

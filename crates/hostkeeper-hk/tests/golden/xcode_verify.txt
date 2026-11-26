@@ -1,8 +1,9 @@
-hk xcode verify [--apple-root FILE] <archive.xip>
-    Checks an Xcode archive on the operator's own Mac, as the operator's user; macOS only. It
-    reads the archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside
-    it (removed afterwards) and its record; it asks no coordinator. In order, ending at the first
-    check that fails (the parts after it are null in the record):
+hk xcode verify [--apple-root FILE | --mac NODE-ID] <archive.xip>
+    Checks an Xcode archive on the operator's own Mac, as the operator's user. It reads the
+    archive and makes nothing but a scratch directory .hk-xcode-verify-scratch beside it
+    (removed afterwards) and its record; it asks no coordinator. Off macOS it takes --mac
+    instead, and the archive is checked on a farm Mac (see Off macOS below). In order, ending at
+    the first check that fails (the parts after it are null in the record):
     1. The programs: sw_vers and uname -sm; each program's path must be a file (pkgutil, xip,
        plutil, codesign, spctl, xar, sw_vers, uname, cp, df); xcodes version; the first lines
        of xip --help; which of archiveutil, aa and aea exist.
@@ -33,4 +34,29 @@ whatever the verdict, replacing the file that is there, and printed on stdout. T
 pass and 1 otherwise.
 
 --apple-root FILE is Apple's root certificate (DER or PEM). The global flag --timeout-secs limits
-the fetch of that certificate; the other global flags are not used.
+the fetch of that certificate; the other global flags are not used. --mac NODE-ID is a usage
+error on macOS, where the checks run on this Mac.
+
+Off macOS there are no programs of Apple's to run, and --apple-root is a usage error (exit 2).
+--mac NODE-ID, or xcode_mac of $HOME/.hostkeeper/hk.toml when the flag is not given, names the
+farm Mac that checks the archive (neither is a usage error, said before anything is hashed): a
+Mac whose hostkeeper lists probe on demand, in a host group that keeps Xcode (xcode_keep 1 or
+more). The archive must be in the coordinator's store, which the farm Mac reads it from: its
+SHA-256 and first four bytes are read, Xcode.List must hold these bytes, else the run fails
+(exit 1) saying hk xcode add <path> uploads it and checks it. The check is the one of hk xcode
+add --help (step 10): a maintenance run of the kind probe on that Mac alone, read every 15
+seconds with each step said once on stderr until the Mac's turn ends, with no limit of time and
+the line hk maintenance cancel --run-id <id> --reason <why> that stops it. Needs --endpoint,
+--ca-file and --token-file (or the settings file). Then:
+    - the Mac gave a verdict (a pass, an archive failure, or a deferral naming
+      xcode_archive_mismatch or xcode_archive_encrypted): the record is written to
+      $HOME/.hostkeeper/xcode/<sha256>.json (mode 0600) and printed on stdout, and stderr says
+      verdict <verdict>; record kept in <path>. Its macos is the Mac's sw_vers and uname steps;
+      programs, signature, tamper and toc are null; expansion holds the xip, app, version and
+      codesign steps it ran; farm names the Mac and the run (host, run, probed_unix, steps, and
+      reason for a deferral). The exit is 0 on pass and 1 otherwise; an archive that failed is
+      not removed from the store (hk xcode add removes it): stderr names the line hk xcode remove
+      --sha256 <sha256> --reason <why>;
+    - no verdict (halted, not back, not reached, skipped, cancelled, deferred for any other
+      reason, a probe that is not this run's or has no verdict step, or a check that did not
+      finish): exit 1, no record, stderr says why.

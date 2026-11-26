@@ -5,6 +5,13 @@
 //! made ([`Verify`]). It is written whatever the verdict is, replacing the file that is there,
 //! and printed on stdout as it is written. A section a check did not reach is `null`.
 //!
+//! Off macOS the checks are made by a farm Mac ([`crate::xcode_farm`]), and the record is the same
+//! kind with what that Mac reported: `macos` is its `sw_vers` and `uname` steps, `programs`,
+//! `signature`, `tamper` and `toc` are `null`, `expansion` holds the steps it ran that the
+//! expansion section has a place for, and the key `farm` ([`Farm`]) names the Mac and the run and
+//! holds every step as the Mac reported it, or the reason its turn was deferred. A record made on
+//! macOS has no `farm` key.
+//!
 //! A reader ignores the keys it does not know, so a record grows only by new keys (AGENTS.md B8).
 //! `hk xcode add` keeps a record of its own kind at the same path, `"record": "hk-xcode-add-v1"`
 //! ([`Add`]), written through [`write`] too, with only what it computed; it reads only
@@ -177,6 +184,31 @@ pub(crate) struct Expansion {
     pub(crate) spctl: Option<Output>,
 }
 
+/// One step of the probe of a farm Mac, as the Mac reported it: the exit code (`null` when the
+/// program did not exit by itself, or the step runs no program), what it wrote, cut to 128 bytes,
+/// and whether it was cut.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct FarmStep {
+    pub(crate) name: String,
+    pub(crate) exit: Option<i32>,
+    pub(crate) output: String,
+    pub(crate) cut: bool,
+}
+
+/// Where a record's checks were made: the farm Mac (`host`, by node id), the maintenance `run` it
+/// made them in, when its probe ended (`null` for a turn that was deferred, which has no probe),
+/// every step of its probe in the order the Mac ran them, and, for a deferred turn, the reason the
+/// Mac gave (left out when it gave none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct Farm {
+    pub(crate) host: String,
+    pub(crate) run: String,
+    pub(crate) probed_unix: Option<u64>,
+    pub(crate) steps: Vec<FarmStep>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) reason: String,
+}
+
 /// The record of `hk xcode verify`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct Verify {
@@ -189,6 +221,9 @@ pub(crate) struct Verify {
     pub(crate) tamper: Option<Tamper>,
     pub(crate) toc: Option<Toc>,
     pub(crate) expansion: Option<Expansion>,
+    /// Only a record of a check a farm Mac made has it; the key is left out of any other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) farm: Option<Farm>,
     pub(crate) verdict: String,
 }
 

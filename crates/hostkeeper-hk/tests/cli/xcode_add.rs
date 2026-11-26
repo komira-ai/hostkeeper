@@ -403,28 +403,32 @@ fn the_settings_file_gives_it_its_flags() {
     assert_eq!(ran.code, 1, "{ran:?}");
 }
 
-/// Proves: `hk xcode add` off macOS refuses at once (exit 1) naming the verb and the system, with
-/// no program run and nothing asked; and with a home that is not set it says where it keeps its
-/// records.
+/// Proves: `hk xcode add` off macOS with no `--mac` and no `xcode_mac` is a usage error (exit 2)
+/// with the exact text that says the archive is checked on a farm Mac and how to name it, with no
+/// program run, nothing asked of the coordinator and no `~/.hostkeeper` made; and, on a Mac, with
+/// a home that is not set it says where it keeps its records.
 #[test]
-fn off_macos_and_without_a_home_it_refuses() {
+fn off_macos_without_a_mac_it_is_a_usage_error_and_without_a_home_it_refuses() {
     let mut add = Add::new("refuse");
     let path = add.file("Xcode_27.2.xip", &archive_bytes(), 100);
     let server = Store::default().serve(&add.rig);
-    let ran = add.add(&server, &[&path]);
-    assert_eq!(ran.code, 0);
     add.mac.os = "linux";
     let ran = add.add(&server, &[&path]);
-    assert_eq!((ran.code, ran.stdout.as_str()), (1, ""), "{ran:?}");
-    assert!(
-        ran.stderr.ends_with(
-            "hk: hk xcode add runs on macOS only, on the Mac signed in to the Apple developer \
-             account: it runs xcodes, pkgutil and xip, which are macOS programs, and this system \
-             is linux\n"
-        ),
-        "{ran:?}"
+    assert_eq!((ran.code, ran.stdout.as_str()), (2, ""), "{ran:?}");
+    assert_eq!(
+        ran.stderr,
+        "hk: hk xcode add checks the archive on a farm Mac, because this system is linux, which \
+         has no pkgutil, xip or codesign of Apple's: name the Mac with --mac <node-id>, or with \
+         xcode_mac in ~/.hostkeeper/hk.toml\n"
     );
+    assert!(server.seen().is_empty());
+    assert!(!add.rig.path("home/.hostkeeper").exists());
+    for tool in TOOLS {
+        assert_eq!(add.runs(tool), 0, "{tool} ran");
+    }
     add.mac.os = "macos";
+    let ran = add.add(&server, &[&path]);
+    assert_eq!(ran.code, 0);
     let ran = add.run_with(
         Opts::real().without_home(),
         server.port,
@@ -475,7 +479,7 @@ fn its_usage_errors_exit_2_before_anything_runs() {
     assert_eq!(ran.code, 0);
     assert!(
         ran.stdout
-            .starts_with("hk xcode add [<version> | <archive.xip>]\n"),
+            .starts_with("hk xcode add [--mac NODE-ID] [<version> | <archive.xip>]\n"),
         "{ran:?}"
     );
 }

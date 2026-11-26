@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "`hk`: the operator's command line for hostkeeper's coordinator, with the SSH tunnel built in: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins; `hk xcode add` (and `hk xcode-push`, its second name for one release), which uploads an Xcode archive to the coordinator's store from the operator's Mac, and `hk xcode verify`, which checks an archive there and writes the record of what it found."
+description = "`hk`: the operator's command line for hostkeeper's coordinator, with the SSH tunnel built in: the byte-stream proxy to a host's sshd, `ssh` with a short-lived certificate, revoking certificates, and the status of a host's pins; `hk xcode add` (and `hk xcode-push`, its second name for one release), which uploads an Xcode archive to the coordinator's store from the operator's Mac or, off macOS, from any system with a farm Mac named by `--mac` checking the archive, and `hk xcode verify`, which checks an archive on the operator's Mac or on a farm Mac and writes the record of what it found."
 
 # docs/design/ssh-through-coordinator.md section 8. A gateway call, and `hk ssh`, `hk ssh-proxy`,
 # `hk ssh-revoke` and `hk ssh-status` (the `ssh` module of this crate), read the operator's token

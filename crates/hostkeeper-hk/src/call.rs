@@ -328,7 +328,7 @@ pub(crate) fn call(
 pub(crate) struct Refused {
     pub(crate) code: Vec<u8>,
     pub(crate) reason: Vec<u8>,
-    status: u8,
+    pub(crate) status: u8,
 }
 
 /// `--endpoint` as `https://<host>[:<port>]` with no `/` at the end, and the bytes of `--ca-file`.

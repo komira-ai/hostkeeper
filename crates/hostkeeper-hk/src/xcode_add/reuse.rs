@@ -6,7 +6,10 @@
 //! file (not a link) of the user running `hk`, with mode 0600, naming this SHA-256 and size, whose
 //! `verdict` is `pass`, and which holds a version and a build that are an Xcode release's. Any
 //! other record is ignored, and replaced after a fresh expansion; except that a record of
-//! `hk xcode verify` whose verdict is `pass` is never replaced ([`keeps`]).
+//! `hk xcode verify` whose verdict is `pass` is never replaced ([`keeps`]). A record of a check a
+//! farm Mac made ([`crate::xcode_farm`]) is of that kind, with the same `archive`, `verdict` and
+//! `expansion`, so a pass of it is read here like any other: its archive and its version and
+//! build are the ones the Mac checked.
 
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;

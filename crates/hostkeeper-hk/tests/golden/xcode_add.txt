@@ -1,8 +1,9 @@
-hk xcode add [<version> | <archive.xip>]
+hk xcode add [--mac NODE-ID] [<version> | <archive.xip>]
     Brings an Xcode release into the coordinator's Xcode store, from the operator's own Mac
-    signed in to the Apple developer account; macOS only. One run at a time per Mac: the lock
-    $HOME/.hostkeeper/xcode/.lock is held to the end, and a second run exits 1 naming the first's
-    process id. In order, and nothing is uploaded when a step fails:
+    signed in to the Apple developer account or, off macOS, from any system, with --mac (see
+    Off macOS below). One run at a time per system: the lock $HOME/.hostkeeper/xcode/.lock is
+    held to the end, and a second run exits 1 naming the first's process id. In order, and
+    nothing is uploaded when a step fails:
     1. The archive. A path: that file. A version (27.2): the newest file named for it in
        $HOME/Downloads or $HOME/Downloads/hk-xcode-push/<version>, else xcodes download
        <version> --directory $HOME/Downloads/hk-xcode-push/<version> in this terminal's session
@@ -70,9 +71,62 @@ hk xcode add [<version> | <archive.xip>]
        archive is stored and the commands hk hosts list and hk maintenance list, and the exit
        is 0. With no Mac known stdout has nothing more and stderr says so.
 
+Off macOS (a system that has none of Apple's programs): --mac NODE-ID, or xcode_mac of
+$HOME/.hostkeeper/hk.toml when the flag is not given, names a farm Mac, a node id of 1 to 64
+letters, digits, '.', '_' or '-' that does not start with '.' or '-'. Neither is a usage error
+(exit 2) said before anything is hashed; on macOS, --mac is a usage error, since the checks run on this Mac, and xcode_mac is
+ignored. The farm Mac must be a Mac whose hostkeeper lists probe on demand, in a host group
+that keeps Xcode (xcode_keep 1 or more), since it reads the archive from the store. The steps
+differ:
+    1. A version with no file in $HOME/Downloads is not downloaded (xcodes is a macOS program):
+       the run fails (exit 1, nothing uploaded) telling to download Xcode_<version>.xip from
+       Apple's developer downloads page in a browser into $HOME/Downloads, and to run hk xcode
+       add again.
+    5, 6. No pkgutil, no free space check and no expansion. The version is the one given or
+       waiting, else the one the file's name carries (Xcode_<version>.xip or Xcode-<version>.xip;
+       a name with none fails, exit 1, nothing uploaded); the build is that of the coordinator's
+       waiting release of that version (hk xcode list shows it), else the run fails the same way.
+       A passing record of these bytes gives the version and the build instead.
+    4. An archive the store holds, with a passing record of these bytes, ends the run as above.
+       Without one it is checked as in 10, then already in the store: and the check line are
+       printed, and the Macs.
+    10. The check, after stored: (or, for an archive held already, in its place). A maintenance
+       run is scheduled on the farm Mac alone: Maintenance.Schedule with the kind probe, the
+       host, take_last_host, confirm, xcode_sha256 the archive's SHA-256 and the reason hk xcode
+       add: check Xcode 27.2 (27B52), sha256 <the first 12 hex digits>. A refusal is said in
+       words with the coordinator's code (nothing_due: not a Mac that lists probe on demand, or
+       in a group that keeps no Xcode; host_in_maintenance: in another run, run this again when
+       it ends; unknown_host; invalid_request: the store holds no archive of these bytes, or the
+       request was refused) and exits as any call does (2 or 1). A coordinator whose run does not
+       name the archive cannot order the check: the run is cancelled and hk exits 1. stderr then
+       names the run, the Mac and the line that stops it, hk maintenance cancel --run-id <id>
+       --reason <why>. hk reads Maintenance.Get every 15 seconds and says each step once
+       (waiting; staging: fetching the archive from the store; draining; applying: checking the
+       archive; checking; putting back) until the Mac's turn ends; there is no limit of time, the
+       turn ends by itself. Then:
+       - done: the probe the Mac reports (Hosts.Get) must be of this run and have a verdict step:
+         exit 0 and pass is a pass, exit 1 an archive failure (<reason>: <detail>), no exit means
+         the check did not finish. Another probe means the Mac's hostkeeper made its reads and
+         is older than this hk, or the store no longer held the archive when the turn started;
+       - deferred: the run is cancelled, so that the Mac is not offered the turn again; the
+         reasons xcode_archive_mismatch and xcode_archive_encrypted are archive failures, any
+         other (free_space_short among them) is not checked;
+       - halted: not checked; the Mac stays drained until an operator acts, with the lines hk
+         maintenance retry-host and hk maintenance put-back that say how;
+       - not back, not reached, skipped, or a run that was cancelled or whose window ended: not
+         checked.
+    A pass writes the record hk-xcode-verify-v1 of hk xcode verify, with the key farm, and prints
+    checked on <mac> (run <id>): pass on stdout before the Macs. An archive failure writes the
+    record too, prints refused: <verdict> on stdout, removes the archive from the store
+    (Xcode.Remove, the reason hk xcode add: the check on <mac> (run <id>) failed: <reason>) and
+    exits 1; a removal that fails says so with the hk xcode remove line. A check that gave no
+    verdict is exit 1 with the archive stored, no record, why on stderr and the line hk xcode
+    verify --mac <mac> <archive> that checks it again.
+
 Exit codes: 0 stored, already held, or nothing to add; 1 a check failed, a program could not run,
-another run holds the lock, the upload stopped, the coordinator has no store; 2 usage, not_an_xip
-or a refusal of the store; 3 unauthorized or forbidden.
+another run holds the lock, the upload stopped, the coordinator has no store, the farm Mac gave
+no verdict or refused the archive; 2 usage, not_an_xip or a refusal of the store; 3 unauthorized
+or forbidden.
 
 It takes the global flags --endpoint, --ca-file, --token-file and --timeout-secs, all but the
 last required (or given by the settings file). The token is read from its file into memory and

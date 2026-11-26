@@ -1,6 +1,7 @@
-//! The lock that keeps one `hk xcode add` at a time on a Mac: `~/.hostkeeper/xcode/.lock`, a file
+//! The lock that keeps one `hk xcode add` at a time for a user: `~/.hostkeeper/xcode/.lock`, a file
 //! of mode 0600 that a run holds with an exclusive `flock(2)` from the first step to the last,
-//! since two runs would share the expansion directory beside an archive and the records. The
+//! since two runs would share the expansion directory beside an archive (on a Mac) and the
+//! records (and, off macOS, one archive would be checked on the farm Mac twice). The
 //! system gives the lock up when the run's process ends, however it ends, so there is no stale
 //! lock to tell from a live one and no process id to be mistaken for another program's. [`Lock`]
 //! holds the open file; dropping it closes the file, which lets the lock go.
