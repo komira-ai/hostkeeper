@@ -9,7 +9,8 @@
 //! or one that is not a JSON object, is `{}` (a `release` failure class, a step that can still be
 //! undone, nothing pending); in an object, each invalid field takes its default and is reported
 //! as a warning, except a `reversible` that is present and not a boolean, which reads as `false`.
-//! The strict read ([`Report::from_stdout`]) refuses any invalid field, and the conformance
+//! The strict read ([`Report::from_stdout`]) refuses a line that is not a JSON object (an array
+//! of the fields in order included) and any invalid field, and the conformance
 //! harness uses it: it refuses a hook that leaves the line out or writes it badly.
 
 use std::io::{self, Write};
@@ -158,22 +159,23 @@ fn last_line(stdout: &str) -> Option<&str> {
 }
 
 impl Report {
-    /// Reads one line as the report object.
+    /// Reads one line as the report object. Only a JSON object is one: an array is refused even
+    /// when it lists every field in order (the sequence form serde would otherwise accept).
     pub fn parse_line(line: &str) -> Result<Report, LineError> {
-        let wire: Wire =
-            serde_json::from_str(line).map_err(|e| LineError::Malformed(e.to_string()))?;
+        let malformed = |e: serde_json::Error| LineError::Malformed(e.to_string());
+        let Value::Object(object) = serde_json::from_str::<Value>(line).map_err(malformed)? else {
+            return Err(LineError::Malformed("not a JSON object".to_owned()));
+        };
+        // `"reversible": null` is a stated value that is not a boolean: false, as on the lenient
+        // path, and not the same as leaving the field out.
+        let null = object.get("reversible").is_some_and(Value::is_null);
+        let wire: Wire = serde_json::from_value(Value::Object(object)).map_err(malformed)?;
         wire.reason
             .as_deref()
             .filter(|reason| !is_reason_token(reason))
             .map_or(Ok(()), |reason| {
                 Err(LineError::BadReason(reason.to_owned()))
             })?;
-        // `"reversible": null` is a stated value that is not a boolean: false, as on the lenient
-        // path, and not the same as leaving the field out.
-        let null = matches!(
-            serde_json::from_str::<Value>(line),
-            Ok(Value::Object(object)) if object.get("reversible").is_some_and(Value::is_null)
-        );
         Ok(Report {
             class: wire.class.unwrap_or_default(),
             reason: wire.reason,

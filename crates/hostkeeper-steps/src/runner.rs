@@ -447,11 +447,11 @@ impl StepRunner {
 
     fn run_with(&self, order: &UpdateOrder, handoff: bool) -> Result<Finished, RunError> {
         let staged = path_str(order.staged.dir())?;
-        let previous = order
-            .previous
-            .as_ref()
-            .map(|p| path_str(p.dir()))
-            .transpose()?;
+        let previous = match (&order.previous, &order.previous_version) {
+            (Some(previous), Some(_)) => Some(path_str(previous.dir())?),
+            (None, None) => None,
+            _ => return Err(RunError::BadOrder("the previous release or version alone")),
+        };
         if !is_service_name(&order.service) {
             return Err(RunError::BadOrder("the service name"));
         }

@@ -12,7 +12,7 @@
 
 use std::ffi::OsString;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Seek, Write};
 use std::path::PathBuf;
 
 /// Names the directory of the count file.
@@ -57,19 +57,24 @@ impl Gate {
 
     /// Counts one point and returns its number, `0` if the count cannot be kept (the harness
     /// then sees no points and refuses the hook).
+    ///
+    /// The number is the position just past this call's own byte, which the append write places
+    /// and the file offset reports in one step: two processes counting at once get two numbers,
+    /// whatever the other appends after.
     pub fn count(&self) -> u64 {
         OpenOptions::new()
             .create(true)
             .append(true)
             .open(self.dir.join(COUNT_FILE))
-            .and_then(|mut file| file.write_all(b".").map(|()| file))
-            .and_then(|file| file.metadata())
-            .map_or(0, |meta| meta.len())
+            .and_then(|mut file| file.write_all(b".").and_then(|()| file.stream_position()))
+            .unwrap_or(0)
     }
 
-    /// Counts a point and calls `stop` if it is the target.
+    /// Counts a point and calls `stop` if it is the target. A count that could not be kept
+    /// (`0`) is never the target, so a gate with no target never stops.
     pub fn reach_then(&self, stop: &dyn Fn()) {
-        if self.count() == self.kill_at {
+        let reached = self.count();
+        if reached != 0 && reached == self.kill_at {
             stop();
         }
     }

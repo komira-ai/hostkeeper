@@ -372,6 +372,37 @@ fn a_step_that_exits_zero_without_the_line_is_refused() {
     }
 }
 
+/// Catches a harness that takes a last line listing every field of the report in an array (the
+/// sequence form serde reads a struct from) for the report object the contract asks for.
+#[test]
+fn a_step_whose_last_line_is_an_array_of_the_fields_is_refused() {
+    match refused("bad-array-line", example_with("array-line")) {
+        Violation::Line { step, error, .. } => {
+            assert_eq!(step, Step::Verify);
+            assert_eq!(error, LineError::Malformed("not a JSON object".to_owned()));
+        }
+        other => panic!("{other}"),
+    }
+}
+
+/// Catches a write guard that compares bytes and kinds but not permissions: a hook that changes
+/// only the mode of a guarded file (the params file) or directory (`outside/`) is refused.
+#[test]
+fn a_hook_that_changes_only_the_mode_of_a_guarded_path_is_refused() {
+    for (defect, changed) in [
+        ("chmods-params", "changed control/params.toml"),
+        ("chmods-outside", "changed outside"),
+    ] {
+        match refused(&format!("bad-{defect}"), example_with(defect)) {
+            Violation::WroteOutside { step, changes } => {
+                assert_eq!(step, Step::Prepare, "{defect}");
+                assert_eq!(changes, [changed], "{defect}");
+            }
+            other => panic!("{defect}: {other}"),
+        }
+    }
+}
+
 /// Catches a harness that lets a hook write the service's own data directory (the old state
 /// file location) or anywhere but its record.
 #[test]
@@ -560,6 +591,25 @@ fn a_hook_that_refuses_an_unknown_updater_key_is_refused() {
             outcome: Outcome::Failure
         })
     ));
+    // Every step of an update reads the one params file: a hook that refuses the key only in
+    // a later step, on the successful path or in a rollback, is refused there.
+    for (defect, step) in [
+        ("refuses-unknown-updater-key-in-verify", Step::Verify),
+        ("refuses-unknown-updater-key-in-rollback", Step::Rollback),
+    ] {
+        let scratch = Scratch::new(&format!("bad-{defect}"));
+        let mut fake = ExampleFake::default();
+        let err = Conformance::new(&example_with(defect), &mut fake, scratch.path())
+            .tolerates_unknown_updater_keys()
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Violation::RefusedUpdaterKey { step: at, outcome: Outcome::Failure } if at == step
+            ),
+            "{defect}: {err}"
+        );
+    }
     let good = Scratch::new("good-unknown-key");
     let mut fake = ExampleFake::default();
     Conformance::new(&example(CONVENTION), &mut fake, good.path())
