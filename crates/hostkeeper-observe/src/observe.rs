@@ -24,9 +24,15 @@
 //!    process, no recorded version: `Unknown`. No sealed digest, or the check switched off: the
 //!    recorded version, unconfirmed. The digest never names a version.
 //! 4. Live only, the health: one probe per active run instance, `{port}` filled from the number
-//!    after the instance's `@`; healthy only if every probe answers 2xx.
+//!    after the instance's `@`; healthy only if every probe answers 2xx. The first probe that
+//!    does not, in run order, gives the reason and, when it answered, the first bytes of its body
+//!    ([`Observation::health_body`]).
 //! 5. Read every run unit again. If any unit's activity or main pid changed, the round is
 //!    discarded as `unobserved`.
+//!
+//! The restarts of each run unit ([`Observation::restarts`]) are those of the last read of the
+//! unit set that succeeded, even in a round discarded after it: a unit in a restart loop changes
+//! its main pid between the two reads, and its count must still reach the heartbeat.
 //!
 //! Any port error makes the round `unobserved` with a reason (`manager_error`, `proc_error`,
 //! `health_error`); it is never read as absent, stopped or unhealthy. The one exception is a
@@ -40,9 +46,10 @@ use hostkeeper_config::manifest::Manifest;
 use hostkeeper_config::names::UnitName;
 
 use crate::error::ObserveError;
+use crate::health::MAX_BODY_BYTES;
 use crate::ports::{
-    ActiveState, Deadline, ExeStat, ExpectedExe, HealthClient, ProcessIdentity, ProcessProbe,
-    ServiceManager, UnitState,
+    ActiveState, Deadline, ExeStat, ExpectedExe, HealthClient, HealthReply, ProcessIdentity,
+    ProcessProbe, ServiceManager, UnitRestarts, UnitState,
 };
 use crate::url::HealthUrl;
 
@@ -193,6 +200,14 @@ pub enum HealthView {
     NotProbed,
 }
 
+/// The restarts of one run unit, as the service manager counted them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunUnitRestarts {
+    /// The unit, as `[units] run` names it.
+    pub unit: String,
+    pub restarts: UnitRestarts,
+}
+
 /// One consistent snapshot of a service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Observation {
@@ -202,6 +217,16 @@ pub struct Observation {
     pub health: HealthView,
     /// The version the step record names, as given.
     pub recorded: Option<String>,
+    /// The first bytes of the body of the health URL's answer that made the service unhealthy
+    /// (a status that is not 2xx), as text: invalid UTF-8 replaced, every control character a
+    /// space, white space trimmed at both ends, at most [`MAX_BODY_BYTES`] bytes cut at a
+    /// character's boundary. `None` when the health is not unhealthy by a status, or the body is
+    /// empty.
+    pub health_body: Option<String>,
+    /// The restarts of the run units the manager counts restarts of, in run order, from the
+    /// round's last read of the unit set that succeeded; empty when no read did, the service has
+    /// no run unit, or the manager keeps no counter.
+    pub restarts: Vec<RunUnitRestarts>,
 }
 
 impl Observation {
@@ -267,6 +292,31 @@ struct ExeKey {
 /// A round's verdict, or why it was discarded.
 type Round<T> = Result<T, (UnobservedReason, String)>;
 
+/// What a round that was not discarded found.
+struct Found {
+    state: ServiceState,
+    version: VersionView,
+    health: HealthView,
+    body: Option<String>,
+}
+
+/// Why one probe was not healthy, and the body of its answer when it gave one.
+struct Failure {
+    reason: UnhealthyReason,
+    body: Option<String>,
+}
+
+/// The first bytes of a body as [`Observation::health_body`] holds them.
+fn body_text(body: &[u8]) -> Option<String> {
+    let text: String = String::from_utf8_lossy(body)
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let text = text.trim();
+    let text = text[..text.floor_char_boundary(MAX_BODY_BYTES)].trim_end();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 /// Observes services; one per daemon, shared by every caller.
 pub struct Observer {
     ports: Ports,
@@ -304,6 +354,14 @@ fn aggregate(units: &[UnitState]) -> ServiceState {
     }
 }
 
+/// The health view of a probe set's first failure, and its body: healthy when there is none.
+fn judged(first_failure: Option<Failure>) -> (HealthView, Option<String>) {
+    match first_failure {
+        None => (HealthView::Healthy, None),
+        Some(Failure { reason, body }) => (HealthView::Unhealthy { reason }, body),
+    }
+}
+
 /// What a status code says of health: `None` for 2xx.
 fn judge(status: u16) -> Option<UnhealthyReason> {
     match status {
@@ -336,29 +394,46 @@ impl Observer {
 
     /// Observes `svc` once. Each health probe may wait as long as `deadline` allows.
     pub fn observe(&self, svc: &ServiceInput, deadline: Deadline) -> Observation {
-        let (state, version, health) = match self.round(svc, deadline) {
-            Ok(found) => found,
-            Err((reason, detail)) => (
-                ServiceState::Unobserved { reason, detail },
-                VersionView::NotLive,
-                HealthView::NotProbed,
-            ),
-        };
+        let mut read = Vec::new();
+        let found = self.round(svc, deadline, &mut read);
+        let Found {
+            state,
+            version,
+            health,
+            body,
+        } = found.unwrap_or_else(|(reason, detail)| Found {
+            state: ServiceState::Unobserved { reason, detail },
+            version: VersionView::NotLive,
+            health: HealthView::NotProbed,
+            body: None,
+        });
         Observation {
             service: svc.service.clone(),
             state,
             version,
             health,
             recorded: svc.recorded_version.clone(),
+            health_body: body,
+            restarts: read,
         }
     }
 
+    /// One round of `svc`; `read` ends holding the restarts of its last read of the unit set
+    /// that succeeded.
     fn round(
         &self,
         svc: &ServiceInput,
         deadline: Deadline,
-    ) -> Round<(ServiceState, VersionView, HealthView)> {
-        let quiet = |state| Ok((state, VersionView::NotLive, HealthView::NotProbed));
+        read: &mut Vec<RunUnitRestarts>,
+    ) -> Round<Found> {
+        let quiet = |state| {
+            Ok(Found {
+                state,
+                version: VersionView::NotLive,
+                health: HealthView::NotProbed,
+                body: None,
+            })
+        };
         let Some(current) = &svc.current else {
             return quiet(ServiceState::Absent);
         };
@@ -367,26 +442,29 @@ impl Observer {
             _ => current.run.as_slice(),
         };
         if run.is_empty() {
-            let health = match &current.health_url {
+            let (health, body) = match &current.health_url {
                 Some(template) => {
                     let failure = self.probe(&svc.service, template, None, deadline)?;
-                    failure.map_or(HealthView::Healthy, |reason| HealthView::Unhealthy {
-                        reason,
-                    })
+                    judged(failure)
                 }
-                None => HealthView::NotProbed,
+                None => (HealthView::NotProbed, None),
             };
-            return Ok((ServiceState::Unmonitored, VersionView::NotLive, health));
+            return Ok(Found {
+                state: ServiceState::Unmonitored,
+                version: VersionView::NotLive,
+                health,
+                body,
+            });
         }
-        let before = self.read_units(run)?;
+        let before = self.read_units(run, read)?;
         let state = aggregate(&before);
-        let (version, health) = if state == ServiceState::Live {
+        let (version, (health, body)) = if state == ServiceState::Live {
             let version = self.version(svc, &before)?;
             (version, self.health(svc, current, run, &before, deadline)?)
         } else {
-            (VersionView::NotLive, HealthView::NotProbed)
+            (VersionView::NotLive, (HealthView::NotProbed, None))
         };
-        let after = self.read_units(run)?;
+        let after = self.read_units(run, read)?;
         let changed = run
             .iter()
             .zip(before.iter().zip(&after))
@@ -400,14 +478,33 @@ impl Observer {
                 ),
             ));
         }
-        Ok((state, version, health))
+        Ok(Found {
+            state,
+            version,
+            health,
+            body,
+        })
     }
 
-    fn read_units(&self, run: &[String]) -> Round<Vec<UnitState>> {
-        run.iter()
+    /// One read of every unit of `run`; when it succeeds, `read` holds its restarts.
+    fn read_units(&self, run: &[String], read: &mut Vec<RunUnitRestarts>) -> Round<Vec<UnitState>> {
+        let units = run
+            .iter()
             .map(|unit| self.ports.manager.unit_state(unit))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(because(UnobservedReason::ManagerError))
+            .map_err(because(UnobservedReason::ManagerError))?;
+        *read = run
+            .iter()
+            .zip(&units)
+            .filter_map(|(unit, state)| {
+                let restarts = state.restarts.clone()?;
+                Some(RunUnitRestarts {
+                    unit: unit.clone(),
+                    restarts,
+                })
+            })
+            .collect();
+        Ok(units)
     }
 
     /// The version part of a live round.
@@ -478,7 +575,8 @@ impl Observer {
             .map(|(_, digest)| *digest)
     }
 
-    /// The health part of a live round over the run units `run`, whose states are `units`.
+    /// The health part of a live round over the run units `run`, whose states are `units`, and
+    /// the body of the first failure.
     fn health(
         &self,
         svc: &ServiceInput,
@@ -486,9 +584,9 @@ impl Observer {
         run: &[String],
         units: &[UnitState],
         deadline: Deadline,
-    ) -> Round<HealthView> {
+    ) -> Round<(HealthView, Option<String>)> {
         let Some(template) = &current.health_url else {
-            return Ok(HealthView::NotProbed);
+            return Ok((HealthView::NotProbed, None));
         };
         let mut first_failure = None;
         for (unit, state) in run.iter().zip(units) {
@@ -497,11 +595,7 @@ impl Observer {
                 first_failure = first_failure.or(failure);
             }
         }
-        Ok(
-            first_failure.map_or(HealthView::Healthy, |reason| HealthView::Unhealthy {
-                reason,
-            }),
-        )
+        Ok(judged(first_failure))
     }
 
     /// One probe of the instance `unit`, or of the service with no run unit: `None` when it is
@@ -512,21 +606,31 @@ impl Observer {
         template: &str,
         unit: Option<&str>,
         deadline: Deadline,
-    ) -> Round<Option<UnhealthyReason>> {
+    ) -> Round<Option<Failure>> {
+        let invalid = Failure {
+            reason: UnhealthyReason::UrlInvalid,
+            body: None,
+        };
         let text = if template.contains(PORT_PLACEHOLDER) {
             let Some(port) = unit.and_then(|unit| instance_port(service, unit)) else {
-                return Ok(Some(UnhealthyReason::UrlInvalid));
+                return Ok(Some(invalid));
             };
             template.replace(PORT_PLACEHOLDER, &port.to_string())
         } else {
             template.to_owned()
         };
         let Ok(url) = HealthUrl::parse(&text) else {
-            return Ok(Some(UnhealthyReason::UrlInvalid));
+            return Ok(Some(invalid));
         };
         match self.ports.health.get(&url, deadline) {
-            Ok(reply) => Ok(judge(reply.status)),
-            Err(ObserveError::Unreachable { .. }) => Ok(Some(UnhealthyReason::Unreachable)),
+            Ok(HealthReply { status, body, .. }) => Ok(judge(status).map(|reason| Failure {
+                reason,
+                body: body_text(&body),
+            })),
+            Err(ObserveError::Unreachable { .. }) => Ok(Some(Failure {
+                reason: UnhealthyReason::Unreachable,
+                body: None,
+            })),
             Err(other) => Err((UnobservedReason::HealthError, format!("{service}: {other}"))),
         }
     }

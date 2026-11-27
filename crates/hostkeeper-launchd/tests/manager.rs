@@ -44,6 +44,7 @@ fn state(active: ActiveState, sub: &str, main_pid: Option<u32>) -> UnitState {
         active,
         sub: sub.to_owned(),
         main_pid,
+        restarts: None,
     }
 }
 

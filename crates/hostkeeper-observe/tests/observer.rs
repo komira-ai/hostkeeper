@@ -104,6 +104,7 @@ fn unit(active: ActiveState, main_pid: Option<u32>) -> UnitState {
         active,
         sub: "running".to_owned(),
         main_pid,
+        restarts: None,
     }
 }
 
@@ -431,6 +432,8 @@ fn a_standby_instance_that_is_inactive_is_not_a_stop() {
             version: confirmed("1.5.0"),
             health: HealthView::Healthy,
             recorded: Some("1.5.0".to_owned()),
+            health_body: None,
+            restarts: Vec::new(),
         }
     );
     assert_eq!(seen.reason_token(), None);
@@ -800,6 +803,7 @@ fn one_probe_per_active_instance_and_all_must_pass() {
         Ok(HealthReply {
             status: 503,
             body_bytes_read: 0,
+            body: Vec::new(),
         }),
     );
     let svc = tierstore(Some("1.5.0"));

@@ -150,6 +150,7 @@ fn a_service_with_no_init_script_is_not_found_and_nothing_runs() {
             active: ActiveState::NotFound,
             sub: "no init script".to_owned(),
             main_pid: None,
+            restarts: None,
         })
     );
     assert!(host.runner.calls().is_empty());
@@ -177,6 +178,7 @@ fn a_dangling_symlink_is_an_init_script() {
             active: ActiveState::Inactive,
             sub: "stopped".to_owned(),
             main_pid: None,
+            restarts: None,
         })
     );
     assert_eq!(
@@ -206,6 +208,7 @@ fn each_exit_code_is_the_state_rc_service_reports() {
                 active,
                 sub: sub.to_owned(),
                 main_pid: None,
+                restarts: None,
             }),
             "exit {code}"
         );
@@ -290,6 +293,7 @@ fn a_started_service_has_the_pid_in_its_child_pid_file() {
             active: ActiveState::Active,
             sub: "started".to_owned(),
             main_pid: Some(123),
+            restarts: None,
         })
     );
 }
@@ -320,6 +324,7 @@ fn a_started_service_without_a_child_pid_file_has_no_main_pid() {
             active: ActiveState::Active,
             sub: "started".to_owned(),
             main_pid: None,
+            restarts: None,
         })
     );
 }

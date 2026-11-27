@@ -16,6 +16,8 @@ fn seen(liveness: Liveness, health: Health, detail: &str) -> Observation {
         health,
         health_detail: Some(detail.to_owned()),
         drift: None,
+        health_body: None,
+        restarts: None,
     }
 }
 

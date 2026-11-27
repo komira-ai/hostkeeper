@@ -105,6 +105,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_hook::is_reason_token;
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
@@ -508,6 +509,10 @@ impl Heartbeater {
                 self.recover(&name, result, now);
             }
             let observation = self.ports.observer.observe(&name);
+            let health_reason = observation
+                .health_detail
+                .clone()
+                .filter(|detail| is_reason_token(detail));
             let running = self
                 .running
                 .as_ref()
@@ -540,9 +545,9 @@ impl Heartbeater {
                     .halts
                     .holding(&name)
                     .map(|held| LocalHalt::at(held, now)),
-                health_reason: None,
-                health_body: None,
-                restarts: None,
+                health_reason,
+                health_body: observation.health_body,
+                restarts: observation.restarts,
                 name,
             });
         }
