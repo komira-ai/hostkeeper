@@ -26,18 +26,27 @@
 //! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
+//! **Source states.** Each read of a source ([`HealthKeeper::read`], from the workers of
+//! [`crate::hardware_sources`]) also says whether the source could be read; the last word of each
+//! source is kept in memory, by its token, and every heartbeat lists them in `sources` (at most
+//! twelve, in the order of their tokens), so a source that reports nothing is never taken for one
+//! that found nothing wrong. When the records and the states together would encode to more than
+//! the bound, the heartbeat carries fewer records, the least severe and newest left for the next.
+//!
 //! **Capacity.** On Linux ([`HealthKeeper::reading_capacity`], [`at_host`]) every heartbeat's
 //! health carries the host's capacity as [`crate::capacity::read`] reads it then: `MemTotal`, the
-//! CPUs, the disks, the network interfaces and the SMBIOS memory devices, with the source state
-//! of reading them. In a kdump boot it carries none. When the records and the capacity together
-//! would encode past the bound of 4096 bytes, the memory devices and the source states go first,
-//! then the latest records, which wait for the next heartbeat. The devices go in every heartbeat
-//! that has room for them, not in a count of first ones: the daemon is not told which heartbeats
-//! reached the coordinator, so a count could be spent on heartbeats that never arrived.
+//! CPUs, the disks, the network interfaces and the SMBIOS memory devices, and the source state
+//! `smbios` of reading them among the other sources' states. In a kdump boot it carries none.
+//! When the records, the states and the capacity together would encode past the bound of 4096
+//! bytes, the memory devices go first, then the latest records, which wait for the next
+//! heartbeat; the source states are kept. The devices go in every heartbeat that has room for
+//! them, not in a count of first ones: the daemon is not told which heartbeats reached the
+//! coordinator, so a count could be spent on heartbeats that never arrived.
 //!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -45,12 +54,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
-use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE};
+use hostkeeper_proto::health::{
+    MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
+};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
-use prost::Message as _;
+use prost::Message;
 
 use crate::capacity;
+use crate::hardware_sources::SourceRead;
 use crate::health_state::{self, HEALTH_FILE_ASIDE, HealthFile, Marker, Read, SourceMark, cut};
 use crate::mac::TOOL_DEADLINE;
 use crate::maintenance_boot::{BOOTTIME_ARGS, SYSCTL, parse_kern_boottime};
@@ -134,6 +146,8 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
+    /// The last state of each source, by its token.
+    states: BTreeMap<String, pb::SourceState>,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -189,6 +203,7 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
+                states: BTreeMap::new(),
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -266,6 +281,28 @@ impl HealthKeeper {
         held
     }
 
+    /// Takes what one read of `source` at `now_unix` came to: its state, kept for the
+    /// heartbeats, with its reason cut to its bound; and, when it carries a mark or records, its
+    /// records and its mark (none keeps the mark it had), as [`HealthKeeper::record`] holds them.
+    /// How many records it holds now that it did not before. A read with neither a mark nor a
+    /// record leaves the state file as it was, so a source the host lacks has no first read yet.
+    pub fn read(&self, source: &str, read: SourceRead, now_unix: u64) -> usize {
+        let name = cut(source, MAX_SOURCE);
+        lock(&self.inner).states.insert(
+            name.clone(),
+            pb::SourceState {
+                source: name,
+                status: read.status.into(),
+                reason: cut(&read.reason, MAX_SOURCE_REASON),
+            },
+        );
+        if read.mark.is_none() && read.events.is_empty() {
+            return 0;
+        }
+        let mark = read.mark.or_else(|| self.mark(source)).unwrap_or_default();
+        self.record(source, &mark, read.events, now_unix)
+    }
+
     /// The mark `source` last kept; none before its first read on this host.
     #[must_use]
     pub fn mark(&self, source: &str) -> Option<String> {
@@ -291,33 +328,32 @@ fn is_history(event: &pb::HardwareEvent, now_unix: u64) -> bool {
 }
 
 /// Takes from `health` what it must lose to encode within [`MAX_HEALTH_BYTES`]: the memory
-/// devices and the source states, then its records from the last.
+/// devices, then its records from the last; the source states are kept.
 fn fit(health: &mut pb::HostHealth) {
     if health.encoded_len() > MAX_HEALTH_BYTES {
         health
             .baseline
             .iter_mut()
             .for_each(|baseline| baseline.memory_devices.clear());
-        health.sources.clear();
     }
-    let keep = (0..=health.events.len())
-        .rev()
-        .find(|&n| {
-            let mut fewer = health.clone();
-            fewer.events.truncate(n);
-            fewer.encoded_len() <= MAX_HEALTH_BYTES
-        })
-        .unwrap_or(0);
-    health.events.truncate(keep);
+    for keep in (0..=health.events.len()).rev() {
+        health.events.truncate(keep);
+        if health.encoded_len() <= MAX_HEALTH_BYTES {
+            break;
+        }
+    }
 }
 
 impl HostHealthSource for HealthKeeper {
     fn health(&self) -> pb::HostHealth {
         let read = self.capacity_root.as_deref().and_then(capacity::read);
         let inner = lock(&self.inner);
-        let (baseline, sources) = read.map_or((None, Vec::new()), |capacity| {
-            (Some(capacity.baseline), vec![capacity.smbios])
-        });
+        let mut states = inner.states.clone();
+        let mut baseline = None;
+        if let Some(capacity) = read {
+            states.insert(capacity.smbios.source.clone(), capacity.smbios);
+            baseline = Some(capacity.baseline);
+        }
         let mut health = pb::HostHealth {
             events: inner.file.held.to_send(),
             baseline,
@@ -328,7 +364,7 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources,
+            sources: states.values().take(MAX_SOURCES).cloned().collect(),
         };
         fit(&mut health);
         health

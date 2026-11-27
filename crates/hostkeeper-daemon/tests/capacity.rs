@@ -752,9 +752,9 @@ fn heartbeats_carry_the_capacity_and_the_devices_read_then() {
 }
 
 /// Proves six records at their bounds and the capacity of a host at every list's bound keep the
-/// health within 4096 bytes: the memory devices and the source states go first, then the latest
-/// records, which come in the next heartbeat once the first are written; once the records are
-/// all written the devices are back.
+/// health within 4096 bytes: the memory devices go first, then the latest records, which come in
+/// the next heartbeat once the first are written, and the source state is kept; once the records
+/// are all written the devices are back.
 ///
 /// Catches: a health over its bound refused by the coordinator, the records lost when they do not
 /// fit, or the devices gone for good once dropped.
@@ -823,7 +823,7 @@ fn records_and_capacity_at_their_bounds_fit_the_health_bound() {
         ),
         (0, 16, 8)
     );
-    assert!(crowded.sources.is_empty());
+    assert_eq!(crowded.sources, [smbios(pb::SourceStatus::Ok, "")]);
     let sent: Vec<u64> = crowded.events.iter().map(|e| e.time_unix).collect();
     assert!(
         !sent.is_empty() && sent.len() < MAX_EVENTS,

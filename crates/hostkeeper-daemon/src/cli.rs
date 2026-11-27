@@ -433,6 +433,16 @@ async fn start_and_serve(
         major,
         watchdog,
     );
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
+        platform.kind,
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
+    );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;
     Ok(())
