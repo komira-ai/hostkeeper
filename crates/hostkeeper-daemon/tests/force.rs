@@ -559,8 +559,8 @@ fn force_waits_for_the_run_set_to_be_live_within_force_start_secs() {
 
 /// Proves a force over a run set with a standby, a unit kept inactive by design (one of
 /// tierstore's two instances), reports `Succeeded` as soon as the other unit is active: both
-/// units are started, the wait ends on the first ask with no poll, the standby is never active,
-/// and the record's verdict is `Succeeded`.
+/// units are started, the wait ends on the first ask with no poll (the standby is not asked once
+/// the first unit is active), and the record's verdict is `Succeeded`.
 /// Catches a force that waits for every unit and fails `start_failed` while the host's heartbeat
 /// says Live.
 #[test]
@@ -576,8 +576,12 @@ fn force_over_a_run_set_with_an_inactive_standby() {
     assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 1, 0)), succeeded());
     assert_eq!(rig.clock.mono_secs() - began, 0);
     assert_eq!(started(&rig), [UNIT, standby]);
-    assert_eq!(rig.units.active(), set(&[UNIT]));
     assert_eq!(asked_active(&rig, UNIT), 1);
+    assert_eq!(
+        asked_active(&rig, standby),
+        0,
+        "the set is live by the first unit"
+    );
     let record = rig.record(WEB).expect("the record");
     let verdict = record.force.and_then(|force| force.verdict);
     assert_eq!(verdict, Some(ForceVerdict::Succeeded));

@@ -318,8 +318,15 @@ async fn an_absent_package_not_declined_at_its_desired_version_holds_the_later_o
     assert_eq!(verb(farm.order_on("b3", declined_older)), install("svc"));
 
     // The install orders of `svc` given to `b1` and `b3` keep each host busy for `cfg` until they
-    // are older than an order counts for.
-    farm.world.rig.at(2_000 + crate::fleet::ORDER_AGE.as_secs());
+    // are older than an order counts for while the host still heartbeats (a silent host keeps
+    // its order): each beats as before a second earlier, told the same order again.
+    let age = crate::fleet::ORDER_AGE.as_secs();
+    farm.world.rig.at(2_000 + age - 1);
+    let never_run = beat_and(&farm, &[], absent("svc", "2.0", false));
+    assert_eq!(verb(farm.order_on("b1", never_run)), install("svc"));
+    let declined_older = beat_and(&farm, &[], absent("svc", "2.0", true));
+    assert_eq!(verb(farm.order_on("b3", declined_older)), install("svc"));
+    farm.world.rig.at(2_000 + age);
     assert_eq!(farm.why("b1", "cfg"), INSTALL_ORDER);
     assert_eq!(farm.why("b3", "cfg"), INSTALL_ORDER);
 }
