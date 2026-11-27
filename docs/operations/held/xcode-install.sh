@@ -10,6 +10,12 @@
 # `maintenance schedule` without `--confirm`, which stores nothing and writes no audit entry),
 # says whether the Mac is ready, and prints the one command --apply would run as `DRY-RUN:`.
 #
+# A Mac is ready only when its turn changes nothing a build on it uses today: its group
+# (`hk host-groups get`) must have an xcode_default the store keeps no release of (xcode-keep.sh
+# --default 0), so the turn installs /Applications/Xcode-<version>.app and leaves xcode-select as
+# it is, and the turn must remove no Xcode (with no default the apply refuses it and the Mac
+# halts). After the turn, the Mac's report must not list the new Xcode as the selected one.
+#
 # With --apply, for each --mac in the order given: the same checks again, then one
 # `hk maintenance schedule --kinds xcode --host-ids <mac> --confirm true`, then
 # `hk maintenance get` every --poll-secs seconds until the Mac's turn ends, then the Mac's report
@@ -239,6 +245,39 @@ ready() {
         say "$mac: not ready: Xcode $VERSION ($BUILD) is not due on it: its group's xcode_keep is 0 (xcode-keep.sh sets it), or the store"
         return 1
     fi
+    # The turn must not change what a build on the Mac uses: the group's default must name no
+    # release the store keeps for it (the order then carries no default, and the turn leaves
+    # xcode-select as it is), and with no default the turn may remove no Xcode (the apply refuses
+    # an order that removes one and names no default, xcode_order_invalid, and the Mac halts).
+    group=$(printf '%s' "$host" | jq -r '.host.hostGroup // ""')
+    if ! grp=$(read_hk host-groups get --host-group "$group"); then
+        say "$mac: not ready: its group ${group:-(none)} could not be read"
+        return 1
+    fi
+    record "$mac-group-$2.json" "$grp"
+    plan=$(jq -cn --argjson g "$grp" --argjson s "$store" --argjson h "$host" '
+        def v: split(".") | map(tonumber? // 0);
+        ($g.hostGroup.group.policy.maintenance // {}) as $m
+        | ($m.xcodeKeep // 0) as $keep
+        | ($m.xcodeDefault // "latest") as $default
+        | [($s.archives // [])[:$keep][] | .version] as $kept
+        | {keep: $keep, default: $default, kept: $kept,
+           selects: (if $keep == 0 then null
+                     elif $default == "latest" then $kept[0]
+                     elif ($kept | index($default)) then $default else null end),
+           removes: [($h.host.maintenance.xcodes // [])[] | select((.foreign | not)
+                     and ($kept | length) > 0 and ((.version | v) < ($kept | map(v) | min))) | .version]}')
+    say "  group $group: xcode_keep $(printf '%s' "$plan" | jq -r .keep), xcode_default $(printf '%s' "$plan" | jq -r .default), kept $(printf '%s' "$plan" | jq -r '.kept | join(" ")')"
+    selects=$(printf '%s' "$plan" | jq -r '.selects // ""')
+    if [ -n "$selects" ]; then
+        say "$mac: not ready: the turn would point xcode-select at Xcode $selects, which moves every build on the Mac that names no Xcode; set the group's xcode_default to a version the store keeps none of (xcode-keep.sh --default 0)"
+        return 1
+    fi
+    removes=$(printf '%s' "$plan" | jq -r '.removes | join(" ")')
+    if [ -n "$removes" ]; then
+        say "$mac: not ready: the turn would remove Xcode $removes with no default, which the apply refuses (xcode_order_invalid) and halts the Mac"
+        return 1
+    fi
     free=$(printf '%s' "$host" | jq -r '.host.maintenance.mac.dataFreeBytes // "0"')
     if ! awk -v f="$free" -v s="$SIZE" 'BEGIN { exit !(f + 0 >= 4 * s) }'; then
         say "$mac: note: $free bytes free, under four times the archive; the stage will defer free_space_short"
@@ -371,6 +410,11 @@ turn() {
     done
     record "$mac-host-after.json" "$host"
     facts "$host"
+    if printf '%s' "$host" | jq -e --arg v "$VERSION" '[.host.maintenance.xcodes[]? | select(.version == $v and .selected)] | length > 0' >/dev/null; then
+        say "$mac: Xcode $VERSION is installed, but xcode-select names it: the builds on the Mac moved onto it"
+        audit "$mac" "$run" "$seq" "$first" || true
+        return 1
+    fi
     audit "$mac" "$run" "$seq" "$first" || true
     say "$mac: Xcode $VERSION ($BUILD) installed by run $run"
     return 0

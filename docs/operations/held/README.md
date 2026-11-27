@@ -18,5 +18,5 @@ workflow, test or other script runs them. Each one:
 
 | Script | What |
 |---|---|
-| [xcode-keep.sh](xcode-keep.sh) | Set one group's `maintenance.xcode_keep` and nothing else of it: the group as the coordinator answered it with that one key changed, checked leaf by leaf, put with the generation read, checked again by the put's audit entry and a second read, with the line that puts the old body back. A Mac is due an Xcode only once its group keeps one. Run it before `xcode-install.sh` |
+| [xcode-keep.sh](xcode-keep.sh) | Set one group's `maintenance.xcode_keep` and `xcode_default`, and nothing else of it: the group as the coordinator answered it with those keys changed, checked leaf by leaf, put with the generation read, checked again by the put's audit entry and a second read, with the line that puts the old body back. A Mac is due an Xcode only once its group keeps one; `--default 0` (a version the store keeps no release of) has the turns install Xcode and leave `xcode-select` as it is. Run it before `xcode-install.sh` |
 | [xcode-install.sh](xcode-install.sh) | Install an Xcode release the store holds on farm Macs, one Mac at a time, each in one maintenance run of the kind `xcode` followed to its end, with the run's audit entries ([maintenance.md](../maintenance.md#bringing-in-a-new-xcode)) |
