@@ -94,7 +94,7 @@ fn watchdogs_kernel_extensions_and_other_panics_are_software_warnings() {
     let cases = [
         (
             "soc-watchdog.panic",
-            "panic:11111111-2222-3333-4444-555555555555",
+            "panic:1a2b3c4d-2222-3333-4444-555555555555",
             1_795_353_330,
             PanicClass::SocWatchdog,
             "Kernel panic (SoC watchdog), software or load",
@@ -200,6 +200,8 @@ fn ips_reports_that_are_not_panics_are_passed_over() {
     assert_eq!(parse("x.ips", b"not json\n{}", MODIFIED), None);
     assert_eq!(parse("x.ips", b"{\"timestamp\":\"x\"}\n{}", MODIFIED), None);
     assert_eq!(parse("x.ips", b"", MODIFIED), None);
+    assert_eq!(parse("x.ips", b"{\"bug_type\":[210]}\n{}", MODIFIED), None);
+    assert_eq!(parse("x.ips", b"{\"bug_type\":211}\n{}", MODIFIED), None);
     let numbered = parse(
         "x.ips",
         b"{\"bug_type\":210}\npanic(cpu 1 caller 0x1): watchdog\n",
@@ -388,7 +390,7 @@ fn timestamps_are_read_with_their_offset_and_refused_when_malformed() {
         "2026-11-32 03:00:00 +0000",
         "2026-11-00 03:00:00 +0000",
         "26-11-20 03:00:00 +0000",
-        "2026-1-20 03:00:00 +0000",
+        "2026-9-20 03:00:00 +0000",
         "2026-11-2x 03:00:00 +0000",
         "2026-11-20 24:00:00 +0000",
         "2026-11-20 03:60:00 +0000",

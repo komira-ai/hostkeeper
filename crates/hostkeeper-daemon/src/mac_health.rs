@@ -234,10 +234,14 @@ impl MacHealth {
             Ok(files) => files,
             Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(e) => {
+                self.log.line(&format!(
+                    "error: the panic reports are not read: {DIAGNOSTIC_REPORTS} cannot be \
+                     listed: {e}"
+                ));
                 self.state(
                     PANIC_SOURCE,
                     pb::SourceStatus::Unreadable,
-                    &format!("{DIAGNOSTIC_REPORTS} cannot be listed: {e}"),
+                    &format!("not listed: {e}"),
                 );
                 return Vec::new();
             }

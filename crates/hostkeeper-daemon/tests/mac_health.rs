@@ -366,8 +366,15 @@ fn a_refused_listing_is_unreadable_and_an_absent_directory_is_empty() {
         Some(pb::SourceState {
             source: PANIC_SOURCE.to_owned(),
             status: pb::SourceStatus::Unreadable.into(),
-            reason: format!("{DIAGNOSTIC_REPORTS} cannot be listed: the listing is refused"),
+            reason: "not listed: the listing is refused".to_owned(),
         })
+    );
+    assert_eq!(
+        m.log.lines(),
+        [format!(
+            "error: the panic reports are not read: {DIAGNOSTIC_REPORTS} cannot be listed: \
+             the listing is refused"
+        )]
     );
     assert_eq!(m.keeper.mark(PANIC_SOURCE), None);
     reports.refuse_list(Some(io::ErrorKind::NotFound));

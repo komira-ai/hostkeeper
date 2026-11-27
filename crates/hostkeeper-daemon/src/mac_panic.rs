@@ -38,7 +38,8 @@
 //!    process that missed its check-ins): software, `panic_software`, warning;
 //! 3. any other watchdog (the SoC's): software, warning;
 //! 4. a kernel extension named in the backtrace that is not Apple's (`Kernel Extensions in
-//!    backtrace:`, the first line after it that is not `com.apple.`): software, warning;
+//!    backtrace:`, the first line after it whose id does not start with the labels `com` and
+//!    `apple`): software, warning;
 //! 5. anything else: software, warning.
 //!
 //! A runaway build can trip a watchdog, so a watchdog is never read as bad hardware.
@@ -80,7 +81,7 @@ pub const PANIC_LINE: &str = "panic(cpu";
 pub const KEXT_HEADING: &str = "Kernel Extensions in backtrace:";
 
 /// The start of Apple's own kernel extensions.
-const APPLE_KEXT: &str = "com.apple.";
+const APPLE_KEXT: [&str; 2] = ["com", "apple"];
 
 /// The longest incident id used as the record's id: `panic:` and it fit [`MAX_EVENT_ID`].
 pub const MAX_INCIDENT: usize = MAX_EVENT_ID - "panic:".len();
@@ -300,7 +301,8 @@ pub fn parse(name: &str, bytes: &[u8], modified_unix: u64) -> Option<PanicReport
 fn is_panic_bug_type(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(text) => text == PANIC_BUG_TYPE,
-        other => other.to_string() == PANIC_BUG_TYPE,
+        serde_json::Value::Number(number) => number.as_u64() == Some(210),
+        _ => false,
     }
 }
 
@@ -381,7 +383,7 @@ fn foreign_kext(panic: &str) -> Option<String> {
         .map(str::trim)
         .take_while(|line| !line.is_empty())
         .map(|line| line.split('(').next().unwrap_or_default().trim())
-        .find(|kext| !kext.is_empty() && !kext.starts_with(APPLE_KEXT))
+        .find(|kext| !kext.is_empty() && !kext.split('.').take(2).eq(APPLE_KEXT))
         .map(|kext| cut(kext, 64))
 }
 
