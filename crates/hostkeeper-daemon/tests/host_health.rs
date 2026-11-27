@@ -22,10 +22,7 @@ use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::testing::RecordingLog;
-use hostkeeper_proto::health::{
-    MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES, MAX_SUBJECT,
-    check_health,
-};
+use hostkeeper_proto::health::{MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SUBJECT, check_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use support::Scratch;
 
@@ -800,14 +797,12 @@ fn the_boot_before_is_unclean_only_after_an_unclean_end() {
     assert_eq!(keeper.unclean_previous_boot(), None, "a file moved aside");
 }
 
-/// Proves the capacity and the sources' states set on the keeper are sent in every heartbeat:
-/// a source's state replaces its last, its texts cut to their bounds; a new source past
-/// `MAX_SOURCES` is logged and passed over, while a known one is still replaced; a capacity of
-/// none sends none.
+/// Proves the capacity set on the keeper is sent in every heartbeat's `baseline`, within the
+/// health's bounds, and a capacity of none sends none.
 #[test]
-fn the_capacity_and_the_source_states_are_sent_and_bounded() {
-    let dir = Scratch::new("health-sources");
-    let (keeper, log) = start(&dir, boot("boot-1"), yes());
+fn the_capacity_is_sent_in_every_heartbeat() {
+    let dir = Scratch::new("health-capacity");
+    let (keeper, _) = start(&dir, boot("boot-1"), yes());
     let capacity = pb::Baseline {
         mem_total_kib: 33_554_432,
         cpus_present: 12,
@@ -815,50 +810,9 @@ fn the_capacity_and_the_source_states_are_sent_and_bounded() {
         ..pb::Baseline::default()
     };
     keeper.set_capacity(Some(capacity.clone()));
-    let state = |source: &str, status: pb::SourceStatus, reason: &str| pb::SourceState {
-        source: source.to_owned(),
-        status: status.into(),
-        reason: reason.to_owned(),
-    };
-    keeper.set_source(state("panic", pb::SourceStatus::Unreadable, "refused"));
-    keeper.set_source(state("panic", pb::SourceStatus::Ok, ""));
-    keeper.set_source(state(
-        &"s".repeat(40),
-        pb::SourceStatus::Unreadable,
-        &"r".repeat(200),
-    ));
     let health = keeper.health();
     assert_eq!(health.baseline, Some(capacity));
-    assert_eq!(
-        health.sources,
-        [
-            state("panic", pb::SourceStatus::Ok, ""),
-            state(
-                &"s".repeat(MAX_SOURCE),
-                pb::SourceStatus::Unreadable,
-                &"r".repeat(MAX_SOURCE_REASON)
-            ),
-        ]
-    );
     assert_eq!(check_health(&health), Ok(()));
-    for n in 0..MAX_SOURCES {
-        keeper.set_source(state(&format!("x{n:02}"), pb::SourceStatus::Ok, ""));
-    }
-    assert_eq!(keeper.health().sources.len(), MAX_SOURCES);
-    assert_eq!(
-        log.lines(),
-        (MAX_SOURCES - 2..MAX_SOURCES)
-            .map(|n| format!(
-                "error: the state of the source x{n:02} is not kept: {MAX_SOURCES} sources are"
-            ))
-            .collect::<Vec<_>>()
-    );
-    keeper.set_source(state("panic", pb::SourceStatus::Unsupported, "none"));
-    assert!(keeper.health().sources.contains(&state(
-        "panic",
-        pb::SourceStatus::Unsupported,
-        "none"
-    )));
     keeper.set_capacity(None);
     assert_eq!(keeper.health().baseline, None);
 }

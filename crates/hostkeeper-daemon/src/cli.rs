@@ -433,6 +433,16 @@ async fn start_and_serve(
         major,
         watchdog,
     );
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
+        platform.kind,
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
+    );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;
     Ok(())
@@ -533,12 +543,6 @@ pub fn host_links(
     let health =
         crate::host_health::at_host(kind, &ctx.dirs.state, ctx.clock.as_ref(), log.clone());
     let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
-    // A Mac's panic reports, unexpected restarts and capacity, read on their own thread.
-    let _ = crate::mac_health::start(
-        kind,
-        crate::mac_health::MacHealth::at_host(Arc::clone(&health), Arc::clone(&clock), log.clone()),
-        Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
-    );
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),

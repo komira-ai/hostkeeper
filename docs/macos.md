@@ -419,8 +419,9 @@ grant is not granted; a host that is not a Mac, or whose heartbeat the coordinat
 ### Hardware health
 
 The Mac's daemon reads its hardware sources into the host's hardware event log
-(docs/design/host-health-alerts.md section 3.2), on a thread of its own
-(`crates/hostkeeper-daemon/src/mac_health.rs`), so a slow program holds no heartbeat. It only
+(docs/design/host-health-alerts.md section 3.2): each is a hardware source of
+`crates/hostkeeper-daemon/src/mac_health.rs`, read on a worker of its own as a Linux host's are
+(`hardware_sources.rs`), so a slow program holds no heartbeat. It only
 reads: it removes no report and runs each program with a fixed argument list.
 
 - **Kernel panic reports.** The `.panic` files of `/Library/Logs/DiagnosticReports`, and its
@@ -439,7 +440,7 @@ reads: it removes no report and runs each program with a fixed argument list.
   judged 2 minutes after the daemon's start, once a boot, a restart of the daemon included. The marker is advisory on a Mac: launchd's SIGTERM at a shutdown and at
   a `bootout` look alike.
 - **Capacity.** `sysctl -n hw.memsize hw.physicalcpu hw.logicalcpu` and
-  `system_profiler -json SPHardwareDataType SPNVMeDataType`, at the start and 2 minutes later: the
+  `system_profiler -json SPHardwareDataType SPNVMeDataType`, at the start, 2 minutes later, then daily: the
   memory, the CPUs and each internal disk (BSD name, size, a digest of its serial;
   `crates/hostkeeper-daemon/src/mac_capacity.rs`). A Mac lists no memory modules, and its memory
   errors are not monitored (Apple silicon has no error counters to read).

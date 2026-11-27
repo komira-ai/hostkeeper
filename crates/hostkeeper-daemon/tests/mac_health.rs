@@ -1,26 +1,27 @@
-//! A Mac's hardware sources read into the daemon's keeper (`hostkeeper_daemon::mac_health`): the
-//! panic reports of a fake report directory (read once each, the mark following the directory,
-//! history on the first read, a listing refused or absent, a report that cannot be read), the
-//! unexpected restart judged at the first start of a boot and merged with the panic of the boot
-//! before, the capacity from fake `sysctl` and `system_profiler` and each of their failures, the
-//! schedule over a scripted sleeper, and the real directory port over a scratch directory. Each
-//! keeper is a `HealthKeeper::open` over a scratch state directory; nothing reads the host's own
-//! files or runs its programs, but the one test that runs only on a Mac.
+//! A Mac's hardware sources (`hostkeeper_daemon::mac_health`), each driven as the daemon drives it
+//! (`hardware_sources::poll` and `run`) into a keeper over a scratch state directory: the panic
+//! reports of a fake report directory (read once each, the mark following the directory, history on
+//! the first read, a listing refused or absent, a report that cannot be read), the unexpected
+//! restart judged at the second read and merged with the panic of the boot before, the capacity
+//! from fake `sysctl` and `system_profiler` and each of their failures, the sources' periods over a
+//! scripted sleeper, and the real directory port over a scratch directory. Nothing reads the
+//! host's own files or runs its programs, but the one test that runs only on a Mac.
 
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use hostkeeper_daemon::hardware_sources::{HardwareSource, poll, run};
 use hostkeeper_daemon::host_health::{BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper};
 use hostkeeper_daemon::mac_capacity::{CAPACITY_SYSCTL_ARGS, PROFILER_ARGS};
 use hostkeeper_daemon::mac_health::{
-    CAPACITY_AGAIN_SECS, CAPACITY_SOURCE, DIAGNOSTIC_REPORTS, HOST_SUBJECT, HostReportDir,
-    MAX_MARKED, MAX_REPORT_BYTES, MacHealth, PANIC_PERIOD_SECS, PANIC_SOURCE, ReportDir,
-    ReportFile, SHUTDOWN_SOURCE, UNEXPECTED_REBOOT, start,
+    CAPACITY_AGAIN_SECS, CAPACITY_PERIOD_SECS, CAPACITY_SOURCE, CapacitySource, HOST_SUBJECT,
+    HostReportDir, JUDGE_AFTER_SECS, MAX_MARKED, MAX_REPORT_BYTES, PANIC_PERIOD_SECS, PANIC_SOURCE,
+    PanicSource, ReportDir, ReportFile, SHUTDOWN_SOURCE, UNEXPECTED_REBOOT, for_host,
+    judge_shutdown,
 };
 use hostkeeper_daemon::mac_panic::{PanicReport, parse};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
@@ -148,32 +149,42 @@ fn args(list: &[&str]) -> Vec<String> {
 }
 
 /// What a test drives: the keeper, its directory, its programs, its clock and its log.
+
+/// What a test drives: the keeper, its directory, its programs and its clock.
 struct Mac {
     keeper: Arc<HealthKeeper>,
     reports: FakeReports,
     sysctl: FakeLaunchctl,
     profiler: FakeLaunchctl,
-    log: Arc<RecordingLog>,
     clock: Arc<FakeClock>,
 }
 
 impl Mac {
-    fn health(&self) -> MacHealth {
-        MacHealth::new(
+    fn panics(&self) -> PanicSource {
+        PanicSource::new(Arc::clone(&self.keeper), Box::new(self.reports.clone()))
+    }
+
+    fn capacity(&self) -> CapacitySource {
+        CapacitySource::new(
             Arc::clone(&self.keeper),
-            Box::new(self.reports.clone()),
             Box::new(self.sysctl.clone()),
             Box::new(self.profiler.clone()),
-            self.clock.clone(),
-            self.log.clone(),
         )
+    }
+
+    /// One read of `source`, as the daemon's worker makes it.
+    fn poll(&self, source: &mut dyn HardwareSource) -> usize {
+        poll(source, &self.keeper, self.clock.as_ref())
+    }
+
+    fn health(&self) -> pb::HostHealth {
+        self.keeper.health()
     }
 }
 
 /// The keeper of the scratch `dir` at a start in the boot `boot_id` that began at `boot_unix`,
 /// over `reports`, with programs that answer the fixtures.
 fn mac(dir: &Scratch, boot_id: Option<&str>, boot_unix: u64, reports: FakeReports) -> Mac {
-    let log = Arc::new(RecordingLog::default());
     let keeper = Arc::new(HealthKeeper::open(
         dir.path(),
         BootFacts {
@@ -182,7 +193,7 @@ fn mac(dir: &Scratch, boot_id: Option<&str>, boot_unix: u64, reports: FakeReport
             machine_id: String::new(),
         },
         Box::new(Never),
-        log.clone(),
+        Arc::new(RecordingLog::default()),
     ));
     let sysctl = FakeLaunchctl::new();
     sysctl.always(
@@ -203,7 +214,6 @@ fn mac(dir: &Scratch, boot_id: Option<&str>, boot_unix: u64, reports: FakeReport
         reports,
         sysctl,
         profiler,
-        log,
         clock: Arc::new(FakeClock::new(NOW, 0)),
     }
 }
@@ -227,12 +237,16 @@ fn source(health: &pb::HostHealth, name: &str) -> Option<pb::SourceState> {
     health.sources.iter().find(|s| s.source == name).cloned()
 }
 
-fn ok(name: &str) -> pb::SourceState {
+fn state(name: &str, status: pb::SourceStatus, reason: &str) -> pb::SourceState {
     pb::SourceState {
         source: name.to_owned(),
-        status: pb::SourceStatus::Ok.into(),
-        reason: String::new(),
+        status: status.into(),
+        reason: reason.to_owned(),
     }
+}
+
+fn ok(name: &str) -> pb::SourceState {
+    state(name, pb::SourceStatus::Ok, "")
 }
 
 /// Proves a first read holds each panic of the directory once (the `.panic` and `.ips` reports of
@@ -254,9 +268,8 @@ fn a_first_read_holds_each_panic_once_and_older_ones_as_history() {
     );
     reports.add("old.panic", &fixture("text.panic"), NOW - HISTORY_SECS - 1);
     let m = mac(&dir, Some("boot-2"), BOOT, reports.clone());
-    let read = m.health().read_panics();
-    assert_eq!(read.len(), 4, "{read:?}");
-    let health = m.keeper.health();
+    assert_eq!(m.poll(&mut m.panics()), 3, "three records held");
+    let health = m.health();
     assert_eq!(
         ids(&health),
         [
@@ -287,15 +300,6 @@ fn a_first_read_holds_each_panic_once_and_older_ones_as_history() {
         m.keeper.mark(PANIC_SOURCE).as_deref(),
         Some("amcc.ips\napp-crash.ips\nold.panic\nserror-copy.ips\nserror.panic")
     );
-    assert_eq!(
-        m.log.lines(),
-        [
-            "a kernel panic report was read: panic:2b6f9c1e-7d1a-4c3e-9f20-6a1d0e5b8c44 (SError)",
-            "a kernel panic report was read: panic:2b6f9c1e-7d1a-4c3e-9f20-6a1d0e5b8c44 (SError)",
-            "a kernel panic report was read: panic:0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0 (AMCC)",
-            "a kernel panic report was read: panic:file:388c34265b1d2abb (software)",
-        ]
-    );
 }
 
 /// Proves a report read before is not read again while it stays, a new one is read alone, the
@@ -306,47 +310,55 @@ fn reports_read_before_are_not_read_again_and_the_mark_follows_the_directory() {
     let dir = Scratch::new("mac-panics-again");
     let reports = FakeReports::with(&["serror.panic", "app-crash.ips"]);
     let m = mac(&dir, Some("boot-2"), BOOT, reports.clone());
-    let health = m.health();
-    assert_eq!(health.read_panics().len(), 1);
-    m.keeper.written(&ids(&m.keeper.health()));
-    assert!(health.read_panics().is_empty());
+    let mut panics = m.panics();
+    assert_eq!(m.poll(&mut panics), 1);
+    m.keeper.written(&ids(&m.health()));
+    assert_eq!(m.poll(&mut panics), 0);
     assert_eq!(reports.reads().len(), 2, "nothing read again");
-    assert!(m.keeper.health().events.is_empty(), "nothing held again");
+    assert!(m.health().events.is_empty(), "nothing held again");
     reports.add("kext.panic", &fixture("kext.panic"), MODIFIED);
-    let read = health.read_panics();
+    assert_eq!(m.poll(&mut panics), 1);
     assert_eq!(
-        read.iter().map(|r| r.event_id.as_str()).collect::<Vec<_>>(),
+        ids(&m.health()),
         ["panic:12345678-90ab-cdef-1234-567890abcdef"]
     );
     assert_eq!(reports.reads().len(), 3);
     reports.remove("serror.panic");
-    assert!(health.read_panics().is_empty());
+    assert_eq!(m.poll(&mut panics), 0);
     assert_eq!(
         m.keeper.mark(PANIC_SOURCE).as_deref(),
         Some("app-crash.ips\nkext.panic")
     );
 }
 
-/// Proves a report that cannot be read is logged, left out of the mark, and read at the next
-/// read once it can be.
+/// Proves a report that cannot be read makes the source unreadable, naming it, while the others
+/// are read and held; it is left out of the mark, and read at the next read once it can be.
 #[test]
-fn a_report_that_cannot_be_read_is_tried_again() {
+fn a_report_that_cannot_be_read_is_unreadable_and_tried_again() {
     let dir = Scratch::new("mac-panics-retry");
-    let reports = FakeReports::with(&["amcc.ips"]);
+    let reports = FakeReports::with(&["amcc.ips", "serror.panic"]);
     reports.refuse_read("amcc.ips", true);
     let m = mac(&dir, Some("boot-2"), BOOT, reports.clone());
-    let health = m.health();
-    assert!(health.read_panics().is_empty());
+    let mut panics = m.panics();
+    assert_eq!(m.poll(&mut panics), 1, "the other report is held");
     assert_eq!(
-        m.log.lines(),
-        ["error: the report amcc.ips is not read: the read is refused"]
+        source(&m.health(), PANIC_SOURCE),
+        Some(state(
+            PANIC_SOURCE,
+            pb::SourceStatus::Unreadable,
+            "amcc.ips not read: the read is refused"
+        ))
     );
-    assert_eq!(m.keeper.mark(PANIC_SOURCE).as_deref(), Some(""));
+    assert_eq!(m.keeper.mark(PANIC_SOURCE).as_deref(), Some("serror.panic"));
     reports.refuse_read("amcc.ips", false);
-    assert_eq!(health.read_panics().len(), 1);
+    assert_eq!(m.poll(&mut panics), 1);
+    assert_eq!(source(&m.health(), PANIC_SOURCE), Some(ok(PANIC_SOURCE)));
     assert_eq!(
-        ids(&m.keeper.health()),
-        ["panic:0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"]
+        ids(&m.health()),
+        [
+            "panic:2b6f9c1e-7d1a-4c3e-9f20-6a1d0e5b8c44",
+            "panic:0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
+        ]
     );
 }
 
@@ -359,37 +371,27 @@ fn a_refused_listing_is_unreadable_and_an_absent_directory_is_empty() {
     let reports = FakeReports::with(&["serror.panic"]);
     reports.refuse_list(Some(io::ErrorKind::PermissionDenied));
     let m = mac(&dir, Some("boot-2"), BOOT, reports.clone());
-    let health = m.health();
-    assert!(health.read_panics().is_empty());
+    let mut panics = m.panics();
+    assert_eq!(m.poll(&mut panics), 0);
     assert_eq!(
-        source(&m.keeper.health(), PANIC_SOURCE),
-        Some(pb::SourceState {
-            source: PANIC_SOURCE.to_owned(),
-            status: pb::SourceStatus::Unreadable.into(),
-            reason: "not listed: the listing is refused".to_owned(),
-        })
-    );
-    assert_eq!(
-        m.log.lines(),
-        [format!(
-            "error: the panic reports are not read: {DIAGNOSTIC_REPORTS} cannot be listed: \
-             the listing is refused"
-        )]
+        source(&m.health(), PANIC_SOURCE),
+        Some(state(
+            PANIC_SOURCE,
+            pb::SourceStatus::Unreadable,
+            "not listed: the listing is refused"
+        ))
     );
     assert_eq!(m.keeper.mark(PANIC_SOURCE), None);
     reports.refuse_list(Some(io::ErrorKind::NotFound));
-    assert!(health.read_panics().is_empty());
-    assert_eq!(
-        source(&m.keeper.health(), PANIC_SOURCE),
-        Some(ok(PANIC_SOURCE))
-    );
+    assert_eq!(m.poll(&mut panics), 0);
+    assert_eq!(source(&m.health(), PANIC_SOURCE), Some(ok(PANIC_SOURCE)));
     assert_eq!(m.keeper.mark(PANIC_SOURCE).as_deref(), Some(""));
     reports.refuse_list(None);
-    assert_eq!(health.read_panics().len(), 1);
+    assert_eq!(m.poll(&mut panics), 1);
 }
 
 /// Proves only the newest `MAX_MARKED` reports are read and marked, so the mark never grows past
-/// its bound and the older reports past it are not read at every pass.
+/// its bound and the older reports past it are not read at every read.
 #[test]
 fn the_mark_keeps_the_newest_reports_only() {
     let dir = Scratch::new("mac-panics-bound");
@@ -404,8 +406,9 @@ fn the_mark_keeps_the_newest_reports_only() {
         reports.add(&format!("crash-{n:04}.ips"), &bytes, MODIFIED + n as u64);
     }
     let m = mac(&dir, Some("boot-2"), BOOT, reports.clone());
-    assert!(m.health().read_panics().is_empty());
-    assert!(m.health().read_panics().is_empty(), "nor at the next pass");
+    let mut panics = m.panics();
+    assert_eq!(m.poll(&mut panics), 0);
+    assert_eq!(m.poll(&mut panics), 0, "nor at the next read");
     assert_eq!(reports.reads().len(), MAX_MARKED);
     assert!(!reports.reads().contains(&"crash-0000.ips".to_owned()));
     let mark = m.keeper.mark(PANIC_SOURCE).expect("a mark");
@@ -422,17 +425,16 @@ fn serror() -> PanicReport {
     parse("serror.panic", &fixture("serror.panic"), MODIFIED).expect("a panic report")
 }
 
-/// Proves the first start of a boot whose boot before ended unclean holds one `host` warning,
-/// `unexpected_reboot`, merged with that boot's panic (its class in the message, its panic line
-/// as `raw`), whole; judged again, it holds nothing more.
+/// Proves an unclean boot before gives one `host` warning, `unexpected_reboot`, merged with that
+/// boot's panic (its class in the message, its panic line as `raw`), whole; judged again, it holds
+/// nothing more.
 #[test]
 fn an_unclean_boot_before_is_one_unexpected_restart_merged_with_its_panic() {
     let dir = Scratch::new("mac-shutdown-panic");
     let m = after_unclean_boot(&dir, FakeReports::default());
-    let health = m.health();
-    assert!(health.judge_shutdown(&[serror()]));
+    assert!(judge_shutdown(&m.keeper, &[serror()], NOW));
     assert_eq!(
-        m.keeper.health().events,
+        m.health().events,
         [pb::HardwareEvent {
             event_id: "shutdown:boot-2".to_owned(),
             time_unix: BOOT,
@@ -448,13 +450,16 @@ fn an_unclean_boot_before_is_one_unexpected_restart_merged_with_its_panic() {
             about: String::new(),
         }]
     );
-    assert!(!health.judge_shutdown(&[serror()]), "one record a boot");
+    assert!(
+        !judge_shutdown(&m.keeper, &[serror()], NOW),
+        "one record a boot"
+    );
     assert_eq!(m.keeper.mark(SHUTDOWN_SOURCE).as_deref(), Some("boot-2"));
 }
 
 /// Proves an unclean boot before with no panic of its own is still one record, saying so, and a
 /// panic before that boot began, or after this one began, is not merged; of two panics of that
-/// boot the newest is.
+/// boot the newest is; with this boot's start not read, any panic since the boot before began is.
 #[test]
 fn only_a_panic_of_the_boot_before_is_merged() {
     let dir = Scratch::new("mac-shutdown-window");
@@ -467,8 +472,8 @@ fn only_a_panic_of_the_boot_before_is_merged() {
         time_unix: BOOT,
         ..serror()
     };
-    assert!(m.health().judge_shutdown(&[early, late]));
-    let event = &m.keeper.health().events[0];
+    assert!(judge_shutdown(&m.keeper, &[early, late], NOW));
+    let event = &m.health().events[0];
     assert_eq!(
         (event.message.as_str(), event.raw.as_str()),
         (
@@ -481,13 +486,12 @@ fn only_a_panic_of_the_boot_before_is_merged() {
     let m = after_unclean_boot(&dir, FakeReports::default());
     let watchdog =
         parse("w.panic", &fixture("soc-watchdog.panic"), MODIFIED).expect("a panic report");
-    assert!(m.health().judge_shutdown(&[serror(), watchdog]));
+    assert!(judge_shutdown(&m.keeper, &[serror(), watchdog], NOW));
     assert_eq!(
-        m.keeper.health().events[0].message,
+        m.health().events[0].message,
         "Unexpected restart after a kernel panic (SoC watchdog)"
     );
 
-    // With this boot's start not read, any panic since the boot before began is of that boot.
     let dir = Scratch::new("mac-shutdown-no-start");
     drop(mac(
         &dir,
@@ -500,70 +504,12 @@ fn only_a_panic_of_the_boot_before_is_merged() {
         time_unix: NOW,
         ..serror()
     };
-    assert!(m.health().judge_shutdown(&[late]));
-    let event = &m.keeper.health().events[0];
+    assert!(judge_shutdown(&m.keeper, &[late], NOW));
+    let event = &m.health().events[0];
     assert_eq!(
         (event.message.as_str(), event.time_unix),
         ("Unexpected restart after a kernel panic (SError)", 0)
     );
-}
-
-/// Proves no unexpected restart is judged on the first start on a host, after a clean shutdown,
-/// at a second start in a boot already judged, or when the boot id cannot be read; a restart of
-/// the daemon in the boot before it was judged still judges it.
-#[test]
-fn no_unexpected_restart_without_an_unclean_boot_before() {
-    let dir = Scratch::new("mac-shutdown-first");
-    let m = mac(&dir, Some("boot-1"), BOOT, FakeReports::default());
-    assert!(!m.health().judge_shutdown(&[serror()]), "the first start");
-
-    let dir = Scratch::new("mac-shutdown-clean");
-    let first = mac(&dir, Some("boot-1"), BOOT_BEFORE, FakeReports::default());
-    let log = Arc::new(RecordingLog::default());
-    let clean = HealthKeeper::open(
-        dir.path(),
-        BootFacts {
-            boot_id: Some("boot-1".to_owned()),
-            boot_unix: BOOT_BEFORE,
-            machine_id: String::new(),
-        },
-        Box::new(Says),
-        log,
-    );
-    clean.stopping();
-    drop((first, clean));
-    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
-    assert!(
-        !m.health().judge_shutdown(&[serror()]),
-        "after a clean stop"
-    );
-
-    let dir = Scratch::new("mac-shutdown-same");
-    drop(after_unclean_boot(&dir, FakeReports::default()));
-    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
-    assert!(
-        m.health().judge_shutdown(&[]),
-        "a restart before the judgement still judges"
-    );
-    m.keeper.written(&ids(&m.keeper.health()));
-    drop(m);
-    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
-    assert!(
-        !m.health().judge_shutdown(&[serror()]),
-        "a boot judged is not judged again"
-    );
-    assert!(m.keeper.health().events.is_empty());
-
-    let dir = Scratch::new("mac-shutdown-unknown");
-    drop(mac(
-        &dir,
-        Some("boot-1"),
-        BOOT_BEFORE,
-        FakeReports::default(),
-    ));
-    let m = mac(&dir, None, BOOT, FakeReports::default());
-    assert!(!m.health().judge_shutdown(&[serror()]), "no boot id");
-    assert!(m.keeper.health().events.is_empty());
 }
 
 /// A probe that says the system goes down.
@@ -575,13 +521,79 @@ impl ShutdownProbe for Says {
     }
 }
 
-/// Proves both programs read give the capacity of the fixtures and say the source is read.
+/// Proves no unexpected restart is judged on the first start on a host, after a clean shutdown,
+/// at a second start in a boot already judged, or when the boot id cannot be read; a restart of
+/// the daemon in the boot before it was judged still judges it.
+#[test]
+fn no_unexpected_restart_without_an_unclean_boot_before() {
+    let dir = Scratch::new("mac-shutdown-first");
+    let m = mac(&dir, Some("boot-1"), BOOT, FakeReports::default());
+    assert!(
+        !judge_shutdown(&m.keeper, &[serror()], NOW),
+        "the first start"
+    );
+
+    let dir = Scratch::new("mac-shutdown-clean");
+    drop(mac(
+        &dir,
+        Some("boot-1"),
+        BOOT_BEFORE,
+        FakeReports::default(),
+    ));
+    let clean = HealthKeeper::open(
+        dir.path(),
+        BootFacts {
+            boot_id: Some("boot-1".to_owned()),
+            boot_unix: BOOT_BEFORE,
+            machine_id: String::new(),
+        },
+        Box::new(Says),
+        Arc::new(RecordingLog::default()),
+    );
+    clean.stopping();
+    drop(clean);
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    assert!(
+        !judge_shutdown(&m.keeper, &[serror()], NOW),
+        "after a clean stop"
+    );
+
+    let dir = Scratch::new("mac-shutdown-same");
+    drop(after_unclean_boot(&dir, FakeReports::default()));
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    assert!(
+        judge_shutdown(&m.keeper, &[], NOW),
+        "a restart before the judgement still judges"
+    );
+    m.keeper.written(&ids(&m.health()));
+    drop(m);
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    assert!(
+        !judge_shutdown(&m.keeper, &[serror()], NOW),
+        "a boot judged is not judged again"
+    );
+    assert!(m.health().events.is_empty());
+
+    let dir = Scratch::new("mac-shutdown-unknown");
+    drop(mac(
+        &dir,
+        Some("boot-1"),
+        BOOT_BEFORE,
+        FakeReports::default(),
+    ));
+    let m = mac(&dir, None, BOOT, FakeReports::default());
+    assert!(!judge_shutdown(&m.keeper, &[serror()], NOW), "no boot id");
+    assert!(m.health().events.is_empty());
+}
+
+/// Proves both programs read give the capacity of the fixtures, sent as the heartbeat's
+/// `baseline`, and say the source is read, with no mark and no record.
 #[test]
 fn the_capacity_is_read_from_both_programs() {
     let dir = Scratch::new("mac-capacity");
     let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
-    m.health().read_capacity();
-    let health = m.keeper.health();
+    assert_eq!(m.poll(&mut m.capacity()), 0);
+    let health = m.health();
     let baseline = health.baseline.clone().expect("a capacity");
     assert_eq!(
         (
@@ -600,14 +612,14 @@ fn the_capacity_is_read_from_both_programs() {
         ["disk0"]
     );
     assert_eq!(source(&health, CAPACITY_SOURCE), Some(ok(CAPACITY_SOURCE)));
+    assert_eq!(m.keeper.mark(CAPACITY_SOURCE), None);
     assert_eq!(m.sysctl.calls(), [args(&CAPACITY_SYSCTL_ARGS)]);
     assert_eq!(m.profiler.calls(), [args(&PROFILER_ARGS)]);
-    assert!(m.log.lines().is_empty());
 }
 
 /// Proves each failure of a program (a non-zero exit, a signal, output it cannot read, a
 /// program that does not run) makes the source `unreadable` with the first failure's reason,
-/// logged, while the other program's output still gives the capacity; both failing give none.
+/// while the other program's output still gives the capacity; both failing give none.
 #[test]
 fn each_failure_of_a_program_is_unreadable_and_the_other_still_counts() {
     let cases: [(Option<LaunchctlOutput>, Option<LaunchctlOutput>, &str, bool); 6] = [
@@ -661,53 +673,32 @@ fn each_failure_of_a_program_is_unreadable_and_the_other_still_counts() {
         if let Some(answer) = profiler {
             m.profiler.then(&args(&PROFILER_ARGS), Ok(answer));
         }
-        m.health().read_capacity();
-        let health = m.keeper.health();
+        m.poll(&mut m.capacity());
+        let health = m.health();
         assert_eq!(health.baseline.is_some(), some, "{reason}");
         let expected = if reason.is_empty() {
             ok(CAPACITY_SOURCE)
         } else {
-            pb::SourceState {
-                source: CAPACITY_SOURCE.to_owned(),
-                status: pb::SourceStatus::Unreadable.into(),
-                reason: reason.to_owned(),
-            }
+            state(CAPACITY_SOURCE, pb::SourceStatus::Unreadable, reason)
         };
         assert_eq!(source(&health, CAPACITY_SOURCE), Some(expected), "{reason}");
-        if reason.is_empty() {
-            assert!(m.log.lines().is_empty());
-        } else {
-            assert_eq!(
-                m.log.lines(),
-                [format!("error: the capacity is not wholly read: {reason}")]
-            );
-        }
     }
     let dir = Scratch::new("mac-capacity-spawn");
-    let log = Arc::new(RecordingLog::default());
-    let keeper = Arc::new(HealthKeeper::open(
-        dir.path(),
-        BootFacts::default(),
-        Box::new(Never),
-        log.clone(),
-    ));
-    MacHealth::new(
-        Arc::clone(&keeper),
-        Box::new(FakeReports::default()),
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    let mut silent = CapacitySource::new(
+        Arc::clone(&m.keeper),
         Box::new(FakeLaunchctl::new()),
         Box::new(FakeLaunchctl::new()),
-        Arc::new(FakeClock::new(NOW, 0)),
-        log,
-    )
-    .read_capacity();
-    let state = source(&keeper.health(), CAPACITY_SOURCE).expect("a state");
-    assert_eq!(state.status, i32::from(pb::SourceStatus::Unreadable));
-    assert!(
-        state.reason.starts_with("sysctl did not run: "),
-        "{}",
-        state.reason
     );
-    assert_eq!(keeper.health().baseline, None);
+    m.poll(&mut silent);
+    let read = source(&m.health(), CAPACITY_SOURCE).expect("a state");
+    assert_eq!(read.status, i32::from(pb::SourceStatus::Unreadable));
+    assert!(
+        read.reason.starts_with("sysctl did not run: "),
+        "{}",
+        read.reason
+    );
+    assert_eq!(m.health().baseline, None);
 }
 
 /// A sleeper that runs a step at each wait and says what it returns.
@@ -723,11 +714,11 @@ impl Sleeper for Steps {
     }
 }
 
-/// Proves the schedule: the capacity and the panic reports at the start; after
-/// `CAPACITY_AGAIN_SECS` both again and the restart judged, merged with a panic report macOS
-/// wrote only after the start; then the panic reports every `PANIC_PERIOD_SECS` until stopped.
+/// Proves the panic source's period: read at the start; again after `JUDGE_AFTER_SECS`, when the
+/// restart is judged, merged with a panic report macOS wrote only after the start; then every
+/// `PANIC_PERIOD_SECS` until stopped, each report read once.
 #[test]
-fn the_schedule_reads_at_start_again_after_two_minutes_then_every_five() {
+fn the_panic_source_judges_the_restart_at_its_second_read_then_reads_every_five_minutes() {
     let dir = Scratch::new("mac-schedule");
     let reports = FakeReports::default();
     let m = after_unclean_boot(&dir, reports.clone());
@@ -743,22 +734,18 @@ fn the_schedule_reads_at_start_again_after_two_minutes_then_every_five() {
         ])),
         Mutex::new(Vec::new()),
     );
-    m.health().run(&steps);
+    let mut panics = m.panics();
+    run(&mut panics, &m.keeper, m.clock.as_ref(), &steps);
     assert_eq!(
         *lock(&steps.1),
         [
-            CAPACITY_AGAIN_SECS,
+            JUDGE_AFTER_SECS,
             PANIC_PERIOD_SECS,
             PANIC_PERIOD_SECS,
             PANIC_PERIOD_SECS
         ]
     );
-    assert_eq!(
-        m.sysctl.calls().len(),
-        2,
-        "the capacity at start and after two minutes"
-    );
-    let health = m.keeper.health();
+    let health = m.health();
     assert_eq!(
         ids(&health),
         [
@@ -770,55 +757,62 @@ fn the_schedule_reads_at_start_again_after_two_minutes_then_every_five() {
         health.events[1].message,
         "Unexpected restart after a kernel panic (SError)"
     );
+    assert_eq!(reports.reads(), ["serror.panic"], "read once in five reads");
+}
+
+/// Proves a stop during the first wait ends the panic source after its first read, with no
+/// restart judged; a panic read at the first read is merged at the second.
+#[test]
+fn the_restart_is_judged_only_at_the_second_read() {
+    let dir = Scratch::new("mac-schedule-stop");
+    let m = after_unclean_boot(&dir, FakeReports::with(&["serror.panic"]));
+    let sleeper = ScriptedSleeper::new(0);
+    let mut panics = m.panics();
+    run(&mut panics, &m.keeper, m.clock.as_ref(), &sleeper);
+    assert_eq!(sleeper.waits(), [JUDGE_AFTER_SECS]);
     assert_eq!(
-        reports.reads(),
-        ["serror.panic"],
-        "read once in five passes"
+        ids(&m.health()),
+        ["panic:2b6f9c1e-7d1a-4c3e-9f20-6a1d0e5b8c44"]
+    );
+    m.poll(&mut panics);
+    assert_eq!(
+        m.health().events[1].message,
+        "Unexpected restart after a kernel panic (SError)"
     );
 }
 
-/// Proves a stop during the first wait ends the schedule after the first pass, with no restart
-/// judged yet.
+/// Proves the capacity's period: read at the start, again after `CAPACITY_AGAIN_SECS`, then every
+/// `CAPACITY_PERIOD_SECS` until stopped.
 #[test]
-fn a_stop_in_the_first_wait_ends_after_the_first_pass() {
-    let dir = Scratch::new("mac-schedule-stop");
-    let m = after_unclean_boot(&dir, FakeReports::default());
-    let sleeper = ScriptedSleeper::new(0);
-    m.health().run(&sleeper);
-    assert_eq!(sleeper.waits(), [CAPACITY_AGAIN_SECS]);
-    assert_eq!(m.sysctl.calls().len(), 1);
-    assert!(m.keeper.health().events.is_empty());
-}
-
-/// A sleeper that tells the test it was reached, and stops.
-struct Reached(Mutex<mpsc::Sender<u64>>);
-
-impl Sleeper for Reached {
-    fn sleep(&self, secs: u64) -> Tick {
-        let _ = lock(&self.0).send(secs);
-        Tick::Stop
-    }
-}
-
-/// Proves the schedule is started on its own thread on a Mac only: on Linux and OpenRC nothing
-/// runs.
-#[test]
-fn the_schedule_starts_on_a_mac_only() {
-    let dir = Scratch::new("mac-start");
+fn the_capacity_is_read_at_start_after_two_minutes_then_daily() {
+    let dir = Scratch::new("mac-schedule-capacity");
     let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
-    for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
-        let (tx, _rx) = mpsc::channel();
-        assert!(!start(kind, m.health(), Box::new(Reached(Mutex::new(tx)))));
-    }
-    assert!(m.sysctl.calls().is_empty());
-    let (tx, rx) = mpsc::channel();
-    assert!(start(
-        PlatformKind::Macos,
-        m.health(),
-        Box::new(Reached(Mutex::new(tx)))
-    ));
-    assert_eq!(rx.recv(), Ok(CAPACITY_AGAIN_SECS));
-    assert_eq!(m.sysctl.calls().len(), 1);
+    let sleeper = ScriptedSleeper::new(2);
+    run(&mut m.capacity(), &m.keeper, m.clock.as_ref(), &sleeper);
+    assert_eq!(
+        sleeper.waits(),
+        [
+            CAPACITY_AGAIN_SECS,
+            CAPACITY_PERIOD_SECS,
+            CAPACITY_PERIOD_SECS
+        ]
+    );
+    assert_eq!(m.sysctl.calls().len(), 3);
+}
+
+/// Proves a Mac's sources are its panic reports and its capacity, and no other host has any of
+/// them. Making them reads nothing.
+#[test]
+fn a_mac_has_its_panic_and_capacity_sources_and_no_other_host_does() {
+    let dir = Scratch::new("mac-for-host");
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    let names = |kind| -> Vec<&'static str> {
+        for_host(kind, &m.keeper).iter().map(|s| s.name()).collect()
+    };
+    assert_eq!(names(PlatformKind::Macos), [PANIC_SOURCE, CAPACITY_SOURCE]);
+    assert!(names(PlatformKind::Linux).is_empty());
+    assert!(names(PlatformKind::Openrc).is_empty());
+    assert!(m.health().sources.is_empty(), "nothing read");
 }
 
 /// Proves the host's directory port lists regular files only (no directory such as `Retired`, no
@@ -850,21 +844,6 @@ fn the_host_directory_lists_regular_files_and_reads_to_its_cap() {
         gone.list().map_err(|e| e.kind()),
         Err(io::ErrorKind::NotFound)
     );
-    let (keeper, clock) = (
-        Arc::new(HealthKeeper::open(
-            dir.path(),
-            BootFacts::default(),
-            Box::new(Never),
-            Arc::new(RecordingLog::default()),
-        )),
-        Arc::new(FakeClock::new(NOW, 0)),
-    );
-    // The host's own sources are only made here, never read: nothing runs on this host.
-    drop(MacHealth::at_host(
-        keeper,
-        clock,
-        Arc::new(RecordingLog::default()),
-    ));
 }
 
 /// Proves, on a Mac (release.yml's `macos-test`, as the runner's user, no root), that the Mac's
@@ -874,26 +853,14 @@ fn the_host_directory_lists_regular_files_and_reads_to_its_cap() {
 #[test]
 fn the_macs_own_programs_give_its_capacity() {
     let dir = Scratch::new("mac-own");
-    let log = Arc::new(RecordingLog::default());
-    let keeper = Arc::new(HealthKeeper::open(
-        dir.path(),
-        BootFacts::default(),
-        Box::new(Never),
-        log.clone(),
-    ));
-    let health = MacHealth::at_host(
-        Arc::clone(&keeper),
-        Arc::new(FakeClock::new(NOW, 0)),
-        log.clone(),
-    );
-    health.read_capacity();
-    let read = keeper.health();
-    assert_eq!(
-        source(&read, CAPACITY_SOURCE),
-        Some(ok(CAPACITY_SOURCE)),
-        "{:?}",
-        log.lines()
-    );
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    let mut capacity = for_host(PlatformKind::Macos, &m.keeper)
+        .into_iter()
+        .find(|s| s.name() == CAPACITY_SOURCE)
+        .expect("the capacity source");
+    m.poll(capacity.as_mut());
+    let read = m.health();
+    assert_eq!(source(&read, CAPACITY_SOURCE), Some(ok(CAPACITY_SOURCE)));
     let baseline = read.baseline.expect("a capacity");
     assert!(
         baseline.mem_total_kib > 0 && baseline.cpus_present > 0,
