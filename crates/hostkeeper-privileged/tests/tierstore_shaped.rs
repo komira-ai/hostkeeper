@@ -18,6 +18,10 @@
 //! serves, read from the release file of the package it runs from (the installer and the hook),
 //! `systemctl is-active` (the units), the step record and the hook's record files (the step
 //! launcher), and the operator API of the coordinator (the heartbeat's report).
+//!
+//! The same rig also witnesses `hostkeeper renew` on the host: the real program asks, and the
+//! real daemon renews its certificate from the real coordinator over mutual TLS for the key it
+//! holds (`a_renewal_asked_on_the_host_replaces_the_certificate_and_keeps_the_key`).
 
 mod e2e;
 
@@ -29,7 +33,7 @@ use std::process::Command;
 
 use e2e::host_root::is_active;
 use e2e::scenario::{COORDINATED, LOCAL, Scenario, V1, V2, V3, V4};
-use e2e::{FIXTURE_BINARY, HOST_ID, SERVICE, instance, served_version, wait_for};
+use e2e::{FIXTURE_BINARY, HOST_ID, HOSTKEEPER, SERVICE, instance, served_version, wait_for};
 use hostkeeper_steps::selfupdate::Layout;
 use serde_json::{Value, json};
 
@@ -695,4 +699,57 @@ fn the_daemon_is_ready_under_a_notify_unit_once_its_start_is_done() {
     for port in installed.ports {
         assert_eq!(served_version(port).as_deref(), Some(V1), "instance {port}");
     }
+}
+
+/// The host's pki directory, which the daemon of the rig enrolls into.
+const PKI: &str = "/etc/updater/pki";
+
+/// The target of the pki directory's `current` link, `None` before the first generation.
+fn current_generation() -> Option<String> {
+    fs::read_link(Path::new(PKI).join("current"))
+        .ok()
+        .map(|target| target.display().to_string())
+}
+
+/// `hostkeeper renew` asked on the host makes the daemon renew at once rather than at the middle
+/// of the certificate's week, as it renews at the middle: the daemon enrolled as `e2e-host`
+/// holds generation 1; the real program, with the daemon's default pki directory, exits 0 and
+/// says it asked for generation 1; the daemon's next step stores generation 2 from the real
+/// coordinator (`Renew`, over mutual TLS with generation 1), whose certificate differs from
+/// generation 1's and whose key is generation 1's byte for byte; and the ask is gone.
+#[test]
+fn a_renewal_asked_on_the_host_replaces_the_certificate_and_keeps_the_key() {
+    let _rig = Scenario::start("renew");
+    wait_for("the daemon holds generation 1", COORDINATED, || {
+        current_generation().as_deref() == Some("gen-1")
+    });
+    let gen1 = Path::new(PKI).join("gen-1");
+    let old_key = fs::read(gen1.join("key")).expect("the key of generation 1");
+    let old_cert = fs::read(gen1.join("cert.pem")).expect("the certificate of generation 1");
+
+    let out = Command::new(HOSTKEEPER)
+        .arg("renew")
+        .output()
+        .expect("run hostkeeper renew");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "renewal asked: the daemon renews generation 1 of {PKI} at its next enrollment step\n"
+        )
+    );
+    assert!(out.stderr.is_empty(), "{out:?}");
+
+    wait_for("the daemon holds generation 2", LOCAL, || {
+        current_generation().as_deref() == Some("gen-2")
+    });
+    let current = Path::new(PKI).join("current");
+    assert_eq!(fs::read(current.join("key")).expect("the key"), old_key);
+    assert_ne!(
+        fs::read(current.join("cert.pem")).expect("the certificate"),
+        old_cert
+    );
+    wait_for("the ask is removed", LOCAL, || {
+        !Path::new(PKI).join("RENEW").exists()
+    });
 }

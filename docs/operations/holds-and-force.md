@@ -50,7 +50,8 @@ to start on such a file rather than ignore the holds; a file that never held one
 earlier releases read.
 
 A host is also told, as the status shows it, `install_order` (a package listed
-before this one is not installed on the host yet), `uninstall_order` (a package whose uninstall
+before this one is not installed on the host yet; one the host runs counts as installed, even
+where the host is excluded from it), `uninstall_order` (a package whose uninstall
 goes first is still on the host) or `moving` (the host was moved into its group and its plans have
 not admitted it, or its uninstalls are not done); none of them is a failure, and
 [hostgroups.md](hostgroups.md) says when each applies.

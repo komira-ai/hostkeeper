@@ -26,7 +26,7 @@ use crate::error::RunError;
 use crate::ports::{CommandOutput, CommandRunner};
 
 /// The standard output kept unless told otherwise: far above what `systemctl show` prints for
-/// four properties.
+/// the properties of one unit.
 pub const MAX_STDOUT: usize = 64 * 1024;
 
 /// The variables of the daemon's environment no child is given: those of sd_notify(3) and of

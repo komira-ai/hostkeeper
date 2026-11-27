@@ -227,6 +227,26 @@ open with its failed check, and comes back only when it is added to the queue ag
 the Mac's tests stay in `release.yml`'s beta stage after the merge
 ([The Mac's beta stage](#the-macs-beta-stage)), and hold only the macOS installer's promotion.
 
+**Turning the queue on, and backing it out.** The ruleset and the settings above take effect
+only once a repository admin applies them, from the two JSON blocks as they are on `main`: the
+first as the body of `POST /repos/komira-ai/hostkeeper/rulesets`, the second as the body of
+`PATCH /repos/komira-ai/hostkeeper`. Until that is done, `main` requires no check and a pull
+request merges directly. The `merge_group` triggers of the two workflows do nothing then, because
+no queue sends that event. To back out:
+
+- to stop queueing but keep the four required checks, `PUT /repos/komira-ai/hostkeeper/rulesets/<id>`
+  with the same ruleset less its `merge_queue` rule. A pull request still in the queue leaves it
+  and stays open; it, like every other, is then merged directly once its checks have passed;
+- to remove every rule from `main`, `DELETE /repos/komira-ai/hostkeeper/rulesets/<id>`.
+
+Neither touches the squash-message settings: direct squash merges keep the pull request's title
+and a blank body until `PATCH /repos/komira-ai/hostkeeper` sets them back.
+
+Either way the workflows stay as they are: a pull request runs the same checks with or without a
+queue. To change the queue's parameters, change the JSON above and the lint's
+`merge_queue::queue()` (in `crates/xtask/tests/workflows/merge_queue.rs`) in one pull request,
+then apply the ruleset again (`PUT`) after the merge.
+
 ## The privileged workflow: real systemd, after a merge
 
 Everything a pull request runs proves hostkeeper against fakes of the host.

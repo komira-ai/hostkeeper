@@ -13,12 +13,22 @@
 //!   follows the coordinator again from its next order. Unpinning a service that is not pinned
 //!   is no error.
 //!
-//! `pin` and `unpin` write one file and take no lock, so they may run beside the daemon: an order
-//! that has begun runs to its end, and the pin holds the orders that come after it.
+//! - `hostkeeper renew`: asks the daemon to renew the host's certificate at its next enrollment
+//!   step (within 5 seconds while it runs, else at its start) rather than at the middle of its
+//!   validity: it writes the pki directory's `RENEW` ([`hostkeeper_enroll::PkiDir::ask_renewal`])
+//!   and exits. The daemon renews as it does at the middle, the same `Renew` over mutual TLS for
+//!   the key it holds, so no new key and no approval; it removes the ask once the new
+//!   generation is stored or the coordinator refuses the renewal, and logs either as it does at
+//!   the middle (docs/operations/enrollment.md, "Renew a certificate now"). A host with no
+//!   certificate is refused `not_enrolled`, and nothing is written.
+//!
+//! `pin`, `unpin` and `renew` write one file and take no lock, so they may run beside the daemon:
+//! an order that has begun runs to its end, and the pin holds the orders that come after it.
 //!
 //! Exit status: 0 when the verb did what it says; 1 when it was refused or failed, with
 //! `hostkeeper <verb>: refused: <token>: <why>` or `hostkeeper <verb>: failed: <token>` on
-//! standard error (the tokens of [`crate::refusal::Refusal`] and of the force's verdict); 2 for a
+//! standard error (the tokens of [`crate::refusal::Refusal`] and of the force's verdict, and
+//! [`NOT_ENROLLED`]); 2 for a
 //! usage error, as clap reports it; and for `activate`, [`EXIT_CONFIG`] when the daemon config
 //! does not load and [`EXIT_LOCKED`] when the daemon (or another `activate`) holds the state
 //! directory.
@@ -31,6 +41,7 @@ use std::sync::Arc;
 use clap::{Args, Subcommand};
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_enroll::PkiDir;
 use hostkeeper_hook::Verdict;
 use hostkeeper_launchd::Platform;
 use hostkeeper_steps::{Layout, Protected, PruneReport};
@@ -38,7 +49,7 @@ use hostkeeper_steps::{Layout, Protected, PruneReport};
 use crate::adapters::Adapters;
 use crate::cli::{
     DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGE_LOCK_WAIT_SECS, DEFAULT_PACKAGES_DIR,
-    DEFAULT_STATE_DIR, HostFiles, host_ports,
+    DEFAULT_STATE_DIR, HostFiles, PKI_DIR, host_ports,
 };
 use crate::executor::{Daemon, Dirs, Ports, Reply};
 use crate::installed::{self, CURRENT, PREVIOUS};
@@ -54,6 +65,9 @@ pub use crate::start::{EXIT_CONFIG, EXIT_LOCKED};
 /// The exit status of a verb that was refused or failed.
 pub const EXIT_REFUSED: u8 = 1;
 
+/// The token of `renew` refused on a host with no certificate.
+pub const NOT_ENROLLED: &str = "not_enrolled";
+
 /// The verbs root runs on the host itself.
 #[derive(Clone, Debug, PartialEq, Eq, Subcommand)]
 pub enum LocalVerb {
@@ -65,6 +79,9 @@ pub enum LocalVerb {
     Pin(PinArgs),
     /// Remove a service's pin: the daemon follows the coordinator again.
     Unpin(UnpinArgs),
+    /// Ask the daemon to renew the host's certificate now, for the key it holds, as it does at
+    /// the middle of the certificate's validity: no new key and no approval.
+    Renew(RenewArgs),
 }
 
 /// The flags of `hostkeeper activate`.
@@ -134,6 +151,14 @@ pub struct UnpinArgs {
     pub service: ServiceName,
 }
 
+/// The flags of `hostkeeper renew`.
+#[derive(Clone, Debug, PartialEq, Eq, Args)]
+pub struct RenewArgs {
+    /// The daemon's pki directory: the host's key and certificate generations.
+    #[arg(long, default_value = PKI_DIR)]
+    pub pki_dir: PathBuf,
+}
+
 fn service_name(text: &str) -> Result<ServiceName, String> {
     ServiceName::new(text).map_err(|error| error.to_string())
 }
@@ -156,6 +181,7 @@ pub fn main(verb: LocalVerb) -> u8 {
         ),
         LocalVerb::Pin(args) => pin(&args, &mut out, &mut err),
         LocalVerb::Unpin(args) => unpin(&args, &mut out, &mut err),
+        LocalVerb::Renew(args) => renew(&args, &mut out, &mut err),
     }
 }
 
@@ -364,4 +390,35 @@ pub fn unpin(args: &UnpinArgs, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             EXIT_REFUSED
         }
     }
+}
+
+/// `hostkeeper renew`: the renewal asked of the daemon when the host holds a certificate, and the
+/// exit status.
+pub fn renew(args: &RenewArgs, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    let pki = args.pki_dir.display();
+    match PkiDir::new(&args.pki_dir).ask_renewal() {
+        Ok(Some(generation)) => {
+            drop(writeln!(
+                out,
+                "renewal asked: the daemon renews generation {generation} of {pki} at its next enrollment step"
+            ));
+            0
+        }
+        Ok(None) => renew_refused(
+            err,
+            NOT_ENROLLED,
+            &format!("{pki} holds no certificate; the host's enrollment gives it its first"),
+        ),
+        Err(error) => renew_refused(
+            err,
+            Refusal::StoreFailed.token(),
+            &format!("the renewal ask: {error}"),
+        ),
+    }
+}
+
+/// Says on `err` that `renew` was refused for `token`, and gives the exit status.
+fn renew_refused(err: &mut dyn Write, token: &str, why: &str) -> u8 {
+    drop(writeln!(err, "hostkeeper renew: refused: {token}: {why}"));
+    EXIT_REFUSED
 }

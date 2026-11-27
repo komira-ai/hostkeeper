@@ -114,6 +114,7 @@ impl<R: CommandRunner> OpenrcServiceManager<R> {
                 active: ActiveState::NotFound,
                 sub: "no init script".to_owned(),
                 main_pid: None,
+                restarts: None,
             });
         }
         let argv = [RC_SERVICE, unit, "status"].map(str::to_owned);
@@ -134,6 +135,7 @@ impl<R: CommandRunner> OpenrcServiceManager<R> {
             active,
             sub: sub.to_owned(),
             main_pid,
+            restarts: None,
         })
     }
 }

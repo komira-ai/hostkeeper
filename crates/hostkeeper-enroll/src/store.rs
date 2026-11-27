@@ -11,6 +11,7 @@
 //!     key                       0600, a hard link of the key it was issued for
 //!     COMPLETE                  written last: the generation is whole
 //!   current -> gen-<n>          the newest complete generation, switched by rename
+//!   RENEW                       0600, empty: root asked for a renewal now (`hostkeeper renew`)
 //! ```
 //!
 //! Every file is written by temporary file, fsync, rename and directory fsync, the order of the
@@ -36,6 +37,13 @@
 //! `current` is switched: from that rename on the generation is published. Removing the pending
 //! key after publication is cleanup: a failure there is not reported, and the next open finishes
 //! it.
+//!
+//! `RENEW` is the one file written without the store lock ([`PkiDir::ask_renewal`], run by
+//! `hostkeeper renew` beside the daemon): it is written by the same temporary file and rename, so
+//! the enroller sees it whole or not at all. It is optional in schema 1: a release that does not
+//! know it ignores it, since only `gen-<n>`, `pending/`, `current` and `SCHEMA` are read. Only a
+//! regular file counts as an ask. The open leaves a temporary file of it alone, since an ask may
+//! be writing it while the daemon starts; the next ask replaces one a crash left.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Write};
@@ -57,6 +65,7 @@ const CA: &str = "ca.pem";
 const COMPLETE: &str = "COMPLETE";
 const CURRENT: &str = "current";
 const CURRENT_TMP: &str = "current.tmp";
+const RENEW: &str = "RENEW";
 
 /// Why the pki directory could not be used.
 #[derive(Debug, thiserror::Error)]
@@ -171,6 +180,10 @@ pub trait Store: Send {
     /// Removes the generations older than generation `used`, when `used` is still current; a
     /// confirmation for a generation that is no longer current removes nothing.
     fn prune(&self, used: u64) -> Result<(), StoreError>;
+    /// Whether root asked for a renewal now ([`PkiDir::ask_renewal`]): `RENEW` is a regular file.
+    fn renewal_asked(&self) -> Result<bool, StoreError>;
+    /// Removes the ask, when there is one: once a generation is stored, or a renewal refused.
+    fn clear_renewal(&self) -> Result<(), StoreError>;
 }
 
 /// A point in the writes of [`PkiDir`] where a [`FaultGate`] can make it fail, as a failed
@@ -253,6 +266,21 @@ impl PkiDir {
             ca: current.join(CA),
             key: current.join(KEY),
         }
+    }
+
+    /// Asks the enroller that holds this directory to renew the current generation at its next
+    /// step, as at the middle of its validity: writes `RENEW`, durably, without the store lock,
+    /// and answers the generation it asks for. Refuses a newer schema and a directory that is not
+    /// the daemon's own (or not there), as an open does. With no current generation it writes
+    /// nothing and answers `None`: the host's enrollment gives it its first.
+    pub fn ask_renewal(&self) -> Result<Option<u64>, StoreError> {
+        self.read_schema()?;
+        self.check_own(&self.root, true)?;
+        let Some(number) = self.current_number()? else {
+            return Ok(None);
+        };
+        self.write_durable(&self.root, RENEW, b"", 0o600, None)?;
+        Ok(Some(number))
     }
 
     fn cross(&self, fault: Fault) -> io::Result<()> {
@@ -547,6 +575,18 @@ impl Store for PkiDir {
                 fs::remove_dir_all(self.generation_dir(number))?;
             }
         }
+        Ok(sync_dir(&self.root)?)
+    }
+
+    fn renewal_asked(&self) -> Result<bool, StoreError> {
+        match fs::symlink_metadata(self.root.join(RENEW)) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            read => Ok(read?.is_file()),
+        }
+    }
+
+    fn clear_renewal(&self) -> Result<(), StoreError> {
+        remove_file_if_present(&self.root.join(RENEW))?;
         Ok(sync_dir(&self.root)?)
     }
 }

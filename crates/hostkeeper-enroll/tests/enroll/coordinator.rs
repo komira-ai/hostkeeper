@@ -381,6 +381,66 @@ fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
     assert_ne!(first_der, second_der);
 }
 
+/// An enroller of `enrollment` whose request an operator approved as `HOST`, and the first
+/// generation it stored.
+fn enrolled_with(world: &World, enrollment: &Arc<Enrollment>) -> (Enroller, Identity) {
+    let mut enroller = enroller_of(world, enrollment);
+    assert_eq!(enroller.run_once().expect("posted"), Outcome::Pending);
+    let [pending] = enrollment
+        .store()
+        .pending()
+        .expect("pending")
+        .try_into()
+        .expect("one");
+    let id = pending.request_id.to_hex();
+    enrollment
+        .approve(
+            "operator",
+            ApproveRequest {
+                request_id: id.clone(),
+                key_sha256: id,
+                host_id: HOST.to_owned(),
+                role: ROLE.to_owned(),
+                reason: "new rack".to_owned(),
+                ..Default::default()
+            },
+            &|_| false,
+            &[],
+        )
+        .expect("approved");
+    let Outcome::Enrolled(first) = enroller.run_once().expect("enrolled") else {
+        panic!("not enrolled");
+    };
+    (enroller, first)
+}
+
+/// Catches a renewal asked on the host (`hostkeeper renew`) that the coordinator it is built for
+/// would refuse before the middle of the certificate's validity, or that brings a new key: one
+/// second after the first certificate, with an ask in the pki directory, the next step's `Renew`
+/// is answered by the coordinator's own enrollment and CA with generation 2 of `host:web-1`, a
+/// new certificate the coordinator reads as the approved host, for the key of generation 1.
+#[test]
+fn a_renewal_asked_on_the_host_is_renewed_by_the_coordinators_own_ca_before_its_middle() {
+    let world = World::new("own-coordinator-ask");
+    let enrollment = start(&world);
+    let (mut enroller, first) = enrolled_with(&world, &enrollment);
+    let first_der = assert_issued(&enrollment, &first, 1);
+    world.set_now(first.not_before + 1);
+    assert_eq!(enroller.run_once().expect("idle"), Outcome::Idle);
+
+    let asked = hostkeeper_enroll::PkiDir::new(&world.pki()).ask_renewal();
+    assert_eq!(asked.expect("asked"), Some(1));
+    let Outcome::Renewed(second) = enroller.run_once().expect("renewed") else {
+        panic!("not renewed");
+    };
+    let second_der = assert_issued(&enrollment, &second, 2);
+    assert_ne!(first_der, second_der);
+    assert_eq!(second.not_before, first.not_before + 1);
+    let key = |identity: &Identity| std::fs::read(&identity.key).expect("the key");
+    assert_eq!(key(&second), key(&first));
+    assert!(!world.pki().join("RENEW").exists());
+}
+
 /// The serial of the tests' Mac.
 const SERIAL: &str = "C02XK1ABJG5J";
 

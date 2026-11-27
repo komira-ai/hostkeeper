@@ -21,6 +21,8 @@
 //!   request, and every file that posts nothing more;
 //! - `reissue.rs`: a certificate that is not what the CA issues now, renewed at the first step or
 //!   returned with its key, and asked once per generation;
+//! - `renew_ask.rs`: a renewal root asks for on the host (`RENEW`), renewed at the next step
+//!   with the same key, and when the ask is kept and when it goes;
 //! - `pacing.rs`: the loop's log and sleeps, and the enrollment it reports after each step;
 //! - `enrollment.rs`: the host's enrollment as the enroller reads it from the pki directory.
 //! - `renewal_state.rs`: what the loop notes after each step for the heartbeat: the end of the
@@ -38,6 +40,7 @@ mod nonce;
 mod pacing;
 mod refusals;
 mod reissue;
+mod renew_ask;
 mod renewal_state;
 mod returns;
 mod store;

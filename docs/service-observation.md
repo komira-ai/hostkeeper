@@ -23,7 +23,22 @@ For each installed service, once per round:
    `{port}` replaced by the number after the instance's `@` (`tierstore@9301.service` gives 9301).
    Only `http://` to `127.0.0.1` or `[::1]`, no redirect followed, at most 4 KiB of the reply read,
    and only a 2xx status is healthy. A service with no run units (`unmonitored`) has its URL
-   probed once; a `{port}` in it has no instance to be filled from and is `url_invalid`.
+   probed once; a `{port}` in it has no instance to be filled from and is `url_invalid`. When an
+   answer is not 2xx the probe reads on past its header block, to at most 160 bytes of the body
+   (and never past the 4 KiB), and the observation keeps the body of the first failing instance
+   in run order as text: invalid UTF-8 replaced, every control character a space, white space
+   trimmed, cut at a character's boundary (a job agent's `503 not placeable: <reason>`). An
+   answer that is 2xx, one that never came and an empty body give none.
+4. **Restarts**, from the service manager too, in the same `systemctl show`: each run unit's
+   `NRestarts` (its count of automatic restarts), `Result` (`success`, `exit-code`, `signal`,
+   `start-limit-hit`, ...) and, when `ExecMainCode=1` (the main process exited by itself; 2 and
+   3 are a signal), its exit code `ExecMainStatus`. A unit with no `NRestarts` (a systemd before
+   235, a unit type that is not a service), one the manager does not know, and every unit on
+   OpenRC or launchd, which keep no counter, has no restarts. An `NRestarts`, or with
+   `ExecMainCode=1` an `ExecMainStatus`, that is not a number is a `manager_error`, never a
+   count. A round discarded after a read of the unit set keeps the restarts of that read: a unit
+   in a restart loop changes its main pid between the two reads, and its count still reaches
+   the heartbeat.
 
 The unit set is read before and after the version and health probes; a unit whose activity or
 main pid changed in between discards the round.
@@ -39,6 +54,28 @@ copy of the release's binary that the self-update staged and that the unit or th
 reports its own service live, healthy and at the version it runs on both platforms; while the
 package's `current` names a version the job does not run (the moment between the switch and the
 restart, or after a fallback), it is `version_mismatch`.
+
+### Restarts in the last ten minutes
+
+The heartbeat's `restarts` of a service (`ServiceRestarts`) is made by the daemon's observer port
+(`DaemonObserver`, `crates/hostkeeper-daemon/src/link_adapters.rs`) from each observation's unit
+counts and a `RestartWindow` (`hostkeeper-observe`, `restarts.rs`) it keeps in memory, read at the
+daemon's monotonic second:
+
+- `count` is the sum of the run units' `NRestarts`; `recent` the sum of each unit's rise since
+  its oldest observation of the last 600 seconds, so a unit's first observation counts none and
+  a restart more than ten minutes old is never counted. Both saturate.
+- systemd sets `NRestarts` back to 0 when a unit is started or restarted by hand, as a deploy
+  does: a count that fell, or an observation at a time before the last, starts the unit's window
+  again, so a deploy's restart is not counted as a crash.
+- `last_result` and `exit_status` are those of the first run unit whose result is not `success`
+  (nor empty), else of the first run unit; `last_result` is cut to 32 bytes.
+- At most 256 observations of a unit are kept, the oldest dropped first. A unit that leaves the
+  run set, and a service observed with no counts (not observed, or with no unit the manager
+  counts), are forgotten; the window starts empty at each start of the daemon.
+
+A unit at its start limit (`Result=start-limit-hit`) is `failed`, so its service is `stopped`
+(unhealthy), and its restarts say `start-limit-hit` with the count that led to it.
 
 ## States
 
@@ -89,7 +126,21 @@ the heartbeat carries:
 | `live`, no `[health]`, version not contradicted | `HEALTH_HEALTHY` | `HEALTH_HEALTHY` | recorded |
 
 `HEALTH_UNHEALTHY` means "does not, or the daemon cannot tell"; the reason token tells the cases
-apart. A service the daemon cannot observe at all (no `current`, or a manifest that does not load)
+apart.
+
+Over gRPC each `ServiceBeat` also carries three facts of the observation, whatever the coordinator
+advertises (a coordinator that predates them skips them):
+
+- `health_reason`: the detail (the reason token, or `not_observed` and `own_unit_not_loaded`
+  below) when it is a token of `[a-z0-9_]`, 1 to 64 bytes; none when there is no detail.
+- `health_body`: the body of the health URL's answer that was not 2xx, as above, at most 160
+  bytes.
+- `restarts`: the restarts of its run units ("Restarts in the last ten minutes" above); none
+  where the service manager keeps no counter.
+
+The JSON route is frozen and carries none of them, but they count toward the heartbeat's bound on
+both routes; a heartbeat over its 16 KiB leaves out every service's `health_body` and `restarts`
+first, and keeps `health_reason`. A service the daemon cannot observe at all (no `current`, or a manifest that does not load)
 is sent `HEALTH_UNHEALTHY` with the detail `not_observed`.
 
 An `unmonitored` service with no `[health]` (a configuration package, which only places files: no
@@ -123,8 +174,8 @@ Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`
 `ExpectedExe`) and runs in the tests against fakes. The parts that touch the host are small:
 
 - `systemd.rs`: one `systemctl show` per unit through a `CommandRunner` (the real one,
-  `command.rs`, runs a child process with its output capped and a deadline). launchd will be
-  another adapter of the same port.
+  `command.rs`, runs a child process with its output capped and a deadline), asking for the
+  state and the restart properties at once. launchd will be another adapter of the same port.
 - `proc.rs`: field 22 of `/proc/<pid>/stat`, and the hash of the file behind `/proc/<pid>/exe`
   read through the open descriptor.
 - `health.rs`: the HTTP GET over a `Connect` transport; the real one is TCP, the tests use an
