@@ -16,6 +16,7 @@ use hostkeeper_daemon::hardware_sources::{
     HardwareSource, SourceRead, at_host, for_host, poll, run, start, start_host,
 };
 use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
+use hostkeeper_daemon::kernel_sources::KernelBoot;
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper};
@@ -173,19 +174,22 @@ fn each_source_gets_a_worker_of_its_own() {
 }
 
 #[test]
-fn a_linux_host_reads_smart_and_hwmon_and_a_mac_nothing_yet() {
+fn a_linux_host_reads_smart_hwmon_and_the_kernel_and_a_mac_nothing_yet() {
+    let boot = KernelBoot::default();
     let names = |kind| -> Vec<&'static str> {
         for_host(
             kind,
             Path::new("/nonexistent"),
             Path::new("/nonexistent/smartctl"),
+            &boot,
         )
         .iter()
         .map(|s| s.name())
         .collect()
     };
-    assert_eq!(names(PlatformKind::Linux), ["smart", "hwmon"]);
-    assert_eq!(names(PlatformKind::Openrc), ["smart", "hwmon"]);
+    let linux = ["smart", "hwmon", "journal", "sysfs"];
+    assert_eq!(names(PlatformKind::Linux), linux);
+    assert_eq!(names(PlatformKind::Openrc), linux);
     assert!(names(PlatformKind::Macos).is_empty());
 }
 
@@ -197,7 +201,7 @@ fn the_host_sources_are_started_on_the_dispatch_and_read_nothing_before() {
     let sleeper = || -> Box<dyn Sleeper + Send> { Box::new(ScriptedSleeper::new(0)) };
     let dispatch = ManualDispatch::default();
     at_host(PlatformKind::Linux, &keeper, &clock, &sleeper, &dispatch);
-    assert_eq!(dispatch.pending(), 2);
+    assert_eq!(dispatch.pending(), 4);
     let mac = ManualDispatch::default();
     at_host(PlatformKind::Macos, &keeper, &clock, &sleeper, &mac);
     assert_eq!(mac.pending(), 0);
@@ -355,5 +359,5 @@ fn the_daemon_starts_its_host_sources_only_when_it_keeps_a_health_state() {
         &stop,
         &linux,
     );
-    assert_eq!(linux.pending(), 2, "one worker per source, none run yet");
+    assert_eq!(linux.pending(), 4, "one worker per source, none run yet");
 }

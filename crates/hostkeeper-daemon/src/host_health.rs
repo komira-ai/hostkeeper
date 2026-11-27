@@ -281,6 +281,19 @@ impl HealthKeeper {
         self.record(source, &mark, read.events, now_unix)
     }
 
+    /// The boot id read at the start; none when it could not be read.
+    #[must_use]
+    pub fn boot_id(&self) -> Option<String> {
+        let inner = lock(&self.inner);
+        inner.boot_known.then(|| inner.file.boot_id.clone())
+    }
+
+    /// When the boot began, Unix seconds, as read at the start; 0 when not read.
+    #[must_use]
+    pub fn boot_unix(&self) -> u64 {
+        lock(&self.inner).file.boot_unix
+    }
+
     /// The mark `source` last kept; none before its first read on this host.
     #[must_use]
     pub fn mark(&self, source: &str) -> Option<String> {
