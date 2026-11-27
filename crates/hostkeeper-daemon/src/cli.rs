@@ -433,14 +433,15 @@ async fn start_and_serve(
         major,
         watchdog,
     );
-    // On a Linux host, the BMC's event log is read into the hardware health on a thread of its
-    // own until the loops stop (crate::sel_source).
-    let _bmc_events = crate::sel_source::at_host_start(
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
         platform.kind,
-        links.health.clone(),
-        Arc::clone(&started.daemon().ctx().clock),
-        links.stop.clone(),
-        Arc::clone(&links.log),
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
     );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;

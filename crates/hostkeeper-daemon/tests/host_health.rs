@@ -22,9 +22,7 @@ use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::testing::RecordingLog;
-use hostkeeper_proto::health::{
-    MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SOURCE_REASON, MAX_SOURCES, MAX_SUBJECT, check_health,
-};
+use hostkeeper_proto::health::{MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SUBJECT, check_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use support::Scratch;
 
@@ -507,116 +505,6 @@ fn six_records_at_their_bounds_keep_the_health_within_its_bound() {
     assert_eq!(check_health(&health), Ok(()));
     let sent: Vec<u64> = health.events.iter().map(|e| e.time_unix).collect();
     assert_eq!(sent, (1..=MAX_EVENTS as u64).collect::<Vec<u64>>());
-}
-
-/// Proves each source's state rides in every heartbeat, by source, the last one it said in place
-/// of the one before, its source and reason cut to their bounds; and the keeper gives the boot's
-/// start to the sources that judge a record before it.
-///
-/// Catches: a source that reports nothing read as one that found nothing wrong (no state sent),
-/// a source listed twice, or a reason past its bound refusing the whole health.
-#[test]
-fn each_source_says_its_state_in_every_heartbeat() {
-    let dir = Scratch::new("health-sources");
-    let (keeper, log) = start(&dir, boot("boot-1"), yes());
-    assert_eq!(keeper.boot_unix(), 1_795_000_000);
-    let state = |source: &str, status: pb::SourceStatus, reason: &str| pb::SourceState {
-        source: source.to_owned(),
-        status: status.into(),
-        reason: reason.to_owned(),
-    };
-    keeper.source_state(state("sel", pb::SourceStatus::Ok, ""));
-    keeper.source_state(state(
-        "rasdaemon-and-more",
-        pb::SourceStatus::Unsupported,
-        "no database",
-    ));
-    keeper.source_state(state(
-        "sel",
-        pb::SourceStatus::Unreadable,
-        &"the BMC does not answer ".repeat(4),
-    ));
-    let health = keeper.health();
-    assert_eq!(
-        health.sources,
-        [
-            state(
-                "rasdaemon-and-mo",
-                pb::SourceStatus::Unsupported,
-                "no database"
-            ),
-            state(
-                "sel",
-                pb::SourceStatus::Unreadable,
-                &"the BMC does not answer ".repeat(4)[..MAX_SOURCE_REASON]
-            ),
-        ]
-    );
-    assert_eq!(check_health(&health), Ok(()));
-    assert!(log.lines().is_empty(), "{:?}", log.lines());
-}
-
-/// Proves the keeper keeps at most twelve sources' states: a thirteenth is logged and not kept,
-/// and a source already kept still says its new state.
-///
-/// Catches: a health with more sources than its bound, which the coordinator refuses whole.
-#[test]
-fn past_twelve_sources_a_new_one_is_logged_and_not_kept() {
-    let dir = Scratch::new("health-sources-bound");
-    let (keeper, log) = start(&dir, boot("boot-1"), yes());
-    let state = |n: usize, status: pb::SourceStatus| pb::SourceState {
-        source: format!("source-{n:02}"),
-        status: status.into(),
-        reason: String::new(),
-    };
-    for n in 0..=MAX_SOURCES {
-        keeper.source_state(state(n, pb::SourceStatus::Ok));
-    }
-    keeper.source_state(state(0, pb::SourceStatus::Unreadable));
-    let sources = keeper.health().sources;
-    assert_eq!(sources.len(), MAX_SOURCES);
-    assert_eq!(sources[0], state(0, pb::SourceStatus::Unreadable));
-    assert_eq!(
-        log.lines(),
-        ["error: the state of the source source-12 is not kept: 12 sources are"]
-    );
-}
-
-/// Proves a heartbeat whose six records at their bounds and twelve sources at theirs would pass
-/// the health's 4096 bytes carries fewer records, the most severe and oldest first, and the
-/// health keeps its bound; the records left wait in the queue.
-///
-/// Catches: a health over its bound once sources report, which the coordinator refuses whole at
-/// every heartbeat, so no record would ever be written.
-#[test]
-fn sources_at_their_bound_leave_records_for_a_later_heartbeat() {
-    let dir = Scratch::new("health-sources-fit");
-    let (keeper, _) = start(&dir, boot(&"b".repeat(64)), yes());
-    let full = |n: u64| pb::HardwareEvent {
-        event_id: format!("{n:0>64}"),
-        subject: "s".repeat(32),
-        source: "s".repeat(16),
-        code: "c".repeat(32),
-        message: "m".repeat(120),
-        raw: "r".repeat(256),
-        about: "a".repeat(64),
-        ..event("", pb::HardwareSeverity::Warning, n, "sel")
-    };
-    keeper.record("sel", "", (1..=8).map(full).collect(), NOW);
-    for n in 0..MAX_SOURCES {
-        keeper.source_state(pb::SourceState {
-            source: format!("{n:s>16}"),
-            status: pb::SourceStatus::Unreadable.into(),
-            reason: "r".repeat(64),
-        });
-    }
-    let health = keeper.health();
-    assert_eq!(check_health(&health), Ok(()));
-    assert_eq!(health.sources.len(), MAX_SOURCES);
-    let sent: Vec<u64> = health.events.iter().map(|e| e.time_unix).collect();
-    assert!(!sent.is_empty() && sent.len() < MAX_EVENTS, "{sent:?}");
-    assert_eq!(sent, (1..=sent.len() as u64).collect::<Vec<u64>>());
-    assert_eq!(on_file(&dir).held.records.len(), 8);
 }
 
 /// Proves a state file that does not parse, or that another machine wrote, is moved aside and

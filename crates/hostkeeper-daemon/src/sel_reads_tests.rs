@@ -5,7 +5,7 @@
 //! and its thread.
 
 use super::*;
-use crate::host_health::HISTORY_PREFIX;
+use crate::host_health::{HISTORY_PREFIX, HISTORY_SECS};
 
 /// Catches a SEL read again in full at every read: while its count, last addition and erase are
 /// those of the read before, the reader asks `Get Device ID` and `Get SEL Info` and nothing else,
@@ -14,10 +14,10 @@ use crate::host_health::HISTORY_PREFIX;
 fn nothing_is_asked_past_sel_info_while_the_sel_is_unchanged() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let mut rig = Rig::new("sel-unchanged", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     assert_eq!(rig.take_held().len(), 3);
     bmc.asked();
-    assert_eq!(rig.reader.poll(INCIDENT_READ + 60), POLL_SECS);
+    assert_eq!(rig.poll(INCIDENT_READ + 60), POLL_SECS);
     assert_eq!(bmc.asked(), [BmcRequest::DeviceId, BmcRequest::SelInfo]);
     assert!(rig.held().is_empty());
 }
@@ -29,7 +29,7 @@ fn nothing_is_asked_past_sel_info_while_the_sel_is_unchanged() {
 fn new_entries_are_read_after_the_last_one() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let mut rig = Rig::new("sel-new", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     rig.take_held();
     let more = fixture(KINDS_SEL)[1].clone();
     let mut entry = more;
@@ -39,7 +39,7 @@ fn new_entries_are_read_after_the_last_one() {
         b.added += 1;
     });
     bmc.asked();
-    rig.reader.poll(INCIDENT_READ + 60);
+    rig.poll(INCIDENT_READ + 60);
     assert_eq!(
         bmc.asked(),
         [
@@ -60,7 +60,7 @@ fn new_entries_are_read_after_the_last_one() {
     rig.take_held();
     bmc.with(|b| b.added += 1);
     bmc.asked();
-    rig.reader.poll(INCIDENT_READ + 120);
+    rig.poll(INCIDENT_READ + 120);
     assert_eq!(
         bmc.asked(),
         [
@@ -75,7 +75,7 @@ fn new_entries_are_read_after_the_last_one() {
 
 /// Catches a transport error of `Get SEL Info` or of the SDR's reads read as an empty SEL or a
 /// failed read of the SEL: `Get SEL Info` timing out is `unreadable` naming it; the SDR's state
-/// timing out is logged, and the SEL is still read with its sensors named by number.
+/// timing out leaves the SEL read, its sensors named by number.
 #[test]
 fn transport_failures_of_sel_info_and_the_sdr_say_what_failed() {
     struct Failing(Arc<FakeBmc>, BmcRequest);
@@ -90,14 +90,14 @@ fn transport_failures_of_sel_info_and_the_sdr_say_what_failed() {
     }
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let rig = Rig::new("sel-transport", &bmc, INCIDENT_BOOT);
-    let reader = |fails: BmcRequest| {
-        SelReader::new(
+    let read = |fails: BmcRequest| {
+        let mut reader = SelReader::new(
             Arc::new(Failing(Arc::clone(&bmc), fails)),
-            Arc::clone(&rig.keeper),
-            rig.log.clone(),
-        )
+            rig.dir.path().join("proc-stat"),
+        );
+        crate::hardware_sources::poll(&mut reader, &rig.keeper, &At(INCIDENT_READ));
     };
-    reader(BmcRequest::SelInfo).poll(INCIDENT_READ);
+    read(BmcRequest::SelInfo);
     assert_eq!(
         rig.state(),
         (
@@ -106,15 +106,9 @@ fn transport_failures_of_sel_info_and_the_sdr_say_what_failed() {
         )
     );
     assert!(rig.held().is_empty());
-    reader(BmcRequest::SdrInfo).poll(INCIDENT_READ);
+    read(BmcRequest::SdrInfo);
     assert_eq!(rig.state(), (pb::SourceStatus::Ok, String::new()));
     assert_eq!(rig.held()[0].subject, "Memory #0x53");
-    assert!(
-        rig.log.lines().contains(
-            &"error: the BMC's sensor records are not read: Get SDR Repository Info: timed out"
-                .to_owned()
-        )
-    );
 }
 
 /// Catches an erased SEL whose ids start again read as nothing new (its last id read still
@@ -125,7 +119,7 @@ fn transport_failures_of_sel_info_and_the_sdr_say_what_failed() {
 fn an_erased_sel_is_read_again_from_its_first_entry() {
     let bmc = FakeBmc::holding(KINDS_SEL, KINDS_ERASED);
     let mut rig = Rig::new("sel-erased", &bmc, KINDS_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     rig.take_held();
     assert!(!rig.mark().open.is_empty());
     let kinds = fixture(KINDS_SEL);
@@ -137,15 +131,12 @@ fn an_erased_sel_is_read_again_from_its_first_entry() {
         b.erased = KINDS_ERASED + 100;
         b.added = KINDS_ERASED + 101;
     });
-    rig.reader.poll(INCIDENT_READ + 60);
+    rig.poll(INCIDENT_READ + 60);
     let held = rig.held();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].event_id, format!("sel:0014@{}", KINDS_ERASED + 100));
     assert_eq!(held[0].about, "");
     assert!(rig.mark().open.is_empty());
-    assert!(rig.log.lines().contains(
-        &"the BMC's event log was erased; it is read again from its first entry".to_owned()
-    ));
 
     // Erased again with the same erase time but fewer entries (a BMC whose erase time does not
     // move): read from the first again.
@@ -155,7 +146,7 @@ fn an_erased_sel_is_read_again_from_its_first_entry() {
         b.added += 1;
     });
     bmc.asked();
-    rig.reader.poll(INCIDENT_READ + 120);
+    rig.poll(INCIDENT_READ + 120);
     assert_eq!(bmc.asked(), [BmcRequest::DeviceId, BmcRequest::SelInfo]);
     assert_eq!(rig.mark().last_id, None);
     assert_eq!(rig.mark().entries, 0);
@@ -177,7 +168,7 @@ fn corrected_errors_are_counted_until_their_hour_is_over() {
     let bmc = FakeBmc::holding("", KINDS_ERASED);
     bmc.with(|b| b.sel = vec![corrected(1, KINDS_T), corrected(2, KINDS_T + 60)]);
     let mut rig = Rig::new("sel-corrected", &bmc, KINDS_BOOT);
-    rig.reader.poll(KINDS_T + 120);
+    rig.poll(KINDS_T + 120);
     assert!(rig.held().is_empty());
     assert_eq!(
         rig.mark().corrected.values().map(|b| b.count).sum::<u64>(),
@@ -189,7 +180,7 @@ fn corrected_errors_are_counted_until_their_hour_is_over() {
         b.sel.push(corrected(3, KINDS_T + 600));
         b.added += 1;
     });
-    rig.reader.poll(KINDS_T + 700);
+    rig.poll(KINDS_T + 700);
     assert!(rig.held().is_empty());
 
     // One of the next hour: the first hour's three are held, the next hour's one is open.
@@ -197,7 +188,7 @@ fn corrected_errors_are_counted_until_their_hour_is_over() {
         b.sel.push(corrected(4, KINDS_T + 3600));
         b.added += 1;
     });
-    rig.reader.poll(KINDS_T + 3610);
+    rig.poll(KINDS_T + 3610);
     let held = rig.take_held();
     assert_eq!(held.len(), 1);
     assert_eq!(
@@ -208,7 +199,7 @@ fn corrected_errors_are_counted_until_their_hour_is_over() {
     assert_eq!(held[0].raw.get(..4), Some("0003"));
 
     // The SEL unchanged, the next hour over: its one is held, in the singular.
-    rig.reader.poll(KINDS_T + 7200);
+    rig.poll(KINDS_T + 7200);
     let held = rig.take_held();
     assert_eq!(held.len(), 1);
     assert_eq!(
@@ -221,13 +212,13 @@ fn corrected_errors_are_counted_until_their_hour_is_over() {
         b.sel.push(corrected(5, KINDS_T + 7300));
         b.added += 1;
     });
-    rig.reader.poll(KINDS_T + 7400);
+    rig.poll(KINDS_T + 7400);
     assert!(rig.held().is_empty());
     bmc.with(|b| {
         b.sel.clear();
         b.erased += 1;
     });
-    rig.reader.poll(KINDS_T + 7500);
+    rig.poll(KINDS_T + 7500);
     let held = rig.held();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].event_id, format!("sel:0005@{KINDS_ERASED}"));
@@ -243,7 +234,7 @@ fn a_host_with_no_bmc_device_is_bmc_missing_until_one_answers() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     bmc.with(|b| b.down = Some(io::ErrorKind::NotFound));
     let mut rig = Rig::new("sel-no-device", &bmc, INCIDENT_BOOT);
-    assert_eq!(rig.reader.poll(1_795_700_000), 120);
+    assert_eq!(rig.poll(1_795_700_000), 120);
     assert_eq!(
         rig.state(),
         (
@@ -252,7 +243,7 @@ fn a_host_with_no_bmc_device_is_bmc_missing_until_one_answers() {
         )
     );
     assert!(rig.held().is_empty());
-    assert_eq!(rig.reader.poll(1_795_700_120), 240);
+    assert_eq!(rig.poll(1_795_700_120), 240);
     let missing = pb::HardwareEvent {
         event_id: "bmc_missing@1795700120".to_owned(),
         time_unix: 1_795_700_120,
@@ -268,17 +259,12 @@ fn a_host_with_no_bmc_device_is_bmc_missing_until_one_answers() {
         about: String::new(),
     };
     assert_eq!(rig.take_held(), [missing]);
-    assert_eq!(rig.reader.poll(1_795_700_360), 300);
-    assert_eq!(rig.reader.poll(1_795_700_660), 300);
+    assert_eq!(rig.poll(1_795_700_360), 300);
+    assert_eq!(rig.poll(1_795_700_660), 300);
     assert!(rig.held().is_empty());
-    assert_eq!(
-        rig.log.lines(),
-        ["error: the BMC's event log is unsupported: /dev/ipmi0 is absent"],
-        "a state is logged when it changes, not at every read"
-    );
 
     bmc.with(|b| b.down = None);
-    assert_eq!(rig.reader.poll(1_795_700_960), POLL_SECS);
+    assert_eq!(rig.poll(1_795_700_960), POLL_SECS);
     let held = rig.held();
     assert_eq!(
         held.len(),
@@ -313,7 +299,7 @@ fn a_bmc_that_does_not_answer_is_bmc_missing() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     bmc.with(|b| b.down = Some(io::ErrorKind::TimedOut));
     let mut rig = Rig::new("sel-silent", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(1_795_700_000);
+    rig.poll(1_795_700_000);
     assert_eq!(
         rig.state(),
         (
@@ -325,7 +311,7 @@ fn a_bmc_that_does_not_answer_is_bmc_missing() {
         b.down = None;
         b.answer.insert((0x06, 0x01), Vec::new());
     });
-    rig.reader.poll(1_795_700_120);
+    rig.poll(1_795_700_120);
     let held = rig.held();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].code, "bmc_missing");
@@ -344,7 +330,7 @@ fn a_daemon_that_may_not_open_the_device_raises_nothing() {
     bmc.with(|b| b.down = Some(io::ErrorKind::PermissionDenied));
     let mut rig = Rig::new("sel-denied", &bmc, INCIDENT_BOOT);
     for at in 0..3 {
-        rig.reader.poll(1_795_700_000 + at * 300);
+        rig.poll(1_795_700_000 + at * 300);
     }
     assert_eq!(
         rig.state(),
@@ -354,7 +340,7 @@ fn a_daemon_that_may_not_open_the_device_raises_nothing() {
         )
     );
     assert!(rig.held().is_empty());
-    assert_eq!(rig.keeper.mark(BMC_MARK), None);
+    assert_eq!(rig.keeper.mark(SOURCE), None);
 }
 
 /// Catches a refusal or a short answer read as an empty SEL, or a failed read that keeps what it
@@ -370,8 +356,8 @@ fn refusals_and_short_answers_are_unreadable_with_their_reason() {
     bmc.with(|b| {
         b.refuse.insert((0x06, 0x01), 0xc1);
     });
-    rig.reader.poll(1_795_700_000);
-    rig.reader.poll(1_795_700_120);
+    rig.poll(1_795_700_000);
+    rig.poll(1_795_700_120);
     assert_eq!(
         rig.state(),
         unreadable("the BMC refused Get Device ID (0xc1)")
@@ -382,7 +368,7 @@ fn refusals_and_short_answers_are_unreadable_with_their_reason() {
         b.refuse.clear();
         b.refuse.insert((0x0A, 0x40), 0xd5);
     });
-    rig.reader.poll(1_795_700_240);
+    rig.poll(1_795_700_240);
     assert_eq!(
         rig.state(),
         unreadable("the BMC refused Get SEL Info (0xd5)")
@@ -392,7 +378,7 @@ fn refusals_and_short_answers_are_unreadable_with_their_reason() {
         b.refuse.clear();
         b.answer.insert((0x0A, 0x40), vec![0, 0x51, 4, 0]);
     });
-    rig.reader.poll(1_795_700_360);
+    rig.poll(1_795_700_360);
     assert_eq!(rig.state(), unreadable("a short answer to Get SEL Info"));
 
     bmc.with(|b| {
@@ -400,7 +386,7 @@ fn refusals_and_short_answers_are_unreadable_with_their_reason() {
         b.refuse_entry.insert(0x01a4, 0xc5);
     });
     assert_eq!(
-        rig.reader.poll(1_795_700_480),
+        rig.poll(1_795_700_480),
         MAX_WAIT_SECS,
         "the fifth failure in a row"
     );
@@ -420,7 +406,7 @@ fn refusals_and_short_answers_are_unreadable_with_their_reason() {
         b.refuse_entry.clear();
         b.answer.insert((0x0A, 0x43), vec![0, 0xa5]);
     });
-    rig.reader.poll(1_795_700_600);
+    rig.poll(1_795_700_600);
     assert_eq!(
         rig.state(),
         unreadable("a short answer to Get SEL Entry 0x01a3")
@@ -430,10 +416,10 @@ fn refusals_and_short_answers_are_unreadable_with_their_reason() {
         b.answer.clear();
         b.down = Some(io::ErrorKind::BrokenPipe);
     });
-    rig.reader.poll(1_795_700_720);
-    rig.reader.poll(1_795_700_840);
+    rig.poll(1_795_700_720);
+    rig.poll(1_795_700_840);
     bmc.with(|b| b.down = None);
-    rig.reader.poll(1_795_700_960);
+    rig.poll(1_795_700_960);
     let held = rig.take_held();
     assert_eq!(
         held.iter().map(|e| e.code.as_str()).collect::<Vec<_>>(),
@@ -463,15 +449,14 @@ fn a_failure_asking_the_last_entry_is_unreadable() {
     }
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let mut rig = Rig::new("sel-last-fails", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     rig.take_held();
     bmc.with(|b| b.added += 1);
     let mut failing = SelReader::new(
         Arc::new(Failing(Arc::clone(&bmc))),
-        Arc::clone(&rig.keeper),
-        rig.log.clone(),
+        rig.dir.path().join("proc-stat"),
     );
-    failing.poll(INCIDENT_READ + 60);
+    crate::hardware_sources::poll(&mut failing, &rig.keeper, &At(INCIDENT_READ + 60));
     assert_eq!(
         rig.state(),
         (
@@ -490,7 +475,7 @@ fn a_failure_asking_the_last_entry_is_unreadable() {
 fn entries_gone_are_read_from_the_first() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let mut rig = Rig::new("sel-gone", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     rig.take_held();
     // The last entry deleted by another tool, and one added.
     bmc.with(|b| {
@@ -501,7 +486,7 @@ fn entries_gone_are_read_from_the_first() {
         b.added += 1;
         b.refuse_entry.insert(0x01a3, NOT_PRESENT);
     });
-    rig.reader.poll(INCIDENT_READ + 60);
+    rig.poll(INCIDENT_READ + 60);
     assert_eq!(
         (rig.mark().last_id, rig.mark().added),
         (Some(0x01a2), INCIDENT_ERASED + 1),
@@ -510,7 +495,7 @@ fn entries_gone_are_read_from_the_first() {
     bmc.with(|b| {
         b.refuse_entry.clear();
     });
-    rig.reader.poll(INCIDENT_READ + 120);
+    rig.poll(INCIDENT_READ + 120);
     assert_eq!(rig.mark().last_id, Some(0x01a6));
     assert_eq!(rig.mark().entries, 4);
     let codes: Vec<String> = rig.held().into_iter().map(|e| e.event_id).collect();
@@ -521,23 +506,19 @@ fn entries_gone_are_read_from_the_first() {
 }
 
 /// Catches an entry that is not 16 bytes decoded from what it has, or ending the read: it is
-/// logged and passed over, and the entries after it are read.
+/// passed over, and the entries after it are read.
 #[test]
 fn an_entry_of_the_wrong_length_is_passed_over() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     bmc.with(|b| b.sel.insert(1, vec![0x07, 0x00, 0x02, 0x00]));
     let mut rig = Rig::new("sel-short-entry", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     assert_eq!(rig.held().len(), 3);
-    assert!(rig.log.lines().contains(
-        &"error: the BMC's event log entry 0x0007 is 4 bytes, not 16; it is passed over".to_owned()
-    ));
     assert_eq!(rig.mark().last_id, Some(0x01a5));
 }
 
 /// Catches an SDR that cannot be read failing the SEL's read, or an SDR read cut short replacing
-/// the names of a whole one: the SEL is read and its sensors named by type and number, the
-/// failure logged; a short or refused record ends the SDR's read, which is read again at the
+/// the names of a whole one: the SEL is read and its sensors named by type and number; a short or refused record ends the SDR's read, which is read again at the
 /// next change of the SEL; an SDR whose state is unchanged is not read again.
 #[test]
 fn an_sdr_that_cannot_be_read_names_sensors_by_number() {
@@ -546,7 +527,7 @@ fn an_sdr_that_cannot_be_read_names_sensors_by_number() {
         b.refuse.insert((0x0A, 0x20), 0xc1);
     });
     let mut rig = Rig::new("sel-no-sdr", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     let held = rig.take_held();
     assert_eq!(held[0].subject, "Memory #0x53");
     assert_eq!(
@@ -554,10 +535,6 @@ fn an_sdr_that_cannot_be_read_names_sensors_by_number() {
         "01a4 | 11/26/2026 | 03:00:12 | Memory #0x53 | Uncorrectable ECC | Asserted"
     );
     assert_eq!(rig.state(), (pb::SourceStatus::Ok, String::new()));
-    assert!(rig.log.lines().contains(
-        &"error: the BMC's sensor records are not read: the BMC refused Get SDR Repository Info (0xc1)"
-            .to_owned()
-    ));
 
     let add = |rig: &mut Rig, at: u64| {
         bmc.with(|b| {
@@ -567,7 +544,7 @@ fn an_sdr_that_cannot_be_read_names_sensors_by_number() {
             b.sel.push(entry);
             b.added += 1;
         });
-        rig.reader.poll(INCIDENT_READ + at);
+        rig.poll(INCIDENT_READ + at);
         rig.take_held()
     };
 
@@ -577,12 +554,6 @@ fn an_sdr_that_cannot_be_read_names_sensors_by_number() {
         b.refuse_sdr.insert(0x0003, 0xc5);
     });
     assert_eq!(add(&mut rig, 60)[0].subject, "DIMM D1");
-    assert!(
-        rig.log.lines().contains(
-            &"error: the BMC's sensor record 0x0003 is not read: the BMC refused Get SDR (0xc5)"
-                .to_owned()
-        )
-    );
 
     // Read whole, then not again while its state is unchanged.
     bmc.with(|b| b.refuse_sdr.clear());
@@ -636,7 +607,7 @@ fn reads_are_bounded() {
         b.sel = sel;
     });
     let mut rig = Rig::new("sel-bounded", &bmc, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     let asked = bmc.asked();
     let count = |sdr: bool| {
         asked
@@ -657,7 +628,7 @@ fn reads_are_bounded() {
         Some(u16::try_from(MAX_WALK).expect("an id"))
     );
     assert_eq!(rig.mark().entries, 0);
-    rig.reader.poll(INCIDENT_READ + 60);
+    rig.poll(INCIDENT_READ + 60);
     assert_eq!(
         rig.mark().entries,
         u16::try_from(MAX_WALK + 1).expect("a count")
@@ -677,7 +648,7 @@ fn reads_are_bounded() {
     });
     let looping = Arc::new(looping);
     let mut rig = Rig::new("sel-looping", &looping, INCIDENT_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     assert_eq!(
         looping.asked().len(),
         5,
@@ -710,7 +681,7 @@ fn open_conditions_are_bounded() {
         });
     });
     let mut rig = Rig::new("sel-open-bound", &bmc, KINDS_BOOT);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     let open = rig.mark().open;
     assert_eq!(open.len(), MAX_OPEN);
     assert!(
@@ -726,27 +697,39 @@ fn open_conditions_are_bounded() {
 
 /// Catches the first read on a host that had no BMC at first consuming the SEL's first read, so
 /// an old SEL read later would raise as news: the SEL's entries older than seven days, read at
-/// the first read that reaches the BMC, are history.
+/// the first read that reaches the BMC, are history, and a recent one is not.
 #[test]
 fn an_old_sel_first_read_after_a_missing_bmc_is_history() {
     let bmc = FakeBmc::holding(KINDS_SEL, KINDS_ERASED);
-    bmc.with(|b| b.down = Some(io::ErrorKind::NotFound));
     let later = KINDS_T + 30 * 24 * 3600;
+    bmc.with(|b| {
+        b.down = Some(io::ErrorKind::NotFound);
+        let mut recent = fixture(INCIDENT_SEL)[2].clone();
+        recent[0..2].copy_from_slice(&0x0300_u16.to_le_bytes());
+        recent[3..7].copy_from_slice(&u32::try_from(later + 100).expect("a time").to_le_bytes());
+        b.sel.push(recent);
+    });
     let mut rig = Rig::new("sel-history", &bmc, later - 60);
-    rig.reader.poll(later);
-    rig.reader.poll(later + 120);
+    rig.poll(later);
+    rig.poll(later + 120);
     assert_eq!(rig.take_held().len(), 1, "bmc_missing");
     bmc.with(|b| b.down = None);
-    rig.reader.poll(later + 360);
+    rig.poll(later + 360);
     let held = rig.held();
     let sel: Vec<&pb::HardwareEvent> = held
         .iter()
         .filter(|e| e.code != "bmc_missing" && e.time_unix != 0)
         .collect();
-    assert!(!sel.is_empty());
+    assert!(sel.len() > 1);
     for event in sel {
-        assert_eq!(event.severity(), Sv::Info, "{event:?}");
-        assert!(event.message.starts_with(HISTORY_PREFIX), "{event:?}");
+        let old = event.time_unix + HISTORY_SECS < later + 360;
+        assert_eq!(event.message.starts_with(HISTORY_PREFIX), old, "{event:?}");
+        if old {
+            assert_eq!(event.severity(), Sv::Info, "{event:?}");
+        } else {
+            assert_eq!(event.code, "memory_uncorrectable");
+            assert_eq!(event.severity(), Sv::Critical);
+        }
     }
 }
 
@@ -755,7 +738,7 @@ fn an_old_sel_first_read_after_a_missing_bmc_is_history() {
 fn a_boot_not_known_marks_nothing_as_before_it() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let mut rig = Rig::new("sel-no-boot", &bmc, 0);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     assert!(rig.held().iter().all(|e| !e.of_previous_boot));
 }
 
@@ -767,81 +750,24 @@ fn a_corrupt_mark_reads_the_sel_from_its_first_entry() {
     let mut rig = Rig::new("sel-corrupt-mark", &bmc, INCIDENT_BOOT);
     rig.keeper
         .record(SOURCE, "{not json", Vec::new(), INCIDENT_READ);
-    rig.keeper
-        .record(BMC_MARK, "{not json", Vec::new(), INCIDENT_READ);
-    rig.reader.poll(INCIDENT_READ);
+    rig.poll(INCIDENT_READ);
     assert_eq!(rig.held().len(), 3);
     assert_eq!(rig.mark().last_id, Some(0x01a5));
 }
 
-/// Catches the reader's loop ending before its sleeper says stop, or waiting another time than the
-/// read says: three reads, each followed by the wait it gave.
+/// Catches the worker's loop ending before its sleeper says stop, or waiting another time than
+/// the read says: three reads through the daemon's worker, each followed by the wait it gave.
 #[test]
 fn the_reader_reads_at_each_wait_until_stopped() {
-    struct At(u64);
-    impl UnixClock for At {
-        fn unix_secs(&self) -> u64 {
-            self.0
-        }
-    }
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
-    let rig = Rig::new("sel-run", &bmc, INCIDENT_BOOT);
+    let mut rig = Rig::new("sel-run", &bmc, INCIDENT_BOOT);
     let sleeper = ScriptedSleeper::new(2);
-    rig.reader.run(&At(INCIDENT_READ), &sleeper);
+    crate::hardware_sources::run(&mut rig.reader, &rig.keeper, &At(INCIDENT_READ), &sleeper);
     assert_eq!(sleeper.waits(), [POLL_SECS, POLL_SECS, POLL_SECS]);
     let asked = bmc.asked();
     assert_eq!(
         asked.iter().filter(|r| **r == BmcRequest::DeviceId).count(),
         3
     );
-}
-
-/// Catches a reader started on a Mac (no BMC), with no keeper, or not on a Linux host under
-/// systemd or OpenRC: on each Linux kind it runs on its own thread until its sleeper stops it.
-#[test]
-fn a_reader_starts_on_linux_hosts_only() {
-    struct At(u64);
-    impl UnixClock for At {
-        fn unix_secs(&self) -> u64 {
-            self.0
-        }
-    }
-    let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
-    let rig = Rig::new("sel-start", &bmc, INCIDENT_BOOT);
-    let log: Arc<dyn Log> = rig.log.clone();
-    let begin = |kind: PlatformKind, keeper: Option<Arc<HealthKeeper>>| {
-        start(
-            kind,
-            bmc.clone(),
-            keeper,
-            Arc::new(At(INCIDENT_READ)),
-            Box::new(ScriptedSleeper::new(0)),
-            Arc::clone(&log),
-        )
-    };
-    assert!(begin(PlatformKind::Macos, Some(Arc::clone(&rig.keeper))).is_none());
-    assert!(begin(PlatformKind::Linux, None).is_none());
-    for kind in [PlatformKind::Linux, PlatformKind::Openrc] {
-        begin(kind, Some(Arc::clone(&rig.keeper)))
-            .expect("a reader")
-            .join()
-            .expect("the reader's end");
-    }
-    assert_eq!(
-        bmc.asked()
-            .iter()
-            .filter(|r| **r == BmcRequest::DeviceId)
-            .count(),
-        2
-    );
-    assert!(
-        at_host_start(
-            PlatformKind::Macos,
-            Some(Arc::clone(&rig.keeper)),
-            crate::testing::FakeClock::new(),
-            StopFlag::default(),
-            Arc::clone(&log),
-        )
-        .is_none()
-    );
+    assert_eq!(rig.reader.name(), "sel");
 }

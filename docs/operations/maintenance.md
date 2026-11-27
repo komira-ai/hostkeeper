@@ -545,7 +545,9 @@ an update account, keep FileVault off, and keep device management away from soft
 The design is [maintenance-updates.md](../design/maintenance-updates.md), sections 2, 5.5 and 5.8;
 the daemon's side is in [macos.md](../macos.md) (Maintenance facts). None of the Mac path has run on
 a farm Mac yet: its proof is [mac-proof.md](mac-proof.md), and its results go into the design's
-section 10. Read [Not built yet](#not-built-yet) before the first Mac run.
+section 10. Read [Not built yet](#not-built-yet) before the first Mac run. The farm Macs' standing
+policy, their schedule and their first macOS update through a run are
+[maintenance-first-mac-run.md](maintenance-first-mac-run.md).
 
 ### What is due on a Mac
 

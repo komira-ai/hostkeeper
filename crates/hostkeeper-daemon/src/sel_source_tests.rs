@@ -15,12 +15,13 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use hostkeeper_link::HostHealthSource;
+use hostkeeper_link::UnixClock;
 use hostkeeper_link::testing::{RecordingLog, ScriptedSleeper};
 use hostkeeper_testkit::Scratch;
 
 use super::*;
 use crate::health_state::{self, Read};
-use crate::host_health::BootFacts;
+use crate::host_health::{BootFacts, HealthKeeper};
 use crate::shutdown_probe::{GoingDown, ShutdownProbe};
 
 const INCIDENT_SEL: &str = include_str!("../tests/fixtures/sel/incident.sel");
@@ -185,11 +186,20 @@ fn scratch(name: &str) -> Scratch {
     Scratch::under(&target.join("tmp"), name).expect("a scratch directory")
 }
 
-/// A reader of `bmc` and its keeper over `dir`, in the boot begun at `boot_unix`.
+/// A clock at one second.
+struct At(u64);
+
+impl UnixClock for At {
+    fn unix_secs(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A reader of `bmc` and its keeper over `dir`, in the boot begun at `boot_unix` (0: a boot
+/// whose `/proc/stat` cannot be read).
 struct Rig {
     reader: SelReader,
     keeper: Arc<HealthKeeper>,
-    log: Arc<RecordingLog>,
     dir: Scratch,
 }
 
@@ -205,15 +215,25 @@ impl Rig {
                 machine_id: "m-1".to_owned(),
             },
             Box::new(Running),
-            log.clone(),
+            log,
         ));
-        let reader = SelReader::new(bmc.clone(), Arc::clone(&keeper), log.clone());
+        let stat = dir.path().join("proc-stat");
+        if boot_unix != 0 {
+            std::fs::write(&stat, format!("cpu  1 2 3\nbtime {boot_unix}\n")).expect("a stat");
+        }
+        let reader = SelReader::new(bmc.clone(), stat);
         Rig {
             reader,
             keeper,
-            log,
             dir,
         }
+    }
+
+    /// One read at `now`, as the daemon's worker makes it ([`crate::hardware_sources::poll`]):
+    /// the seconds the worker waits before the next.
+    fn poll(&mut self, now: u64) -> u64 {
+        crate::hardware_sources::poll(&mut self.reader, &self.keeper, &At(now));
+        self.reader.every_secs()
     }
 
     /// Every record held, in the order held.

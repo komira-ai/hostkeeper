@@ -15,7 +15,7 @@ use super::*;
 fn the_incident_entry_gives_the_record_of_section_2_2_byte_for_byte() {
     let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
     let mut rig = Rig::new("sel-incident", &bmc, INCIDENT_BOOT);
-    assert_eq!(rig.reader.poll(INCIDENT_READ), POLL_SECS);
+    assert_eq!(rig.poll(INCIDENT_READ), POLL_SECS);
     let held = rig.held();
     #[rustfmt::skip]
     let expected = [
@@ -40,7 +40,6 @@ fn the_incident_entry_gives_the_record_of_section_2_2_byte_for_byte() {
     ];
     assert_eq!(held, expected);
     assert_eq!(rig.state(), (pb::SourceStatus::Ok, String::new()));
-    assert_eq!(rig.log.lines(), ["the BMC's event log is read"]);
     assert_eq!(
         rig.keeper.health().events[0],
         held[0],
@@ -63,7 +62,7 @@ fn the_incident_entry_gives_the_record_of_section_2_2_byte_for_byte() {
 fn each_kind_of_entry_is_normalized_whole() {
     let bmc = FakeBmc::holding(KINDS_SEL, KINDS_ERASED);
     let mut rig = Rig::new("sel-kinds", &bmc, KINDS_BOOT);
-    assert_eq!(rig.reader.poll(INCIDENT_READ), POLL_SECS);
+    assert_eq!(rig.poll(INCIDENT_READ), POLL_SECS);
     let at = |s: u64| KINDS_T + s;
     let id = |n: u16| format!("sel:{n:04x}@{KINDS_ERASED}");
     let l = |n: u16, s: u64, rest: &str| format!("{n:04x} | 11/25/2026 | 10:00:{s:02} | {rest}");
