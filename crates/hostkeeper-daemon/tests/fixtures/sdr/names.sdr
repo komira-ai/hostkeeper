@@ -1,0 +1,14 @@
+# 0x0001: full sensor record, Temperature #0x30 "CPU1 Temp"
+01 00 51 01 34 20 00 30 03 01 00 00 01 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c9 43 50 55 31 20 54 65 6d 70
+# 0x0002: compact sensor record, Memory #0x53 "DIMM_D1"
+02 00 51 02 22 20 00 53 20 01 00 00 0c 6f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c7 44 49 4d 4d 5f 44 31
+# 0x0003: compact sensor record, Processor #0x31 "CPU1 Status"
+03 00 51 02 26 20 00 31 20 01 00 00 07 6f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 cb 43 50 55 31 20 53 74 61 74 75 73
+# 0x0004: compact sensor record, Fan #0x41 "FAN3"
+04 00 51 02 1f 20 00 41 20 01 00 00 04 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 c4 46 41 4e 33
+# 0x0005: event-only record, Power Supply #0x62 "PSU2 Status"
+05 00 51 03 17 20 00 62 0a 02 08 6f 00 00 00 00 cb 50 53 55 32 20 53 74 61 74 75 73
+# 0x0006: management controller locator "BMC": names no sensor
+06 00 51 12 0d 20 00 00 00 00 00 00 00 00 c3 42 4d 43
+# 0x0007: compact sensor record, Memory #0x54, its name in Unicode: not read
+07 00 51 02 22 20 00 54 20 01 00 00 0c 6f 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 07 44 49 4d 4d 5f 44 32
