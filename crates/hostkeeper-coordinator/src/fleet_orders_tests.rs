@@ -197,7 +197,8 @@ fn an_abandoned_or_retired_hosts_order_row_is_ended_by_the_next_decision() {
         service: "db".to_owned(),
         ..row("s1", 10)
     };
-    fleet.take_rows(&rows(vec![other_service]), now);
+    // Rows of another host, and of the same host for another service, keep no mark.
+    fleet.take_rows(&rows(vec![row("s9", 10), other_service]), now);
     fleet.take_rows(&rows(vec![row("s1", 10)]), now);
     assert!(
         fleet.is_ordered("web", &id("s1"), now),
