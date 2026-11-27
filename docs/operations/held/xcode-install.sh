@@ -236,7 +236,7 @@ ready() {
     if ! printf '%s' "$host" | jq -e --arg v "$VERSION" \
         --arg b "$BUILD" '[.host.maintenance.due[]? | select(.kind == "MAINTENANCE_KIND_XCODE"
             and .to == $v and .label == $b)] | length > 0' >/dev/null; then
-        say "$mac: not ready: Xcode $VERSION ($BUILD) is not due on it (its group's xcode_keep, or the store)"
+        say "$mac: not ready: Xcode $VERSION ($BUILD) is not due on it: its group's xcode_keep is 0 (xcode-keep.sh sets it), or the store"
         return 1
     fi
     free=$(printf '%s' "$host" | jq -r '.host.maintenance.mac.dataFreeBytes // "0"')
