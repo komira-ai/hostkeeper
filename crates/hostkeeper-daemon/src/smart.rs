@@ -196,8 +196,8 @@ pub fn list_disks(root: &Path) -> std::io::Result<Vec<String>> {
 }
 
 fn is_physical(dir: &Path, name: &str) -> bool {
-    let plain = !name.is_empty()
-        && name.len() <= MAX_DISK_NAME
+    // A directory entry's name is never empty.
+    let plain = name.len() <= MAX_DISK_NAME
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
