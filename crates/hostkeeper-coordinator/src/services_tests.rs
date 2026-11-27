@@ -352,6 +352,8 @@ fn a_host_updates_one_service_at_a_time() {
         "two's beat leaves one's order"
     );
     let later = NOW + ORDER_AGE;
+    // The host still heartbeats (service two), so the age frees its order of one.
+    f.record_in("two", id("h"), role("daemon"), beat("1.0"), later);
     assert_eq!(
         decide_in(&s, &w, "two", &f, &id("h"), later),
         update("2.0"),

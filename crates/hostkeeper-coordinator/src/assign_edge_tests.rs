@@ -21,7 +21,8 @@ use crate::rollback_tests::unwritable;
 use crate::testutil::{OPERATOR, version};
 
 /// Catches: a failed install that holds the role's slot for ever because the service it left
-/// `absent` never beats healthy, or an install order that holds it past its age: after either,
+/// `absent` never beats healthy, or an install order that holds it past its age while the host
+/// still heartbeats without reporting it: after either,
 /// another host of the role is ordered (the daemons update one at a time here: `max_updating`
 /// of 1 and one stage).
 #[tokio::test]
@@ -46,6 +47,11 @@ async fn a_failed_or_unheard_install_frees_the_slot() {
     set_one_slot(&rig, WEB, "2.0", 1).await;
     assert_eq!(order_to(&rig, "d1", vec![]), Some(install("2.0", 1)));
     rig.at(2_119);
+    assert_eq!(
+        order_to(&rig, "d1", vec![]),
+        Some(install("2.0", 1)),
+        "told again, under its order"
+    );
     assert_eq!(
         told(&rig, "d2", vec![runs(WEB, "1.0")]).0,
         ServiceReply::Nothing

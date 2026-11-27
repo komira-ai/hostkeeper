@@ -14,9 +14,9 @@
 //! sources of a host of a kind, and [`start_host`] does so for the daemon, when it keeps a health
 //! state, each worker waiting on the daemon's clock until its stop flag is set: on Linux (systemd and OpenRC) SMART through `smartctl`
 //! ([`crate::smart`]), the hwmon temperatures ([`crate::hwmon`]), rasdaemon's database
-//! ([`crate::rasdaemon`]) and the kernel's log and files ([`crate::kernel_sources`]); on a Mac its
-//! panic reports, its capacity, its disk's SMART verdict and its thermal pressure
-//! ([`crate::mac_health`]).
+//! ([`crate::rasdaemon`]), the kernel's log and files ([`crate::kernel_sources`]) and the BMC's
+//! event log through the IPMI device ([`crate::sel_source`]); on a Mac its panic reports, its
+//! capacity, its disk's SMART verdict and its thermal pressure ([`crate::mac_health`]).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,10 +26,12 @@ use hostkeeper_link::{ClockSleeper, Dispatch, Sleeper, StopFlag, Tick, UnixClock
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 
-use crate::host_health::HealthKeeper;
+use crate::host_health::{HealthKeeper, PROC_STAT};
 use crate::hwmon::HwmonSource;
+use crate::ipmi::{DevIpmi, IPMI_DEVICE};
 use crate::kernel_sources::{self, KernelBoot};
 use crate::rasdaemon::RasdaemonSource;
+use crate::sel_source::SelReader;
 use crate::smart::{SMARTCTL, SMARTCTL_DEADLINE, SmartSource};
 
 /// What one read of a source came to.
@@ -143,8 +145,9 @@ pub fn start(
 
 /// The sources of a host of `kind` whose root is `root`, in the boot `boot`: on Linux SMART,
 /// through the `smartctl` at `smartctl` (absent: `unsupported`), the hwmon temperatures,
-/// rasdaemon's database, and the kernel's log and files ([`crate::kernel_sources::at_root`]); none
-/// on a Mac.
+/// rasdaemon's database, the kernel's log and files ([`crate::kernel_sources::at_root`]), and the
+/// BMC's event log through the IPMI device under `root` (absent: `unsupported`), in the boot whose
+/// start `root`'s [`PROC_STAT`] gives at its first read; none on a Mac.
 #[must_use]
 pub fn for_host(
     kind: PlatformKind,
@@ -164,6 +167,12 @@ pub fn for_host(
                 Box::new(RasdaemonSource::new(root)),
             ];
             sources.extend(kernel_sources::at_root(root, boot));
+            sources.push(Box::new(SelReader::new(
+                Arc::new(DevIpmi::new(
+                    &root.join(IPMI_DEVICE.trim_start_matches('/')),
+                )),
+                root.join(PROC_STAT),
+            )));
             sources
         }
         PlatformKind::Macos => Vec::new(),

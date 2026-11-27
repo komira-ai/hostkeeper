@@ -1,6 +1,7 @@
 //! What a host's daemon said it runs, kept with the host's enrollment: the daemon's name and
-//! version and each service with its version and installer, so the coordinator can answer for a
-//! host it has not heard from since it started ([`EnrollmentStore::note_running`]).
+//! version and each service with its version, its installer and the version it was updating it
+//! to, so the coordinator can answer for a host it has not heard from since it started
+//! ([`EnrollmentStore::note_running`]).
 
 use std::sync::PoisonError;
 
@@ -16,6 +17,9 @@ pub struct RunningService {
     pub version: String,
     /// The installer it runs with; empty when not known.
     pub installer: String,
+    /// The version the daemon said it was updating the service to; `None` when it was not
+    /// updating.
+    pub updating: Option<String>,
 }
 
 /// What a host's daemon said it runs: the daemon, and each service that is not absent, by
@@ -40,6 +44,7 @@ impl HostRunning {
                     service: s.service.clone(),
                     version: s.version.clone(),
                     installer: s.installer.clone(),
+                    updating: s.updating.clone(),
                 })
                 .collect(),
             at_unix,
@@ -75,6 +80,7 @@ impl HostRunning {
                     service: s.service.clone(),
                     version: s.version.clone(),
                     installer: s.installer.clone(),
+                    updating: s.updating.clone(),
                 })
                 .collect(),
         }
@@ -84,7 +90,8 @@ impl HostRunning {
 impl EnrollmentStore {
     /// The heartbeat path's report that a heartbeat of `host` it accepted at `now` said the host
     /// runs `running`. The host's record is written when `running` differs from what it holds
-    /// (the daemon or any service, its version or installer), with `now`; when only the time
+    /// (the daemon or any service, its version, installer or the version it was updating to),
+    /// with `now`; when only the time
     /// differs nothing is written, so the time the record keeps is that of the heartbeat that
     /// last changed it. An approval writes the host record without it, so a host approved again
     /// records its next heartbeat. A host id never approved has no record and nothing is

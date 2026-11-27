@@ -38,6 +38,7 @@ fn service(name: &str, version: &str, installer: &str) -> RunningService {
         service: name.to_owned(),
         version: version.to_owned(),
         installer: installer.to_owned(),
+        updating: None,
     }
 }
 
@@ -356,6 +357,7 @@ fn the_host_file_is_compatible_with_the_release_before_in_both_directions() {
                 service: "web".to_owned(),
                 version: "1.0".to_owned(),
                 installer: "deb".to_owned(),
+                updating: None,
             }],
             at_unix: NOW + 60,
             bmc: None,
@@ -365,5 +367,90 @@ fn the_host_file_is_compatible_with_the_release_before_in_both_directions() {
     let bytes = now.encode_to_vec();
     assert!(bytes.contains(&0x52), "field 10 is on the wire");
     let old = HostBefore::decode(bytes.as_slice()).expect("the release before reads it");
+    assert_eq!(old, before);
+}
+
+/// Catches: the version a service is being updated to dropped by the record (a restarted
+/// coordinator would then hold no update slot for it), kept in memory only (lost when the store
+/// is opened again), or a heartbeat that changes only `updating` (from `Some` to `None`, the
+/// update done) swallowed by the equal-record shortcut so the record keeps saying the host is
+/// still updating.
+#[test]
+fn the_version_a_service_is_updating_to_is_written_kept_and_cleared_when_it_alone_changes() {
+    let dir = scratch("running-updating");
+    let store = open(dir.path());
+    enroll(&store, &HostKey::new(), "m-1", "web-1", false);
+    let web = host_id("web-1");
+
+    let mut updating = runs("1.0", "deb");
+    updating.services[0].updating = Some("1.1".to_owned());
+    store
+        .note_running(&web, &updating, NOW + 10)
+        .expect("noted");
+    assert_eq!(
+        kept(&store, "web-1"),
+        (Some(updating.clone()), Some(NOW + 10))
+    );
+    let reopened = open(dir.path());
+    assert_eq!(
+        kept(&reopened, "web-1"),
+        (Some(updating.clone()), Some(NOW + 10)),
+        "kept by a reopened store"
+    );
+
+    store
+        .note_running(&web, &updating, NOW + 20)
+        .expect("noted");
+    assert_eq!(kept(&store, "web-1").1, Some(NOW + 10), "the time alone");
+
+    store
+        .note_running(&web, &runs("1.0", "deb"), NOW + 30)
+        .expect("noted");
+    assert_eq!(
+        kept(&store, "web-1"),
+        (Some(runs("1.0", "deb")), Some(NOW + 30)),
+        "only updating changed, and it is written"
+    );
+    assert_eq!(
+        kept(&open(dir.path()), "web-1"),
+        (Some(runs("1.0", "deb")), Some(NOW + 30))
+    );
+}
+
+/// The record of one service as the release before wrote it: no field 4.
+#[derive(Clone, PartialEq, prost::Message)]
+struct RunningServiceBefore {
+    #[prost(string, tag = "1")]
+    service: String,
+    #[prost(string, tag = "2")]
+    version: String,
+    #[prost(string, tag = "3")]
+    installer: String,
+}
+
+/// Catches: a service record of the release before read as updating, or one that this release
+/// writes refused by, or read changed by, a reader that does not know field 4 (prost keeps no
+/// unknown field, so what that reader knows is read intact and the update is dropped when it
+/// writes).
+#[test]
+fn the_running_service_record_is_compatible_with_the_release_before_in_both_directions() {
+    let before = RunningServiceBefore {
+        service: "web".to_owned(),
+        version: "1.0".to_owned(),
+        installer: "deb".to_owned(),
+    };
+    let read = pb::RunningService::decode(before.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(read.updating, None);
+    assert_eq!(read.version, "1.0");
+
+    let now = pb::RunningService {
+        service: "web".to_owned(),
+        version: "1.0".to_owned(),
+        installer: "deb".to_owned(),
+        updating: Some("1.1".to_owned()),
+    };
+    let bytes = now.encode_to_vec();
+    assert!(bytes.contains(&0x22), "field 4 is on the wire");
+    let old = RunningServiceBefore::decode(bytes.as_slice()).expect("the release before reads it");
     assert_eq!(old, before);
 }

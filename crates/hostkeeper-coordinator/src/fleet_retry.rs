@@ -25,7 +25,7 @@ use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, Heartbeat, Outcome, UpdateResult};
 
-use super::{Fleet, ORDER_AGE};
+use super::Fleet;
 
 #[path = "fleet_autoretry.rs"]
 pub(crate) mod auto;
@@ -79,7 +79,7 @@ impl Retries {
 }
 
 /// An order a host was given and has not answered: it has not said it is updating, reported a
-/// verdict of it or declined it, and the order has not aged out ([`ORDER_AGE`]).
+/// verdict of it or declined it, and the order is still outstanding ([`Fleet::is_ordered`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outstanding {
     /// The order's id: an uninstall's, or the update's or install's the coordinator named
@@ -178,14 +178,14 @@ impl Fleet {
     }
 
     /// The order of `service` the host `id` was given and has not answered at `now`, if one is
-    /// outstanding.
+    /// outstanding ([`Fleet::is_ordered`]).
     #[must_use]
     pub fn outstanding(&self, service: &str, id: &HostId, now: Duration) -> Option<Outstanding> {
         let key = (id.clone(), service.to_owned());
         let order = self
             .orders
             .get(&key)
-            .filter(|order| now.saturating_sub(order.at) < ORDER_AGE)?;
+            .filter(|order| self.order_holds(id, order, now))?;
         let named = self
             .retries
             .named

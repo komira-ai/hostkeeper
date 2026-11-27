@@ -237,8 +237,8 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   target changes it; `the_tree_digest_has_a_fixed_value` holds unchanged for a tree without links; `Staged::check`
   accepts a link inside `tree/`, refuses one elsewhere, and refuses a hook path or `place` source through a link.
 - **Built-in steps and uninstall (A6; `crates/hostkeeper-daemon/tests/builtin_steps.rs`, `uninstall.rs`).** `verify`
-  passes with every unit active and health 2xx, defers on a unit inactive or a non-2xx, and ends in `rollback` at the
-  deadline; `cutover` fails when a unit is not active within its bound; a service on built-in steps with no `uninstall`
+  passes with the run set live (one unit active) and health 2xx, defers on a set with no unit active or a non-2xx, and ends in `rollback` at the
+  deadline; `cutover` fails when no unit is active within its bound; a service on built-in steps with no `uninstall`
   bound is uninstalled; one with a hook program and no bound is `uninstall_unsupported`; an uninstall stopped after
   `hook_done` resumes and runs `remove` again; the previous binary started on an `uninstalling_installed` tombstone
   leaves the package and the records. A heartbeat names each installed service's installer, and none for a service of

@@ -11,9 +11,18 @@
 //! A host with no BMC has no device (or a device that does not answer): every question is then
 //! an `Err`, which the claims take as an absent BMC MAC, never as a failed enrollment. Only root
 //! can open the device; a daemon that is not root claims no BMC MAC either.
+//!
+//! The health look reads the BMC through the same device with [`BmcPort`]
+//! (docs/design/host-health-alerts.md section 4.5): `Get Device ID`, `Get SEL Info`,
+//! `Get SEL Entry`, `Get SDR Repository Info` and `Get SDR`, each with reservation 0, and nothing
+//! else. Those requests are one closed table, [`BmcRequest`], so `Reserve SEL` (which can cancel
+//! another tool's reservation), `Clear SEL` and `Delete SEL Entry` (which destroy evidence) cannot
+//! be sent. Every question of this module, the claims' and the health look's, is asked under one
+//! lock ([`DEVICE`]), one at a time.
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use hostkeeper_enroll::Ipmi;
@@ -34,6 +43,79 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The command `Get LAN Configuration Parameters` of the network function Transport (0x0C).
 const GET_LAN_CONFIGURATION_PARAMETERS: u8 = 0x02;
+
+/// The lock every question to the device is asked under, so the claims' reads of the BMC's
+/// address and the health look's reads of its event log never cross on the device.
+static DEVICE: Mutex<()> = Mutex::new(());
+
+/// The network function App (IPMI 2.0 section 5.1).
+pub const NETFN_APP: u8 = 0x06;
+
+/// The network function Storage (IPMI 2.0 section 5.1).
+pub const NETFN_STORAGE: u8 = 0x0A;
+
+/// What a whole record is read with in `Get SEL Entry` and `Get SDR`: offset 0 and "the whole
+/// record" (0xFF), which need no reservation, so the reservation id sent is 0.
+const WHOLE_RECORD: [u8; 2] = [0x00, 0xFF];
+
+/// Every request the health look may send the BMC (docs/design/host-health-alerts.md section
+/// 4.5). Each reads; none reserves, clears, deletes or sets anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BmcRequest {
+    /// `Get Device ID` (App, 0x01): whether a BMC answers at all.
+    DeviceId,
+    /// `Get SEL Info` (Storage, 0x40): the event log's count, last addition and last erase.
+    SelInfo,
+    /// `Get SEL Entry` (Storage, 0x43) of the record id, whole, reservation 0.
+    SelEntry(u16),
+    /// `Get SDR Repository Info` (Storage, 0x20): the sensor records' last addition and erase.
+    SdrInfo,
+    /// `Get SDR` (Storage, 0x23) of the record id, whole, reservation 0.
+    Sdr(u16),
+}
+
+impl BmcRequest {
+    /// Its network function and command.
+    #[must_use]
+    pub fn command(self) -> (u8, u8) {
+        match self {
+            BmcRequest::DeviceId => (NETFN_APP, 0x01),
+            BmcRequest::SelInfo => (NETFN_STORAGE, 0x40),
+            BmcRequest::SelEntry(_) => (NETFN_STORAGE, 0x43),
+            BmcRequest::SdrInfo => (NETFN_STORAGE, 0x20),
+            BmcRequest::Sdr(_) => (NETFN_STORAGE, 0x23),
+        }
+    }
+
+    /// Its request data: none, or reservation 0, the record id (least significant byte first),
+    /// offset 0 and the whole record.
+    #[must_use]
+    pub fn data(self) -> Vec<u8> {
+        match self {
+            BmcRequest::DeviceId | BmcRequest::SelInfo | BmcRequest::SdrInfo => Vec::new(),
+            BmcRequest::SelEntry(id) | BmcRequest::Sdr(id) => {
+                let [low, high] = id.to_le_bytes();
+                vec![0x00, 0x00, low, high, WHOLE_RECORD[0], WHOLE_RECORD[1]]
+            }
+        }
+    }
+
+    fn message(self) -> Message {
+        let (netfn, cmd) = self.command();
+        Message::new_request(NetFn::from(netfn), cmd, self.data())
+    }
+}
+
+/// The BMC as the health look asks it: one [`BmcRequest`], answered with the completion code,
+/// then the response data. `Err` when it cannot be asked: no device (`NotFound`), a daemon that
+/// may not open it (`PermissionDenied`), or no answer in time.
+pub trait BmcPort: Send + Sync {
+    /// The BMC's answer to `request`.
+    ///
+    /// # Errors
+    /// The device's own, as above.
+    fn ask(&self, request: BmcRequest) -> io::Result<Vec<u8>>;
+}
 
 /// The BMC behind the IPMI device at a path, opened afresh for each question.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,9 +146,30 @@ impl Ipmi for DevIpmi {
     /// when dropped; the answer is copied into the owned `Response`, so nothing of the device
     /// outlives the call.
     fn lan_parameter(&self, channel: u8, parameter: u8) -> io::Result<Vec<u8>> {
+        let _one = DEVICE.lock().unwrap_or_else(PoisonError::into_inner);
         File::new(&self.device, ANSWER_TIMEOUT)
             .and_then(|mut device| ask(&mut device, channel, parameter))
     }
+}
+
+impl BmcPort for DevIpmi {
+    /// The device is opened, asked and closed under the module's lock, as
+    /// [`Ipmi::lan_parameter`] is; an answer waits at most [`ANSWER_TIMEOUT`].
+    fn ask(&self, request: BmcRequest) -> io::Result<Vec<u8>> {
+        let _one = DEVICE.lock().unwrap_or_else(PoisonError::into_inner);
+        File::new(&self.device, ANSWER_TIMEOUT)
+            .and_then(|mut device| exchange(&mut device, request))
+    }
+}
+
+/// The answer of the BMC behind `connection` to `request`: the completion code, then the data.
+fn exchange(connection: &mut Connection, request: BmcRequest) -> io::Result<Vec<u8>> {
+    connection
+        .send_recv(&mut Request::new(
+            request.message(),
+            RequestTargetAddress::Bmc(LogicalUnit::Zero),
+        ))
+        .map(answer)
 }
 
 /// A connection to a BMC whose failures are I/O errors: the device's `File`, or a test's double.
@@ -101,128 +204,5 @@ fn answer(response: Response) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// What a request asked: network function, command, data, and whether it went to the BMC
-    /// itself on logical unit 0.
-    type Asked = (u8, u8, Vec<u8>, bool);
-
-    /// A BMC connection that keeps each request it is sent and answers with `reply`, or fails
-    /// with `reply`'s error.
-    struct Scripted {
-        reply: Option<Vec<u8>>,
-        asked: Vec<Asked>,
-    }
-
-    impl Scripted {
-        fn answering(raw: &[u8]) -> Scripted {
-            Scripted {
-                reply: Some(raw.to_vec()),
-                asked: Vec::new(),
-            }
-        }
-    }
-
-    impl IpmiConnection for Scripted {
-        type SendError = io::Error;
-        type RecvError = io::Error;
-        type Error = io::Error;
-
-        fn send(&mut self, request: &mut Request) -> io::Result<()> {
-            let to_bmc = matches!(
-                request.target(),
-                RequestTargetAddress::Bmc(LogicalUnit::Zero)
-            );
-            self.asked.push((
-                request.netfn_raw(),
-                request.cmd(),
-                request.data().to_vec(),
-                to_bmc,
-            ));
-            Ok(())
-        }
-
-        fn recv(&mut self) -> io::Result<Response> {
-            let raw = self
-                .reply
-                .clone()
-                .ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut))?;
-            Response::new(Message::new_raw(0x0D, 0x02, raw), 0)
-                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))
-        }
-
-        fn send_recv(&mut self, request: &mut Request) -> io::Result<Response> {
-            self.send(request)?;
-            self.recv()
-        }
-    }
-
-    /// Catches a reader whose exchange with the BMC never returns the BMC's answer (an adapter
-    /// that always fails), sends another request than `Get LAN Configuration Parameters` for the
-    /// channel and parameter asked, or returns the answer without its completion code: one
-    /// request, Transport (0x0C) command 0x02 with `[channel, parameter, 0, 0]` to the BMC, and
-    /// the answer returned byte for byte, completion code first.
-    #[test]
-    fn a_bmc_that_answers_gives_its_answer_byte_for_byte() {
-        let raw = [0x00, 0x11, 0x0c, 0xc4, 0x7a, 0x00, 0x00, 0x01];
-        let mut bmc = Scripted::answering(&raw);
-        assert_eq!(ask(&mut bmc, 2, 5).expect("an answer"), raw);
-        assert_eq!(bmc.asked, [(0x0C, 0x02, vec![2, 5, 0, 0], true)]);
-        assert_eq!(
-            hostkeeper_enroll::parse_lan_mac(&ask(&mut bmc, 2, 5).expect("again")).as_deref(),
-            Some("0c:c4:7a:00:00:01")
-        );
-        assert_eq!(bmc.asked.len(), 2, "each question is one request");
-    }
-
-    /// Catches a refusal turned into an error, or a BMC that answers nothing turned into an
-    /// empty answer: a refusal is its completion code alone, which claims no MAC, and no answer
-    /// is an error, after the request was sent.
-    #[test]
-    fn a_refusal_is_its_code_and_no_answer_is_an_error() {
-        let mut refusing = Scripted::answering(&[0xc1]);
-        let refused = ask(&mut refusing, 1, 5).expect("a refusal is an answer");
-        assert_eq!(refused, [0xc1]);
-        assert_eq!(hostkeeper_enroll::parse_lan_mac(&refused), None);
-
-        let mut silent = Scripted {
-            reply: None,
-            asked: Vec::new(),
-        };
-        let error = ask(&mut silent, 1, 5).expect_err("no answer");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert_eq!(silent.asked, [(0x0C, 0x02, vec![1, 5, 0, 0], true)]);
-
-        let mut empty = Scripted::answering(&[]);
-        let error = ask(&mut empty, 1, 5).expect_err("an empty answer");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    }
-
-    /// Catches the request sent to another network function or command than Transport's
-    /// `Get LAN Configuration Parameters`, to another target than the BMC, or with the channel
-    /// and the parameter swapped or a selector other than 0.
-    #[test]
-    fn the_request_is_get_lan_configuration_parameters_to_the_bmc() {
-        let request = lan_request(3, 5);
-        assert_eq!(request.netfn_raw(), 0x0C);
-        assert_eq!(request.cmd(), 0x02);
-        assert_eq!(request.data(), [3, 5, 0, 0]);
-        assert!(matches!(
-            request.target(),
-            RequestTargetAddress::Bmc(LogicalUnit::Zero)
-        ));
-    }
-
-    /// Catches the completion code dropped from the answer, or the data cut or reordered: the
-    /// port's answer is the completion code first, then every byte of the data.
-    #[test]
-    fn the_answer_is_the_completion_code_then_the_data() {
-        let raw = vec![0x00, 0x11, 0x0c, 0xc4, 0x7a, 0x00, 0x00, 0x01];
-        let response =
-            Response::new(Message::new_raw(0x0D, 0x02, raw.clone()), 0).expect("a response");
-        assert_eq!(answer(response), raw);
-        let refused = Response::new(Message::new_raw(0x0D, 0x02, vec![0xc1]), 0).expect("a code");
-        assert_eq!(answer(refused), [0xc1]);
-    }
-}
+#[path = "ipmi_tests.rs"]
+mod tests;

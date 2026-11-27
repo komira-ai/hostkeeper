@@ -24,6 +24,7 @@ fn runs(version: &str) -> HostRunning {
             service: "web".to_owned(),
             version: version.to_owned(),
             installer: "deb".to_owned(),
+            updating: None,
         }],
     }
 }

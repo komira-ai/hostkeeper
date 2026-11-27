@@ -358,6 +358,32 @@ impl Enrollment {
         }
     }
 
+    /// Forgets that `host` was updating `service`, in the record of what it runs: an operator
+    /// abandoned the host, so a restart holds no slot of it ([`crate::fleet::Fleet::hold_restored`]).
+    /// The record is written only when it changes ([`Self::note_running`]); a store that cannot be
+    /// read is logged.
+    pub fn forget_updating(&self, host: &hostkeeper_wire::HostId, service: &str) {
+        let kept = store_host(host).map(|id| self.store.enrolled_host(&id));
+        let running = match kept {
+            Some(Ok(enrolled)) => enrolled.and_then(|enrolled| enrolled.running),
+            Some(Err(why)) => {
+                tracing::warn!(%why, host_id = %host, "what a host runs was not read");
+                None
+            }
+            None => None,
+        };
+        if let Some(mut running) = running {
+            for one in running
+                .services
+                .iter_mut()
+                .filter(|one| one.service == service)
+            {
+                one.updating = None;
+            }
+            self.note_running(host, &running);
+        }
+    }
+
     /// Records that a heartbeat of `host` accepted now, by the enrollment's clock, reported the
     /// host's BMC `bmc`: it is kept with the host ([`EnrollmentStore::note_bmc`]) when it differs
     /// from the one the host record holds. A host the store never approved is not tracked; a

@@ -50,7 +50,7 @@ pub(crate) enum Why {
     /// ([`Host::is_promoting`]).
     PromotionPending,
     /// An order the coordinator sent a host is outstanding (it ages out after
-    /// [`crate::fleet::ORDER_AGE`]).
+    /// [`crate::fleet::ORDER_AGE`] while the host still heartbeats).
     Ordered,
     /// A host of the plan bakes the desired version after an update.
     Baking,
@@ -91,9 +91,10 @@ pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Dur
 /// In order, the first host by node id within each: a host whose last word is an update running
 /// or its promotion pending (a host taken off the service, or silent, mid-update included: the
 /// update may still run; but not one silent for [`crate::silent::SILENT_UPDATE_AFTER`] or more,
-/// which holds nothing by that word), a host with an order outstanding (one the fleet has no word of, or one
-/// it has; an order ages out after [`crate::fleet::ORDER_AGE`]), a host of the plan that bakes
-/// `want`'s version after an update the coordinator saw ([`is_baking`]), and a plan under way
+/// which holds nothing by that word), a host with an order outstanding (one the fleet has no word
+/// of, or one it has; an order ages out after [`crate::fleet::ORDER_AGE`] while its host still
+/// heartbeats), a host of the plan that bakes `want`'s version after an update the coordinator
+/// saw ([`is_baking`]), and a plan under way
 /// ([`crate::stages::View::under_way`]) that is neither halted nor at a version marked bad, nor
 /// held by its failed hosts ([`crate::stages::View::failed_holds`]), and has a host left that a rule before the plan's gate does not hold
 /// ([`crate::orderable::can_order`]). The pairs a standing force orders are left out; a held
