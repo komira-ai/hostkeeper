@@ -1,0 +1,8 @@
+Anonymous UUID:       00000000-0000-0000-0000-000000000000
+
+Mon Nov 16 09:00:00 2026
+
+*** Panic Report ***
+panic(cpu 0 caller 0xffffff8012345678): Kernel trap at 0xffffff8012345678, type 14=page fault, registers:
+CR0: 0x0000000080010033, CR2: 0x0000000000000000, CR3: 0x0000000012345000, CR4: 0x00000000003626e0
+Backtrace (CPU 0), Frame : Return Address

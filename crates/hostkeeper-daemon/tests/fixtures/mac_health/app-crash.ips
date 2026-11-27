@@ -1,0 +1,6 @@
+{"app_name":"cc1plus","timestamp":"2026-11-25 11:00:00.00 +0000","app_version":"","bug_type":"309","name":"cc1plus","os_version":"macOS 15.1 (24B83)","incident_id":"33333333-4444-5555-6666-777777777777"}
+{
+  "uptime" : 12345,
+  "procName" : "cc1plus",
+  "exception" : {"type":"EXC_BAD_ACCESS","signal":"SIGSEGV"}
+}

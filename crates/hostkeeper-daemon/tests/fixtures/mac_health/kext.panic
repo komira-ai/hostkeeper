@@ -1,0 +1,6 @@
+{"bug_type":"210","timestamp":"2026-11-24 10:00:00.00 +0000","os_version":"macOS 15.1 (24B83)","incident_id":"12345678-90AB-CDEF-1234-567890ABCDEF"}
+{
+  "incident" : "12345678-90AB-CDEF-1234-567890ABCDEF",
+  "panicString" : "panic(cpu 1 caller 0xfffffe0056789012): Kernel data abort. at pc 0xfffffe0011112222, lr 0xfffffe0011113333 (saved state: 0xfffffe60aaaabbbb)\n      x0:  0x0000000000000000 x1:  0x0000000000000001\n\nKernel Extensions in backtrace:\n         com.apple.iokit.IOPCIFamily(2.9)[11111111-2222-3333-4444-555555555555]@0xfffffe0010000000->0xfffffe0010100000\n         com.example.driver.netcard(1.4.2)[22222222-3333-4444-5555-666666666666]@0xfffffe0020000000->0xfffffe0020100000\n\nlast started kext at 123456: com.example.driver.netcard\t1.4.2\n",
+  "bug_type" : "210"
+}

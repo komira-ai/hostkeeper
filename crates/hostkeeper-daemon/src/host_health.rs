@@ -26,9 +26,21 @@
 //! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
+//! **Capacity and sources** ([`HealthKeeper::set_capacity`], [`HealthKeeper::set_source`]): the
+//! host's capacity as last read, and each source's state (read, unsupported or unreadable, with
+//! its reason), kept in memory only and sent in every heartbeat: each is read again at every start
+//! of the daemon. A source's state replaces the one it gave before; at most `MAX_SOURCES` are kept,
+//! the first sources to give one.
+//!
+//! **The boot before** ([`HealthKeeper::unclean_previous_boot`]): at the first start of a boot
+//! whose file was last written in another boot, with no clean-shutdown marker, that boot. A start
+//! with no file, a file moved aside, a file with no boot id, or a boot id that cannot be read has
+//! no boot before to judge: the first start on a host never reads as an unexpected restart.
+//!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -36,7 +48,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
-use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_MESSAGE};
+use hostkeeper_proto::health::{
+    MAX_BOOT_ID, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
+};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 
@@ -109,6 +123,15 @@ impl BootFacts {
     }
 }
 
+/// The boot before the one the daemon runs in, which ended with no clean-shutdown marker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviousBoot {
+    /// Its boot id.
+    pub boot_id: String,
+    /// When it began, Unix seconds; 0 when not read.
+    pub boot_unix: u64,
+}
+
 /// The daemon's hardware health: its state file in memory, written after every change.
 pub struct HealthKeeper {
     state_dir: PathBuf,
@@ -121,6 +144,12 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
+    /// The boot before, when this start is the first of a boot and that boot ended unclean.
+    unclean: Option<PreviousBoot>,
+    /// The host's capacity as last read; none before it is.
+    capacity: Option<pb::Baseline>,
+    /// Each source's state, by its token.
+    sources: BTreeMap<String, pb::SourceState>,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -155,6 +184,19 @@ impl HealthKeeper {
             }
         };
         let mut file = found.unwrap_or_default();
+        let unclean = match &boot.boot_id {
+            Some(id)
+                if *id != file.boot_id
+                    && !file.boot_id.is_empty()
+                    && file.marker != Marker::Clean =>
+            {
+                Some(PreviousBoot {
+                    boot_id: file.boot_id.clone(),
+                    boot_unix: file.boot_unix,
+                })
+            }
+            _ => None,
+        };
         file.previous_clean = match &boot.boot_id {
             None => false,
             Some(id) if *id == file.boot_id => file.previous_clean,
@@ -175,6 +217,9 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
+                unclean,
+                capacity: None,
+                sources: BTreeMap::new(),
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -254,6 +299,52 @@ impl HealthKeeper {
             .map(|mark| mark.mark.clone())
     }
 
+    /// The boot before this one, when this start is the first of its boot and the boot before
+    /// ended with no clean-shutdown marker (the module's doc); none otherwise.
+    #[must_use]
+    pub fn unclean_previous_boot(&self) -> Option<PreviousBoot> {
+        lock(&self.inner).unclean.clone()
+    }
+
+    /// When the boot the daemon runs in began, Unix seconds; 0 when not read.
+    #[must_use]
+    pub fn boot_unix(&self) -> u64 {
+        lock(&self.inner).file.boot_unix
+    }
+
+    /// The boot id the daemon runs in; none when it could not be read.
+    #[must_use]
+    pub fn boot_id(&self) -> Option<String> {
+        let inner = lock(&self.inner);
+        inner.boot_known.then(|| inner.file.boot_id.clone())
+    }
+
+    /// Keeps `capacity` as the host's capacity, which every heartbeat sends from now on; none
+    /// sends none.
+    pub fn set_capacity(&self, capacity: Option<pb::Baseline>) {
+        lock(&self.inner).capacity = capacity;
+    }
+
+    /// Keeps `state` as its source's state, its texts cut to their bounds, in place of the one
+    /// the source gave before; a new source past `MAX_SOURCES` is passed over and logged.
+    pub fn set_source(&self, state: pb::SourceState) {
+        let state = pb::SourceState {
+            source: cut(&state.source, MAX_SOURCE),
+            status: state.status,
+            reason: cut(&state.reason, MAX_SOURCE_REASON),
+        };
+        let mut inner = lock(&self.inner);
+        if !inner.sources.contains_key(&state.source) && inner.sources.len() >= MAX_SOURCES {
+            drop(inner);
+            self.log.line(&format!(
+                "error: the state of the source {} is not kept: {MAX_SOURCES} sources are",
+                state.source
+            ));
+            return;
+        }
+        inner.sources.insert(state.source.clone(), state);
+    }
+
     fn save(&self, file: &HealthFile) {
         if let Err(e) = health_state::write(&self.state_dir, file, &|_| false) {
             self.log
@@ -273,7 +364,7 @@ impl HostHealthSource for HealthKeeper {
         let inner = lock(&self.inner);
         pb::HostHealth {
             events: inner.file.held.to_send(),
-            baseline: None,
+            baseline: inner.capacity.clone(),
             boot_id: if inner.boot_known {
                 inner.file.boot_id.clone()
             } else {
@@ -281,7 +372,7 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources: Vec::new(),
+            sources: inner.sources.values().cloned().collect(),
         }
     }
 
