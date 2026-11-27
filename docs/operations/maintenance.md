@@ -685,7 +685,8 @@ owner runs the held script [held/xcode-install.sh](held/xcode-install.sh) ([held
 While builds do not name their Xcode ([Not built yet](#not-built-yet)), a group that keeps Xcode
 without moving its builds sets `xcode_default` to a version the store keeps no release of (`0`,
 [held/xcode-keep.sh](held/xcode-keep.sh)): each turn then installs `Xcode-<version>.app` and leaves
-`xcode-select`, and every build that names no Xcode, as it is. Such a group cannot yet remove an
+`xcode-select`, and so the toolchain of every build that names no Xcode, as it is (the first launch
+still installs the packages every Xcode shares). Such a group cannot yet remove an
 older release: a turn that would is refused in its apply (`xcode_order_invalid`), so the held script
 refuses it first.
 

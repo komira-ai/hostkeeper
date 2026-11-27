@@ -41,7 +41,7 @@ set -eu
 
 APPLY=0
 GROUP=""
-KEEP=1
+KEEP=""
 DEFAULT=""
 RECORD=""
 REASON=""
@@ -52,7 +52,7 @@ usage: sh xcode-keep.sh --group NAME [--keep N] [--default D] [--apply] [--recor
                         [--reason TEXT]
 
   --group NAME   the host group (mac-build)
-  --keep N       the xcode_keep to set, 0 to 4 (default 1)
+  --keep N       the xcode_keep to set, 0 to 4 (default: the group's, unchanged)
   --default D    the xcode_default to set: latest, or a version of 1 to 3 numbers of 1 to 4
                  digits; needed with a --keep above 0. 0 names no Xcode the store holds, so
                  the turns install Xcode and leave xcode-select as it is
@@ -111,8 +111,11 @@ case $GROUP in
     -* | *[!a-z0-9-]*) die_usage "--group is a group name of [a-z0-9-]: $GROUP" ;;
 esac
 case $KEEP in
-    0 | 1 | 2 | 3 | 4) ;;
+    '' | 0 | 1 | 2 | 3 | 4) ;;
     *) die_usage "--keep is 0 to 4: $KEEP" ;;
+esac
+case $REASON in
+    ' '* | *' ' | "$(printf '\t')"* | *"$(printf '\t')") die_usage "--reason has a space at an end, which the coordinator trims from its audit entry" ;;
 esac
 # The coordinator's own rule for xcode_default (maintenance_policy.rs): latest, or 1 to 3
 # numbers of 1 to 4 digits joined by dots.
@@ -120,17 +123,21 @@ if [ -n "$DEFAULT" ] && [ "$DEFAULT" != latest ] &&
     ! printf '%s' "$DEFAULT" | grep -Eqx '[0-9]{1,4}(\.[0-9]{1,4}){0,2}'; then
     die_usage "--default is latest or a version of 1 to 3 numbers of 1 to 4 digits: $DEFAULT"
 fi
-if [ "$KEEP" -gt 0 ] && [ -z "$DEFAULT" ]; then
+if [ -n "$KEEP" ] && [ "$KEEP" -gt 0 ] && [ -z "$DEFAULT" ]; then
     die_usage "--keep $KEEP needs --default: latest or a kept version moves xcode-select, 0 leaves it"
 fi
-if [ "$KEEP" -eq 0 ] && [ -n "$DEFAULT" ] && [ "$DEFAULT" != latest ]; then
+if [ "$KEEP" = 0 ] && [ -n "$DEFAULT" ] && [ "$DEFAULT" != latest ]; then
     die_usage "--keep 0 keeps no Xcode, so --default can only be latest (the coordinator refuses a version)"
 fi
+[ -n "$KEEP" ] || [ -n "$DEFAULT" ] || die_usage "give --keep, --default or both"
+case $RECORD in
+    '' | /*) ;;
+    *) RECORD="$(cd "$RECORD" && pwd)" ;;
+esac
 if [ -n "$RECORD" ] && [ ! -d "$RECORD" ]; then
     die_usage "--record names no directory: $RECORD"
 fi
 [ "$APPLY" -eq 0 ] || [ -n "$RECORD" ] || die_usage "--apply needs --record: the body to restore is kept there"
-[ -n "$REASON" ] || REASON="Set xcode_keep $KEEP and xcode_default ${DEFAULT:-latest} on $GROUP"
 for tool in hk jq diff grep; do
     command -v "$tool" >/dev/null 2>&1 || die_usage "$tool is not on PATH"
 done
@@ -170,7 +177,13 @@ if printf '%s' "$got" | jq -e '(.nextPageToken // "") != ""' >/dev/null; then
 fi
 HAD=$(printf '%s' "$OLD" | jq -r '.policy.maintenance.xcodeKeep // 0')
 HAD_DEFAULT=$(printf '%s' "$OLD" | jq -r '.policy.maintenance.xcodeDefault // "latest"')
+KEEP=${KEEP:-$HAD}
 WANT_DEFAULT=${DEFAULT:-$HAD_DEFAULT}
+if [ "$KEEP" -gt 0 ] && [ -z "$DEFAULT" ] && [ "$HAD" -eq 0 ]; then
+    say "refused: the group keeps no Xcode yet, so give --default: latest or a kept version moves xcode-select, 0 leaves it"
+    exit 1
+fi
+[ -n "$REASON" ] || REASON="Set xcode_keep $KEEP and xcode_default $WANT_DEFAULT on $GROUP"
 if [ "$KEEP" -eq 0 ] && [ "$WANT_DEFAULT" != latest ]; then
     say "refused: the group's xcode_default is $WANT_DEFAULT, which an xcode_keep of 0 does not take; give --default latest"
     exit 1
@@ -205,7 +218,7 @@ CHANGED=$(jq -cn --argjson a "$OLD" --argjson b "$NEW" '
     [$a, $b | paths(scalars)] | unique
     | map(select(. as $p | ($a | getpath($p)) != ($b | getpath($p))) | map(tostring) | join("."))')
 WANTED=$(jq -cn --arg hk "$HAD" --arg k "$KEEP" --arg hd "$HAD_DEFAULT" --arg d "$WANT_DEFAULT" \
-    --argjson had_default "$(printf '%s' "$OLD" | jq '.policy.maintenance | has("xcodeDefault")')" '
+    --argjson had_default "$(printf '%s' "$OLD" | jq '(.policy.maintenance // {}) | has("xcodeDefault")')" '
     [(if $hd != $d or ($had_default | not) then "policy.maintenance.xcodeDefault" else empty end),
      (if $hk != $k then "policy.maintenance.xcodeKeep" else empty end)]')
 say "maintenance before: $(printf '%s' "$OLD" | jq -c '.policy.maintenance // {}')"
@@ -241,7 +254,7 @@ keep_file "$GROUP-put.json" "$put"
 NEWGEN=$(printf '%s' "$put" | jq -r '.generation // empty')
 said=$(printf '%s' "$put" | jq -r '.entry.reason // ""')
 say "audit $(printf '%s' "$put" | jq -r '.entry | "\(.seq) \(.atUnix // "-") \(.action) by \(.byName // .by) group \(.hostGroup // "-")"'): $said"
-restore="hk host-groups put --request $RECORD/$GROUP-before-apply.json --if-generation $NEWGEN --reason \"Restore $GROUP's xcode_keep $HAD and xcode_default $HAD_DEFAULT\""
+restore="hk host-groups put --request \"$RECORD/$GROUP-before-apply.json\" --if-generation $NEWGEN --reason \"Restore $GROUP's xcode_keep $HAD and xcode_default $HAD_DEFAULT\""
 case $said in
     "policy maintenance: $REASON") ;;
     *)
@@ -255,7 +268,7 @@ again=$(read_hk host-groups get --host-group "$GROUP") || { say "the group could
 keep_file "$GROUP-after-read.json" "$again"
 if ! printf '%s' "$again" | jq -e --argjson want "$NEW" --arg gen "$NEWGEN" \
     '.hostGroup.generation == $gen and .hostGroup.group == $want' >/dev/null; then
-    say "the group read again is not the body put at generation $NEWGEN; read $RECORD/$GROUP-after-read.json"
+    say "the group read again is not the body put at generation $NEWGEN; read \"$RECORD/$GROUP-after-read.json\""
     say "to put the old body back: $restore"
     exit 1
 fi

@@ -10,8 +10,8 @@
 # `maintenance schedule` without `--confirm`, which stores nothing and writes no audit entry),
 # says whether the Mac is ready, and prints the one command --apply would run as `DRY-RUN:`.
 #
-# A Mac is ready only when its turn changes nothing a build on it uses today: its group
-# (`hk host-groups get`) must have an xcode_default the store keeps no release of (xcode-keep.sh
+# A Mac is ready only when its turn leaves xcode-select and the Xcodes already there as they
+# are: its group (`hk host-groups get`) must have an xcode_default the store keeps no release of (xcode-keep.sh
 # --default 0), so the turn installs /Applications/Xcode-<version>.app and leaves xcode-select as
 # it is, and the turn must remove no Xcode (with no default the apply refuses it and the Mac
 # halts). After the turn, the Mac's report must not list the new Xcode as the selected one.
