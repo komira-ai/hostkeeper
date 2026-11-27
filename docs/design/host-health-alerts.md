@@ -1,6 +1,7 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1 and the daemon's state file of HH3, marked **Built** where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3 and its Linux capacity report of HH4, marked
+**Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -166,7 +167,9 @@ nearly full is not hardware: it is part of `storage_failing` (5.1) with no hardw
 run the compare is deferred to the first report after the run, not dropped: a reboot that loses a DIMM is exactly the case. SEL
 deassertions are `deasserted` records, and the "log cleared" and "system boot" entries are `info`. Physical devices only: no `loop`,
 `ram`, `zram`, `dm`, `md`, `nbd`, `sr` or removable USB disk; a NIC only if it has a `/device` and had carrier in the baseline. CPUs
-compare `present` and `smt/control`, so turning SMT off is not a lost core.
+compare `present` and `smt/control`, so turning SMT off is not a lost core. (Built, the daemon's side of these filters:
+`crates/hostkeeper-daemon/src/capacity.rs`, which also leaves out a disk attached through USB and an SR-IOV virtual function, and in a
+kdump boot sends no capacity at all; the compare is HH5's.)
 
 ### 3.2 macOS (Apple silicon)
 
@@ -298,7 +301,11 @@ update moves it by a few MiB, a `crashkernel=` change by up to its size. The inc
 fault, about 110 MiB under 256 GiB [V: the host's installed RAM, from its inventory], and 251543660 kB (239.9 GiB) after: 16777216 kB
 less, exactly 16 GiB, one DIMM.
 
-The daemon reports the capacity in every beat; the coordinator keeps the baseline per host in its operations store (New: a table of
+The daemon reports the capacity in every beat (Built, on Linux: `crates/hostkeeper-daemon/src/capacity.rs`, read from `/proc` and
+`/sys` for each heartbeat, the SMBIOS memory devices decoded from `/sys/firmware/dmi/entries/17-*/raw` with no `dmidecode`, sent in
+the first 12 heartbeats after the daemon's start and after they change (`DEVICE_BEATS` of `host_health.rs`), with the source state
+`smbios`: `unsupported` with no entries, `unreadable` when an entry does not decode; on a board of more than 32 slots the populated
+ones go first); the coordinator keeps the baseline per host in its operations store (New: a table of
 both backends; the files-store coordinator keeps its fleet in memory, and the Postgres one only each host's last beat, so a baseline
 must be a record of its own) and judges memory by two comparisons:
 
