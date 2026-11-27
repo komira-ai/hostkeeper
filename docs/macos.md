@@ -425,7 +425,8 @@ reads: it removes no report and runs each program with a fixed argument list.
 
 - **Kernel panic reports.** The `.panic` files of `/Library/Logs/DiagnosticReports`, and its
   `.ips` files whose header says `bug_type` 210 (any other `.ips` is an app's crash or a hang);
-  regular files of the directory itself only, so `Retired/` is not read. Each is read once, to at
+  regular files of the directory itself only, so `Retired/` is not read, the newest 512 of them.
+  Each is read once, to at
   most 256 KiB, and is one record by its `incident_id` (`panic:<incident id>`), so the `.panic` and
   `.ips` reports of one panic are one record (`crates/hostkeeper-daemon/src/mac_panic.rs`). A report
   in the old text form, or with no usable id, is known by its file's name. An SError or an AMCC
@@ -433,9 +434,9 @@ reads: it removes no report and runs each program with a fixed argument list.
   one naming the process), a kernel extension that is not Apple's and anything else are
   `panic_software`, warnings. Read at the start, 2 minutes later, then every 5 minutes; on the
   first read on a host, reports older than 7 days are `info` history.
-- **An unexpected restart.** At the first start of a boot whose boot before ended with no
-  clean-shutdown marker, one `host` warning, `unexpected_reboot`, merged with that boot's panic
-  report when there is one. The marker is advisory on a Mac: launchd's SIGTERM at a shutdown and at
+- **An unexpected restart.** In a boot whose boot before ended with no clean-shutdown marker, one
+  `host` warning, `unexpected_reboot`, merged with that boot's panic report when there is one;
+  judged 2 minutes after the daemon's start, once a boot, a restart of the daemon included. The marker is advisory on a Mac: launchd's SIGTERM at a shutdown and at
   a `bootout` look alike.
 - **Capacity.** `sysctl -n hw.memsize hw.physicalcpu hw.logicalcpu` and
   `system_profiler -json SPHardwareDataType SPNVMeDataType`, at the start and 2 minutes later: the

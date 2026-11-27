@@ -119,7 +119,11 @@ struct DeviceJson {
 /// shape.
 #[must_use]
 pub fn parse_profile(text: &str) -> Option<Profile> {
-    let json: ProfilerJson = serde_json::from_str(text).ok()?;
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    let json: ProfilerJson = serde_json::from_value(value).ok()?;
     let hardware = json.hardware.first();
     let memory_bytes = hardware
         .and_then(|h| h.physical_memory.as_deref())

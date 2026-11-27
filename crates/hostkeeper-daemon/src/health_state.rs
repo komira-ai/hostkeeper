@@ -2,7 +2,8 @@
 //! sections 4.1 and 4.4): [`HEALTH_FILE`] in the state directory, JSON, written whole (a
 //! temporary file, fsync, rename, directory fsync: [`crate::files::write_atomic`]) after every
 //! change. It holds the machine it was written on, the boot it was last written in, the
-//! clean-shutdown marker of that boot, whether the boot before it ended with one, the records
+//! clean-shutdown marker of that boot, whether the boot before it ended with one, which boot that
+//! was ([`HealthFile::previous_boot_id`]), the records
 //! not yet written to the host's log ([`Queue`]), and each source's high-water mark
 //! ([`SourceMark`]).
 //!
@@ -268,6 +269,11 @@ pub struct HealthFile {
     /// Whether the boot before that one ended with its clean-shutdown marker, as the daemon found
     /// at the first start of that boot.
     pub previous_clean: bool,
+    /// The boot before that one, as the daemon found it at the first start of that boot; empty
+    /// when it found none (no file, a file moved aside, a file with no boot id).
+    pub previous_boot_id: String,
+    /// When that boot before began, Unix seconds; 0 when not read.
+    pub previous_boot_unix: u64,
     /// The records not yet written to the host's log.
     pub held: Queue,
     /// Each source's mark, by the source's token.

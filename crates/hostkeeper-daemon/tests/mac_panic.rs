@@ -399,6 +399,8 @@ fn timestamps_are_read_with_their_offset_and_refused_when_malformed() {
         "2026-11-20 03:00:00 +000",
         "2026-11-20 03:00:00 +00x0",
         "2026-11-20 03:00:00 +",
+        "2026-11-20 03:00:00 +0\u{e9}0",
+        "2026-11-20 03:00:00 \u{e9}000",
     ] {
         assert_eq!(parse_timestamp(bad), None, "{bad:?}");
     }

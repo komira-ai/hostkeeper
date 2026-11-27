@@ -6,19 +6,21 @@
 //!
 //! **Panic reports** ([`MacHealth::read_panics`], source [`PANIC_SOURCE`]): the `.panic` and `.ips`
 //! files of [`DIAGNOSTIC_REPORTS`] itself, regular files only (so `Retired/` and links are not
-//! read), each read once, to at most [`MAX_REPORT_BYTES`], and parsed by [`crate::mac_panic`]. The
-//! source's mark is the names of the reports read that are still in the directory, the newest
-//! [`MAX_MARKED`] of them, so a report is not read again while it stays and the mark does not
-//! grow past the directory. A directory that does not exist has no reports. One that cannot be
+//! read), the newest [`MAX_MARKED`] of them by their time (a directory of more passes over the
+//! older ones), each read once, to at most [`MAX_REPORT_BYTES`], and parsed by
+//! [`crate::mac_panic`]. The source's mark is the names of the reports read that are still among
+//! them, so a report is not read again while it stays and the mark does not grow past its bound.
+//! An entry that leaves the directory while it is listed has no time (0), and its read fails. A directory that does not exist has no reports. One that cannot be
 //! listed (a privacy grant missing, say) is the source `unreadable` with its reason; a report that
 //! cannot be read is logged and tried again at the next read. Every file the daemon reads there is
 //! one a user of the Mac can read too: nothing here needs root to read.
 //!
 //! **An unexpected restart** ([`MacHealth::judge_shutdown`], source [`SHUTDOWN_SOURCE`]): at the
 //! first start of a boot whose boot before ended with no clean-shutdown marker
-//! ([`HealthKeeper::unclean_previous_boot`]), one `host` record, a warning, `unexpected_reboot`,
-//! whose id is [`SHUTDOWN_SOURCE`] and the boot id, so the boot gives one record however often it
-//! is judged. It is judged at the second pass ([`CAPACITY_AGAIN_SECS`] after the start), by when
+//! ([`HealthKeeper::unclean_previous_boot`], which a restart of the daemon in that boot still
+//! knows), one `host` record, a warning, `unexpected_reboot`, whose id is [`SHUTDOWN_SOURCE`] and
+//! the boot id; the source's mark is the boot id judged, so the boot gives one record however
+//! often the daemon starts in it. It is judged at the second pass ([`CAPACITY_AGAIN_SECS`] after the start), by when
 //! macOS has written the panic report of the boot before: merged with the newest panic report of
 //! that boot (made after it began, and before this one did), whose class its message names and
 //! whose panic line is its `raw`. On a Mac the marker is advisory (launchd's SIGTERM of a
@@ -130,12 +132,12 @@ impl ReportDir for HostReportDir {
         let mut files = Vec::new();
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
-            let meta = entry.metadata()?;
-            if !meta.file_type().is_file() {
+            if !entry.file_type()?.is_file() {
                 continue;
             }
-            let modified_unix = meta
-                .modified()
+            let modified_unix = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
                 .ok()
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
@@ -250,6 +252,7 @@ impl MacHealth {
             .filter(|f| is_candidate(&f.name))
             .collect();
         files.sort_by(|a, b| (b.modified_unix, &b.name).cmp(&(a.modified_unix, &a.name)));
+        files.truncate(MAX_MARKED);
         let mut reports = Vec::new();
         let mut kept = Vec::new();
         for file in files {
@@ -269,7 +272,6 @@ impl MacHealth {
                     .line(&format!("error: the report {} is not read: {e}", file.name)),
             }
         }
-        kept.truncate(MAX_MARKED);
         kept.sort();
         let mark = kept.join("\n");
         self.state(PANIC_SOURCE, pb::SourceStatus::Ok, "");
@@ -297,6 +299,9 @@ impl MacHealth {
         else {
             return false;
         };
+        if self.keeper.mark(SHUTDOWN_SOURCE).as_deref() == Some(boot_id.as_str()) {
+            return false;
+        }
         let boot_unix = self.keeper.boot_unix();
         let panic = reports
             .iter()

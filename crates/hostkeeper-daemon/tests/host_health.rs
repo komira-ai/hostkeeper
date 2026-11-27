@@ -735,12 +735,12 @@ fn a_macs_boot_time_is_read_through_sysctl() {
     assert_eq!(read().boot_unix, 0);
 }
 
-/// Proves the boot before is judged unclean only at the first start of a boot whose file was last
-/// written in another boot with no clean-shutdown marker: not at the first start on a host, not
-/// after an orderly stop, not at a second start in the same boot, not when the boot id cannot be
-/// read, and not over a file moved aside; the keeper says the boot it runs in.
+/// Proves the boot before is unclean in a boot whose first start found the file last written in
+/// another boot with no clean-shutdown marker, and still at a second start in that boot (kept in
+/// the file); not at the first start on a host, not after an orderly stop, not when the boot id
+/// cannot be read, and not over a file moved aside; the keeper says the boot it runs in.
 #[test]
-fn the_boot_before_is_unclean_only_at_the_first_start_after_an_unclean_end() {
+fn the_boot_before_is_unclean_only_after_an_unclean_end() {
     let dir = Scratch::new("health-before");
     let (keeper, _) = start(&dir, boot("boot-1"), yes());
     assert_eq!(
@@ -763,7 +763,21 @@ fn the_boot_before_is_unclean_only_at_the_first_start_after_an_unclean_end() {
     );
     drop(keeper);
     let (keeper, _) = start(&dir, boot("boot-2"), yes());
-    assert_eq!(keeper.unclean_previous_boot(), None, "the same boot");
+    assert_eq!(
+        keeper.unclean_previous_boot(),
+        Some(PreviousBoot {
+            boot_id: "boot-1".to_owned(),
+            boot_unix: 1_795_000_000,
+        }),
+        "a restart in the same boot still knows it"
+    );
+    assert_eq!(
+        (
+            on_file(&dir).previous_boot_id.as_str(),
+            on_file(&dir).previous_boot_unix
+        ),
+        ("boot-1", 1_795_000_000)
+    );
     keeper.stopping();
     drop(keeper);
     let (keeper, _) = start(&dir, boot("boot-3"), yes());

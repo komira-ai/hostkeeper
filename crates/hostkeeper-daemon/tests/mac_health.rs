@@ -381,18 +381,26 @@ fn a_refused_listing_is_unreadable_and_an_absent_directory_is_empty() {
     assert_eq!(health.read_panics().len(), 1);
 }
 
-/// Proves the mark keeps the names of the newest `MAX_MARKED` reports only, so it never grows
-/// past its bound however many reports the directory holds.
+/// Proves only the newest `MAX_MARKED` reports are read and marked, so the mark never grows past
+/// its bound and the older reports past it are not read at every pass.
 #[test]
 fn the_mark_keeps_the_newest_reports_only() {
     let dir = Scratch::new("mac-panics-bound");
     let reports = FakeReports::default();
     let crash = fixture("app-crash.ips");
     for n in 0..MAX_MARKED + 3 {
-        reports.add(&format!("crash-{n:04}.ips"), &crash, MODIFIED + n as u64);
+        let bytes = if n < 3 {
+            fixture("amcc.ips")
+        } else {
+            crash.clone()
+        };
+        reports.add(&format!("crash-{n:04}.ips"), &bytes, MODIFIED + n as u64);
     }
-    let m = mac(&dir, Some("boot-2"), BOOT, reports);
-    m.health().read_panics();
+    let m = mac(&dir, Some("boot-2"), BOOT, reports.clone());
+    assert!(m.health().read_panics().is_empty());
+    assert!(m.health().read_panics().is_empty(), "nor at the next pass");
+    assert_eq!(reports.reads().len(), MAX_MARKED);
+    assert!(!reports.reads().contains(&"crash-0000.ips".to_owned()));
     let mark = m.keeper.mark(PANIC_SOURCE).expect("a mark");
     let names: Vec<&str> = mark.lines().collect();
     assert_eq!(names.len(), MAX_MARKED);
@@ -494,7 +502,8 @@ fn only_a_panic_of_the_boot_before_is_merged() {
 }
 
 /// Proves no unexpected restart is judged on the first start on a host, after a clean shutdown,
-/// at a second start in the same boot, or when the boot id cannot be read.
+/// at a second start in a boot already judged, or when the boot id cannot be read; a restart of
+/// the daemon in the boot before it was judged still judges it.
 #[test]
 fn no_unexpected_restart_without_an_unclean_boot_before() {
     let dir = Scratch::new("mac-shutdown-first");
@@ -525,7 +534,18 @@ fn no_unexpected_restart_without_an_unclean_boot_before() {
     let dir = Scratch::new("mac-shutdown-same");
     drop(after_unclean_boot(&dir, FakeReports::default()));
     let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
-    assert!(!m.health().judge_shutdown(&[serror()]), "the same boot");
+    assert!(
+        m.health().judge_shutdown(&[]),
+        "a restart before the judgement still judges"
+    );
+    m.keeper.written(&ids(&m.keeper.health()));
+    drop(m);
+    let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
+    assert!(
+        !m.health().judge_shutdown(&[serror()]),
+        "a boot judged is not judged again"
+    );
+    assert!(m.keeper.health().events.is_empty());
 
     let dir = Scratch::new("mac-shutdown-unknown");
     drop(mac(

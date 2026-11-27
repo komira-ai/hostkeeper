@@ -32,10 +32,12 @@
 //! of the daemon. A source's state replaces the one it gave before; at most `MAX_SOURCES` are kept,
 //! the first sources to give one.
 //!
-//! **The boot before** ([`HealthKeeper::unclean_previous_boot`]): at the first start of a boot
-//! whose file was last written in another boot, with no clean-shutdown marker, that boot. A start
-//! with no file, a file moved aside, a file with no boot id, or a boot id that cannot be read has
-//! no boot before to judge: the first start on a host never reads as an unexpected restart.
+//! **The boot before** ([`HealthKeeper::unclean_previous_boot`]): in a boot whose first start found
+//! the file last written in another boot, with no clean-shutdown marker, that boot. It is kept in
+//! the file, so a later start of the daemon in the same boot (a restart, a crash) still knows it.
+//! A boot whose first start found no file, a file moved aside or a file with no boot id, or a
+//! start whose boot id cannot be read, has no boot before to judge: the first start on a host
+//! never reads as an unexpected restart.
 //!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
@@ -144,8 +146,6 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
-    /// The boot before, when this start is the first of a boot and that boot ended unclean.
-    unclean: Option<PreviousBoot>,
     /// The host's capacity as last read; none before it is.
     capacity: Option<pb::Baseline>,
     /// Each source's state, by its token.
@@ -184,23 +184,16 @@ impl HealthKeeper {
             }
         };
         let mut file = found.unwrap_or_default();
-        let unclean = match &boot.boot_id {
-            Some(id)
-                if *id != file.boot_id
-                    && !file.boot_id.is_empty()
-                    && file.marker != Marker::Clean =>
-            {
-                Some(PreviousBoot {
-                    boot_id: file.boot_id.clone(),
-                    boot_unix: file.boot_unix,
-                })
-            }
-            _ => None,
-        };
+        if let Some(id) = &boot.boot_id
+            && *id != file.boot_id
+        {
+            file.previous_boot_id = std::mem::take(&mut file.boot_id);
+            file.previous_boot_unix = file.boot_unix;
+        }
         file.previous_clean = match &boot.boot_id {
             None => false,
             Some(id) if *id == file.boot_id => file.previous_clean,
-            Some(_) => file.marker == Marker::Clean && !file.boot_id.is_empty(),
+            Some(_) => file.marker == Marker::Clean && !file.previous_boot_id.is_empty(),
         };
         if let Some(id) = &boot.boot_id {
             file.boot_id.clone_from(id);
@@ -217,7 +210,6 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
-                unclean,
                 capacity: None,
                 sources: BTreeMap::new(),
             }),
@@ -299,11 +291,18 @@ impl HealthKeeper {
             .map(|mark| mark.mark.clone())
     }
 
-    /// The boot before this one, when this start is the first of its boot and the boot before
-    /// ended with no clean-shutdown marker (the module's doc); none otherwise.
+    /// The boot before this one, when it ended with no clean-shutdown marker (the module's doc);
+    /// none otherwise, and when this start's boot id was not read.
     #[must_use]
     pub fn unclean_previous_boot(&self) -> Option<PreviousBoot> {
-        lock(&self.inner).unclean.clone()
+        let inner = lock(&self.inner);
+        let file = &inner.file;
+        (inner.boot_known && !file.previous_clean && !file.previous_boot_id.is_empty()).then(|| {
+            PreviousBoot {
+                boot_id: file.previous_boot_id.clone(),
+                boot_unix: file.previous_boot_unix,
+            }
+        })
     }
 
     /// When the boot the daemon runs in began, Unix seconds; 0 when not read.

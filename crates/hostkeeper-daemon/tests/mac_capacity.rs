@@ -171,6 +171,8 @@ fn system_profiler_output_is_read_by_its_shape() {
     let whole = fixture("system-profiler.json");
     assert_eq!(parse_profile(&whole[..whole.len() / 2]), None);
     assert_eq!(parse_profile("[]"), None);
+    assert_eq!(parse_profile("5"), None);
+    assert_eq!(parse_profile(r#"{"SPHardwareDataType":5}"#), None);
     assert_eq!(parse_profile("{}"), Some(Profile::default()));
     assert_eq!(
         parse_profile(r#"{"SPHardwareDataType":[{}],"SPNVMeDataType":[{}]}"#),

@@ -29,8 +29,8 @@
 //! a date, a time with optional fractions, and an offset from UTC); else when the file was last
 //! modified, which the reader gives.
 //!
-//! **Its class** ([`classify`], on the panic line and the lines after it in `panicString`, case
-//! not minded), in this order, the first that matches deciding:
+//! **Its class** ([`classify`], case not minded), in this order, the first that matches deciding;
+//! the first three are judged on the panic line alone, the fourth on the lines after it:
 //!
 //! 1. an `SError` or an `AMCC` fault (the memory controller's): hardware, `panic_hardware`,
 //!    critical;
@@ -420,8 +420,8 @@ pub fn parse_timestamp(text: &str) -> Option<u64> {
     if digits.len() != 4 {
         return None;
     }
-    let off_hours: i64 = number(&digits[..2], 2)?;
-    let off_minutes: i64 = number(&digits[2..], 2)?;
+    let off_hours: i64 = number(digits.get(..2)?, 2)?;
+    let off_minutes: i64 = number(digits.get(2..)?, 2)?;
     let local = days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
     let unix = local - sign * (off_hours * 3600 + off_minutes * 60);
     u64::try_from(unix).ok()
