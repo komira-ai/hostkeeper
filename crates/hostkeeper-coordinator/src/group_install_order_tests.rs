@@ -319,16 +319,24 @@ async fn an_absent_package_not_declined_at_its_desired_version_holds_the_later_o
 
     // The install orders of `svc` given to `b1` and `b3` keep each host busy for `cfg` until they
     // are older than an order counts for while the host still heartbeats (a silent host keeps
-    // its order): each beats as before a second earlier, told the same order again.
+    // its order). Each beats as before a second earlier: `b3` is told its order of 3.0 again,
+    // and `b1`, whose order was of 2.0 before 3.0 was set, is ordered 3.0 anew, which keeps it
+    // busy until that order is as old, `b1` beating again a second before.
     let age = crate::fleet::ORDER_AGE.as_secs();
-    farm.world.rig.at(2_000 + age - 1);
-    let never_run = beat_and(&farm, &[], absent("svc", "2.0", false));
-    assert_eq!(verb(farm.order_on("b1", never_run)), install("svc"));
+    let b1_beats = |at: u64| {
+        farm.world.rig.at(at);
+        let never_run = beat_and(&farm, &[], absent("svc", "2.0", false));
+        assert_eq!(verb(farm.order_on("b1", never_run)), install("svc"));
+    };
+    b1_beats(2_000 + age - 1);
     let declined_older = beat_and(&farm, &[], absent("svc", "2.0", true));
     assert_eq!(verb(farm.order_on("b3", declined_older)), install("svc"));
     farm.world.rig.at(2_000 + age);
-    assert_eq!(farm.why("b1", "cfg"), INSTALL_ORDER);
     assert_eq!(farm.why("b3", "cfg"), INSTALL_ORDER);
+    assert_eq!(farm.why("b1", "cfg"), Some(Why::Gate(Gate::BusyElsewhere)));
+    b1_beats(2_000 + age - 1 + age - 1);
+    farm.world.rig.at(2_000 + age - 1 + age);
+    assert_eq!(farm.why("b1", "cfg"), INSTALL_ORDER);
 }
 
 /// Proves: a package taken out of a group is uninstalled from each host that ran it paced by the
