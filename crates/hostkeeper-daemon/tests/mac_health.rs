@@ -148,8 +148,6 @@ fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|a| (*a).to_owned()).collect()
 }
 
-/// What a test drives: the keeper, its directory, its programs, its clock and its log.
-
 /// What a test drives: the keeper, its directory, its programs and its clock.
 struct Mac {
     keeper: Arc<HealthKeeper>,
