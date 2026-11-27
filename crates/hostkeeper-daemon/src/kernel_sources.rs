@@ -1,8 +1,10 @@
 //! The Linux daemon's reads of the kernel's evidence of hardware faults
 //! (docs/design/host-health-alerts.md sections 3.1, 4.2 and 4.5): the kernel's log and its own
-//! files, read every [`POLL_SECS`] on a worker of its own, judged by the pure functions of
-//! [`crate::kernel_log`] and [`crate::kernel_files`], and held in the state file by
-//! [`HealthKeeper::record`] until the coordinator writes them.
+//! files, two [`HardwareSource`]s ([`KernelLog`], [`KernelFiles`]) that
+//! [`crate::hardware_sources`] reads every [`POLL_SECS`], each on a worker of its own. Each read
+//! is judged by the pure functions of [`crate::kernel_log`] and [`crate::kernel_files`] and
+//! answers its records, its new mark and its state ([`SourceRead`]), which the keeper holds until
+//! the coordinator writes them. Both know the boot the daemon read at its start ([`KernelBoot`]).
 //!
 //! **The kernel's log** (source `journal`). This boot's lines are followed on `/dev/kmsg`
 //! ([`Kmsg`], [`DevKmsg`]): opened once, without blocking, each read taking the records logged
@@ -26,8 +28,7 @@
 //! (no ext4 filesystem, no pstore) is nothing to read. Nothing is ever written, removed or
 //! cleared: a pstore dump stays where it is.
 //!
-//! Both sources are read one after the other on one worker, apart from the heartbeat's. Only
-//! `journalctl` is a program, bounded by [`JOURNAL_DEADLINE`] and its output cap; the other reads
+//! Only `journalctl` is a program, bounded by [`JOURNAL_DEADLINE`] and its output cap; the other reads
 //! are of the kernel's own files (`/dev/kmsg` without blocking). A pstore dump is listed at every
 //! read and read only when it is new.
 //!
@@ -38,15 +39,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
-use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
-use hostkeeper_link::{Dispatch, Log, Sleeper, Tick, UnixClock};
+use hostkeeper_launchd::{Launchctl, LaunchctlProcess};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::hardware_sources::{HardwareSource, SourceRead};
 use crate::host_health::HealthKeeper;
 use crate::kernel_files::{
     self, Dump, Ext4Errors, RemountMark, corrupted_event, dump_id, ext4_device_read, ext4_event,
@@ -60,6 +60,9 @@ pub const POLL_SECS: u64 = 60;
 
 /// The kernel's log device.
 pub const KMSG: &str = "/dev/kmsg";
+
+/// The kernel's log device, under the host's root.
+pub const KMSG_UNDER_ROOT: &str = "dev/kmsg";
 
 /// The most records one read of `/dev/kmsg` takes; the rest wait for the next.
 pub const KMSG_MAX_RECORDS: usize = 4096;
@@ -309,64 +312,97 @@ pub struct FilesMark {
     pub pstore_ids: Vec<String>,
 }
 
-/// The kernel's evidence, read through its ports.
-pub struct KernelSources {
-    root: PathBuf,
-    kmsg: Box<dyn Kmsg>,
-    journal: Box<dyn Journal>,
-    log: Arc<dyn Log>,
+/// The boot the kernel's sources read in, as the daemon read it at its start
+/// ([`HealthKeeper::boot_id`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KernelBoot {
+    /// The boot id; for a boot whose id could not be read, when it began as 16 hex digits, so
+    /// that its reads still follow one another.
+    pub id: String,
+    /// When the boot began, Unix seconds; 0 when not read.
+    pub unix: u64,
 }
 
-impl KernelSources {
-    /// The sources of a host whose root is `root`, its log read through `kmsg` and `journal`;
-    /// a source's change of state is logged to `log`.
+impl KernelBoot {
+    /// The boot `keeper` read at the daemon's start.
     #[must_use]
-    pub fn new(
-        root: &Path,
-        kmsg: Box<dyn Kmsg>,
-        journal: Box<dyn Journal>,
-        log: Arc<dyn Log>,
-    ) -> KernelSources {
-        KernelSources {
-            root: root.to_owned(),
+    pub fn of(keeper: &HealthKeeper) -> KernelBoot {
+        let unix = keeper.boot_unix();
+        KernelBoot {
+            id: keeper.boot_id().unwrap_or_else(|| format!("{unix:016x}")),
+            unix,
+        }
+    }
+}
+
+/// The kernel's log, the source `journal`: `/dev/kmsg` and the journal of the boot before.
+pub struct KernelLog {
+    kmsg: Box<dyn Kmsg>,
+    journal: Box<dyn Journal>,
+    boot: KernelBoot,
+}
+
+impl KernelLog {
+    /// The log of the boot `boot`, read through `kmsg` and `journal`.
+    #[must_use]
+    pub fn new(kmsg: Box<dyn Kmsg>, journal: Box<dyn Journal>, boot: KernelBoot) -> KernelLog {
+        KernelLog {
             kmsg,
             journal,
-            log,
+            boot,
         }
     }
+}
 
-    /// One read of every source at `now_unix`, its records held by `keeper` and its state kept
-    /// there. A boot whose id could not be read is named by when it began, as 16 hex digits, so
-    /// its reads still follow one another.
-    pub fn poll(&mut self, keeper: &HealthKeeper, now_unix: u64) {
-        let boot_unix = keeper.boot_unix();
-        let boot = keeper
-            .boot_id()
-            .unwrap_or_else(|| format!("{boot_unix:016x}"));
-        let state = self.read_log(keeper, &boot, boot_unix, now_unix);
-        self.state(keeper, state);
-        let state = self.read_files(keeper, &boot, boot_unix, now_unix);
-        self.state(keeper, state);
+impl HardwareSource for KernelLog {
+    fn name(&self) -> &'static str {
+        kernel_log::SOURCE
     }
 
-    fn state(&self, keeper: &HealthKeeper, state: pb::SourceState) {
-        let line = match pb::SourceStatus::try_from(state.status) {
-            Ok(pb::SourceStatus::Ok) => format!("health source {}: read", state.source),
-            _ => format!("error: health source {}: {}", state.source, state.reason),
-        };
-        if keeper.source_state(state) {
-            self.log.line(&line);
+    fn every_secs(&self) -> u64 {
+        POLL_SECS
+    }
+
+    fn read(&mut self, mark: Option<&str>, _now_unix: u64) -> SourceRead {
+        let boot = self.boot.clone();
+        self.read_log(mark, &boot.id, boot.unix)
+    }
+}
+
+/// The kernel's files, the source `sysfs`, under the host's root.
+pub struct KernelFiles {
+    root: PathBuf,
+    boot: KernelBoot,
+}
+
+impl KernelFiles {
+    /// The files under `root` in the boot `boot`.
+    #[must_use]
+    pub fn new(root: &Path, boot: KernelBoot) -> KernelFiles {
+        KernelFiles {
+            root: root.to_owned(),
+            boot,
         }
     }
+}
 
-    fn read_log(
-        &mut self,
-        keeper: &HealthKeeper,
-        boot: &str,
-        boot_unix: u64,
-        now_unix: u64,
-    ) -> pb::SourceState {
-        let mut mark: LogMark = mark_of(keeper, kernel_log::SOURCE);
+impl HardwareSource for KernelFiles {
+    fn name(&self) -> &'static str {
+        kernel_files::SOURCE
+    }
+
+    fn every_secs(&self) -> u64 {
+        POLL_SECS
+    }
+
+    fn read(&mut self, mark: Option<&str>, now_unix: u64) -> SourceRead {
+        self.read_files(mark, &self.boot.id, self.boot.unix, now_unix)
+    }
+}
+
+impl KernelLog {
+    fn read_log(&mut self, mark: Option<&str>, boot: &str, boot_unix: u64) -> SourceRead {
+        let mut mark: LogMark = mark_of(mark);
         if !same_boot(&mark.boot, boot) {
             if !mark.boot.is_empty() {
                 mark.previous = std::mem::take(&mut mark.boot);
@@ -428,18 +464,19 @@ impl KernelSources {
             }
             Err(e) => unreadable = Some(format!("{KMSG} cannot be read: {e}")),
         }
-        keeper.record(kernel_log::SOURCE, &mark_text(&mark), events, now_unix);
-        source_state(kernel_log::SOURCE, unreadable, unsupported)
+        source_read(mark_text(&mark), events, unreadable, unsupported)
     }
+}
 
+impl KernelFiles {
     fn read_files(
         &self,
-        keeper: &HealthKeeper,
+        mark: Option<&str>,
         boot: &str,
         boot_unix: u64,
         now_unix: u64,
-    ) -> pb::SourceState {
-        let mut mark: FilesMark = mark_of(keeper, kernel_files::SOURCE);
+    ) -> SourceRead {
+        let mut mark: FilesMark = mark_of(mark);
         let key = boot_key(boot);
         let mut events = Vec::new();
         let mut problems: Vec<String> = Vec::new();
@@ -490,8 +527,7 @@ impl KernelSources {
             Ok(found) => events.extend(new_dumps(found, &mut mark, boot_unix)),
             Err(e) => problems.push(format!("pstore cannot be read: {e}")),
         }
-        keeper.record(kernel_files::SOURCE, &mark_text(&mark), events, now_unix);
-        source_state(kernel_files::SOURCE, problems.into_iter().next(), None)
+        source_read(mark_text(&mark), events, problems.into_iter().next(), None)
     }
 
     /// The text of `path` under the root; why not, in plain words.
@@ -500,12 +536,9 @@ impl KernelSources {
     }
 }
 
-/// The mark `keeper` keeps for `source`, read; the default when there is none or it does not
-/// parse.
-fn mark_of<T: Default + DeserializeOwned>(keeper: &HealthKeeper, source: &str) -> T {
-    keeper
-        .mark(source)
-        .and_then(|text| serde_json::from_str(&text).ok())
+/// The mark `mark`, read; the default when there is none or it does not parse.
+fn mark_of<T: Default + DeserializeOwned>(mark: Option<&str>) -> T {
+    mark.and_then(|text| serde_json::from_str(text).ok())
         .unwrap_or_default()
 }
 
@@ -513,22 +546,26 @@ fn mark_text<T: Serialize>(mark: &T) -> String {
     serde_json::to_string(mark).unwrap_or_default()
 }
 
-/// The state of `source`: unreadable with the reason when there is one, else unsupported with
-/// its reason, else read.
-fn source_state(
-    source: &str,
+/// What a read came to: its new `mark` and its `events`, and unreadable with the reason when
+/// there is one, else unsupported with its reason, else read. The mark and the records stand
+/// either way: a source that reads in part (the journal failed, `/dev/kmsg` read) keeps what it
+/// read.
+fn source_read(
+    mark: String,
+    events: Vec<pb::HardwareEvent>,
     unreadable: Option<String>,
     unsupported: Option<String>,
-) -> pb::SourceState {
+) -> SourceRead {
     let (status, reason) = match (unreadable, unsupported) {
         (Some(why), _) => (pb::SourceStatus::Unreadable, why),
         (None, Some(why)) => (pb::SourceStatus::Unsupported, why),
         (None, None) => (pb::SourceStatus::Ok, String::new()),
     };
-    pb::SourceState {
-        source: source.to_owned(),
-        status: status.into(),
+    SourceRead {
+        status,
         reason,
+        mark: Some(mark),
+        events,
     }
 }
 
@@ -719,61 +756,24 @@ fn new_dumps(dumps: Vec<Found>, mark: &mut FilesMark, boot_unix: u64) -> Vec<pb:
         .collect()
 }
 
-/// Reads `sources` every [`POLL_SECS`] of `sleeper`, at the second of `clock`, into `keeper`,
-/// until `sleeper` stops it: the first read at once.
-pub fn run(
-    mut sources: KernelSources,
-    keeper: &HealthKeeper,
-    clock: &dyn UnixClock,
-    sleeper: &dyn Sleeper,
-) {
-    loop {
-        sources.poll(keeper, clock.unix_secs());
-        if matches!(sleeper.sleep(POLL_SECS), Tick::Stop) {
-            return;
-        }
-    }
-}
-
-/// The sources of the host itself: its root `/`, [`KMSG`] and [`JOURNALCTL`].
+/// The kernel's two sources of a host whose root is `root`, in the boot `boot`: its log
+/// (`<root>/dev/kmsg` and [`JOURNALCTL`]) and its files.
 #[must_use]
-pub fn at_host(log: Arc<dyn Log>) -> KernelSources {
-    let root = Path::new("/");
-    KernelSources::new(
-        root,
-        Box::new(DevKmsg::at(Path::new(KMSG))),
-        Box::new(Journalctl::new(
-            root,
-            Box::new(LaunchctlProcess::new(
-                Path::new(JOURNALCTL),
-                JOURNAL_DEADLINE,
+pub fn at_root(root: &Path, boot: &KernelBoot) -> Vec<Box<dyn HardwareSource>> {
+    vec![
+        Box::new(KernelLog::new(
+            Box::new(DevKmsg::at(&root.join(KMSG_UNDER_ROOT))),
+            Box::new(Journalctl::new(
+                root,
+                Box::new(LaunchctlProcess::new(
+                    Path::new(JOURNALCTL),
+                    JOURNAL_DEADLINE,
+                )),
             )),
+            boot.clone(),
         )),
-        log,
-    )
-}
-
-/// On a Linux host ([`PlatformKind::Linux`] or [`PlatformKind::Openrc`]) that keeps its health,
-/// starts [`run`] of `sources()` on a worker of `dispatch`; nothing on a Mac, which has its own
-/// sources, or with no keeper.
-pub fn start(
-    kind: PlatformKind,
-    keeper: Option<Arc<HealthKeeper>>,
-    sources: impl FnOnce() -> KernelSources,
-    clock: Arc<dyn UnixClock>,
-    sleeper: Box<dyn Sleeper + Send>,
-    dispatch: &dyn Dispatch,
-) {
-    if !matches!(kind, PlatformKind::Linux | PlatformKind::Openrc) {
-        return;
-    }
-    let Some(keeper) = keeper else {
-        return;
-    };
-    let sources = sources();
-    dispatch.start(Box::new(move || {
-        run(sources, &keeper, clock.as_ref(), sleeper.as_ref());
-    }));
+        Box::new(KernelFiles::new(root, boot.clone())),
+    ]
 }
 
 #[cfg(test)]

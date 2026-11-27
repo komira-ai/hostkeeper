@@ -10,6 +10,7 @@ mod support;
 use std::fs;
 use std::sync::Arc;
 
+use hostkeeper_daemon::hardware_sources::poll;
 use hostkeeper_daemon::health_state::{
     self, FOLDED_CODE, HEALTH_FILE, HEALTH_FILE_ASIDE, HealthFile, MAX_HELD, Marker, Queue, Read,
     Refused,
@@ -18,18 +19,16 @@ use hostkeeper_daemon::host_health::{
     BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT,
 };
 use hostkeeper_daemon::kernel_log::KmsgRecord;
-use hostkeeper_daemon::kernel_sources::{Journal, JournalError, KernelSources, Kmsg, PreviousBoot};
+use hostkeeper_daemon::kernel_sources::{
+    Journal, JournalError, KernelBoot, KernelLog, Kmsg, PreviousBoot,
+};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::HostHealthSource;
-use hostkeeper_link::testing::RecordingLog;
-use hostkeeper_proto::health::{
-    MAX_EVENTS, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_RAW, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
-    MAX_SUBJECT, check_health,
-};
+use hostkeeper_link::testing::{FakeClock as LinkClock, RecordingLog};
+use hostkeeper_proto::health::{MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SUBJECT, check_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
-use prost::Message as _;
 use support::Scratch;
 
 /// The second the tests read at.
@@ -738,14 +737,6 @@ fn a_macs_boot_time_is_read_through_sysctl() {
     assert_eq!(read().boot_unix, 0);
 }
 
-fn state(source: &str, status: pb::SourceStatus, reason: &str) -> pb::SourceState {
-    pb::SourceState {
-        source: source.to_owned(),
-        status: status.into(),
-        reason: reason.to_owned(),
-    }
-}
-
 /// Proves the keeper gives the boot id and the boot time it was opened with, and no boot id when
 /// the start could not read one.
 #[test]
@@ -763,171 +754,6 @@ fn the_keeper_gives_the_boot_id_and_boot_time_it_started_with() {
     let (second, _) = start(&dir, unread, yes());
     assert_eq!(second.boot_id(), None);
     assert_eq!(second.boot_unix(), 1_795_000_123);
-}
-
-/// Proves a source state is reported as changed when new or different and as unchanged when the
-/// same state is kept again, and a state of another status or reason is changed again.
-#[test]
-fn a_source_state_reports_whether_it_is_new_or_changed() {
-    let dir = Scratch::new("health-source-changed");
-    let (keeper, _) = start(&dir, boot("boot-1"), yes());
-    let ok = state("kmsg", pb::SourceStatus::Ok, "");
-    assert!(keeper.source_state(ok.clone()));
-    assert!(!keeper.source_state(ok.clone()));
-    let unreadable = state("kmsg", pb::SourceStatus::Unreadable, "permission denied");
-    assert!(keeper.source_state(unreadable.clone()));
-    assert!(!keeper.source_state(unreadable));
-    assert!(keeper.source_state(state(
-        "kmsg",
-        pb::SourceStatus::Unreadable,
-        "no such device"
-    )));
-    assert!(keeper.source_state(ok));
-    assert_eq!(keeper.health().sources.len(), 1);
-}
-
-/// Proves a source token is cut to 16 bytes and a reason to 64 bytes, each at a character
-/// boundary, and the cut state is what is kept (a second call with the same long text is unchanged).
-#[test]
-fn a_source_state_is_cut_to_its_bounds_at_a_character_boundary() {
-    let dir = Scratch::new("health-source-cut");
-    let (keeper, _) = start(&dir, boot("boot-1"), yes());
-    let long = state(
-        &"€".repeat(6),
-        pb::SourceStatus::Unreadable,
-        &"ü".repeat(40),
-    );
-    assert!(keeper.source_state(long.clone()));
-    assert!(!keeper.source_state(long));
-    let sources = keeper.health().sources;
-    assert_eq!(sources.len(), 1);
-    assert_eq!(sources[0].source, "€".repeat(MAX_SOURCE / 3));
-    assert_eq!(sources[0].reason, "ü".repeat(MAX_SOURCE_REASON / 2));
-    let odd = state("a", pb::SourceStatus::Unsupported, &"€".repeat(30));
-    assert!(keeper.source_state(odd));
-    let kept = keeper
-        .health()
-        .sources
-        .into_iter()
-        .find(|s| s.source == "a")
-        .expect("the source");
-    assert_eq!(kept.reason, "€".repeat(MAX_SOURCE_REASON / 3));
-    assert_eq!(kept.reason.len(), 63);
-}
-
-/// Proves past twelve kept sources a thirteenth distinct one is refused (false, not kept) while a
-/// kept source still updates, and the health carries exactly the twelve.
-#[test]
-fn a_thirteenth_source_is_refused_but_a_kept_one_still_updates() {
-    let dir = Scratch::new("health-source-max");
-    let (keeper, _) = start(&dir, boot("boot-1"), yes());
-    for n in 0..MAX_SOURCES {
-        assert!(keeper.source_state(state(&format!("s{n:02}"), pb::SourceStatus::Ok, "")));
-    }
-    assert!(!keeper.source_state(state("s99", pb::SourceStatus::Ok, "")));
-    assert!(!keeper.source_state(state("s99", pb::SourceStatus::Unreadable, "late")));
-    assert!(keeper.source_state(state("s05", pb::SourceStatus::Unreadable, "failed")));
-    let sources = keeper.health().sources;
-    assert_eq!(sources.len(), MAX_SOURCES);
-    assert!(sources.iter().all(|s| s.source != "s99"));
-    let changed = sources.iter().find(|s| s.source == "s05").expect("kept");
-    assert_eq!(
-        (changed.status, changed.reason.as_str()),
-        (i32::from(pb::SourceStatus::Unreadable), "failed")
-    );
-}
-
-/// Proves the health carries every kept source state ordered by source token, whatever order they
-/// were kept in, with each state's status and reason as kept.
-#[test]
-fn the_health_carries_source_states_ordered_by_token() {
-    let dir = Scratch::new("health-source-order");
-    let (keeper, _) = start(&dir, boot("boot-1"), yes());
-    keeper.source_state(state("pstore", pb::SourceStatus::Unsupported, "no pstore"));
-    keeper.source_state(state("kmsg", pb::SourceStatus::Ok, ""));
-    keeper.source_state(state("journal", pb::SourceStatus::Unreadable, "timed out"));
-    assert_eq!(
-        keeper.health().sources,
-        [
-            state("journal", pb::SourceStatus::Unreadable, "timed out"),
-            state("kmsg", pb::SourceStatus::Ok, ""),
-            state("pstore", pb::SourceStatus::Unsupported, "no pstore"),
-        ]
-    );
-}
-
-/// Proves source states are not written to the state file and are gone after a restart over the
-/// same directory, while the records held stay.
-#[test]
-fn source_states_are_not_in_the_state_file_and_are_gone_after_a_restart() {
-    let dir = Scratch::new("health-source-restart");
-    let (keeper, _) = start(&dir, boot("boot-1"), yes());
-    keeper.record(
-        "sel",
-        "m",
-        vec![event("kept", pb::HardwareSeverity::Critical, NOW, "sel")],
-        NOW,
-    );
-    keeper.source_state(state(
-        "kmsg-only",
-        pb::SourceStatus::Unreadable,
-        "gone soon",
-    ));
-    assert_eq!(keeper.health().sources.len(), 1);
-    let text = fs::read_to_string(dir.path().join(HEALTH_FILE)).expect("the state file");
-    assert!(!text.contains("kmsg-only"));
-    assert!(!text.contains("gone soon"));
-    assert!(!on_file(&dir).sources.contains_key("kmsg-only"));
-    drop(keeper);
-    let (again, _) = start(&dir, boot("boot-1"), yes());
-    let health = again.health();
-    assert!(health.sources.is_empty());
-    assert_eq!(ids(&health), ["kept"]);
-    assert!(again.source_state(state("kmsg-only", pb::SourceStatus::Ok, "")));
-}
-
-/// Proves a health of six records at their bounds, a boot id at its bound and twelve sources at
-/// their bounds is over 4096 bytes before it is cut, so the health leaves out records from the end
-/// until it passes `check_health` and is within the bound, keeps the first records in order, and
-/// the left-out records stay held and are sent once the first are written.
-#[test]
-fn a_health_over_its_bound_leaves_out_records_from_the_end_and_they_are_sent_later() {
-    let dir = Scratch::new("health-over-bound");
-    let (keeper, _) = start(&dir, boot(&"b".repeat(64)), yes());
-    let full = |n: u64| pb::HardwareEvent {
-        event_id: format!("{n:0>64}"),
-        subject: "s".repeat(32),
-        source: "s".repeat(16),
-        code: "c".repeat(32),
-        message: "m".repeat(120),
-        raw: "r".repeat(256),
-        about: "a".repeat(64),
-        ..event("", pb::HardwareSeverity::Warning, n, "sel")
-    };
-    keeper.record("sel", "", (1..=6).map(full).collect(), NOW);
-    for n in 0..MAX_SOURCES {
-        let token = format!("{n:x<width$}", width = MAX_SOURCE);
-        let reason = "r".repeat(MAX_SOURCE_REASON);
-        assert!(keeper.source_state(state(&token, pb::SourceStatus::Unreadable, &reason)));
-    }
-    let health = keeper.health();
-    assert_eq!(health.sources.len(), MAX_SOURCES);
-    let uncut = pb::HostHealth {
-        events: (1..=6).map(full).collect(),
-        ..health.clone()
-    };
-    assert!(uncut.encoded_len() > MAX_HEALTH_BYTES);
-    assert_eq!(check_health(&health), Ok(()));
-    assert!(health.encoded_len() <= MAX_HEALTH_BYTES);
-    let sent: Vec<u64> = health.events.iter().map(|e| e.time_unix).collect();
-    assert!(!sent.is_empty() && sent.len() < MAX_EVENTS);
-    assert_eq!(sent, (1..=sent.len() as u64).collect::<Vec<u64>>());
-    let first = ids(&health);
-    keeper.written(&first);
-    let later = keeper.health();
-    assert_eq!(check_health(&later), Ok(()));
-    let rest: Vec<u64> = later.events.iter().map(|e| e.time_unix).collect();
-    assert_eq!(rest, (sent.len() as u64 + 1..=6).collect::<Vec<u64>>());
 }
 
 /// A `/dev/kmsg` that hands out the same records at every read, as a restarted reader would.
@@ -948,36 +774,34 @@ impl Journal for NoJournal {
     }
 }
 
-/// With no boot id, the kernel sources name the boot by when it began, so a second read in the
+/// With no boot id, the kernel's log names the boot by when it began, so a second read in the
 /// same boot passes over the records the first held and the coordinator wrote, instead of reading
 /// every poll as a new boot and holding them again.
 #[test]
 fn a_boot_with_no_id_is_followed_by_its_start_time() {
     let dir = Scratch::new("kernel-no-boot-id");
-    let root = Scratch::new("kernel-no-boot-id-root");
     let facts = BootFacts {
         boot_id: None,
         ..boot("unused")
     };
-    let (keeper, log) = start(&dir, facts, yes());
+    let (keeper, _) = start(&dir, facts, yes());
+    let boot = KernelBoot::of(&keeper);
+    assert_eq!(boot.id, format!("{:016x}", 1_795_000_000_u64));
     let mce = KmsgRecord {
         seq: 0,
         usec: 9_000_000,
         text: "mce: [Hardware Error]: CPU 1: Machine Check Exception: 5 Bank 4: be00000000800400"
             .to_owned(),
     };
-    let mut sources = KernelSources::new(
-        root.path(),
-        Box::new(SameRecords(vec![mce])),
-        Box::new(NoJournal),
-        log,
-    );
-    sources.poll(&keeper, NOW);
+    let mut log = KernelLog::new(Box::new(SameRecords(vec![mce])), Box::new(NoJournal), boot);
+    let clock = LinkClock::new(NOW, 0);
+    poll(&mut log, &keeper, &clock);
     let first = keeper.health();
     let codes: Vec<&str> = first.events.iter().map(|e| e.code.as_str()).collect();
     assert_eq!(codes, ["cpu_machine_check"]);
     keeper.written(&ids(&first));
-    sources.poll(&keeper, NOW + 60);
+    clock.advance(60);
+    poll(&mut log, &keeper, &clock);
     assert_eq!(
         ids(&keeper.health()),
         Vec::<String>::new(),

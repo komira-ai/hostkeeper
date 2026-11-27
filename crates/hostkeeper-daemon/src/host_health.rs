@@ -26,13 +26,12 @@
 //! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
-//! **Source states.** A source says after each read whether it could read
-//! ([`HealthKeeper::source_state`]): each heartbeat carries the last state of every source, at
-//! most `MAX_SOURCES`, by the source's token, so a source that cannot read is never taken for one
-//! that found nothing. The states are the daemon's of this run, not kept in the state file: a
-//! source says its state again at its first read after a restart. A health over its bound of
-//! `MAX_HEALTH_BYTES` encoded leaves out its last records until it fits; they wait for the next
-//! heartbeat.
+//! **Source states.** Each read of a source ([`HealthKeeper::read`], from the workers of
+//! [`crate::hardware_sources`]) also says whether the source could be read; the last word of each
+//! source is kept in memory, by its token, and every heartbeat lists them in `sources` (at most
+//! twelve, in the order of their tokens), so a source that reports nothing is never taken for one
+//! that found nothing wrong. When the records and the states together would encode to more than
+//! the bound, the heartbeat carries fewer records, the least severe and newest left for the next.
 //!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
@@ -46,13 +45,13 @@ use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_proto::health::{
-    MAX_BOOT_ID, MAX_EVENTS, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON,
-    MAX_SOURCES,
+    MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
 };
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
-use prost::Message as _;
+use prost::Message;
 
+use crate::hardware_sources::SourceRead;
 use crate::health_state::{self, HEALTH_FILE_ASIDE, HealthFile, Marker, Read, SourceMark, cut};
 use crate::mac::TOOL_DEADLINE;
 use crate::maintenance_boot::{BOOTTIME_ARGS, SYSCTL, parse_kern_boottime};
@@ -134,8 +133,8 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
-    /// Each source's last state, by its token.
-    sources: BTreeMap<String, pb::SourceState>,
+    /// The last state of each source, by its token.
+    states: BTreeMap<String, pb::SourceState>,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -190,7 +189,7 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
-                sources: BTreeMap::new(),
+                states: BTreeMap::new(),
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -260,14 +259,26 @@ impl HealthKeeper {
         held
     }
 
-    /// The mark `source` last kept; none before its first read on this host.
-    #[must_use]
-    pub fn mark(&self, source: &str) -> Option<String> {
-        lock(&self.inner)
-            .file
-            .sources
-            .get(source)
-            .map(|mark| mark.mark.clone())
+    /// Takes what one read of `source` at `now_unix` came to: its state, kept for the
+    /// heartbeats, with its reason cut to its bound; and, when it carries a mark or records, its
+    /// records and its mark (none keeps the mark it had), as [`HealthKeeper::record`] holds them.
+    /// How many records it holds now that it did not before. A read with neither a mark nor a
+    /// record leaves the state file as it was, so a source the host lacks has no first read yet.
+    pub fn read(&self, source: &str, read: SourceRead, now_unix: u64) -> usize {
+        let name = cut(source, MAX_SOURCE);
+        lock(&self.inner).states.insert(
+            name.clone(),
+            pb::SourceState {
+                source: name,
+                status: read.status.into(),
+                reason: cut(&read.reason, MAX_SOURCE_REASON),
+            },
+        );
+        if read.mark.is_none() && read.events.is_empty() {
+            return 0;
+        }
+        let mark = read.mark.or_else(|| self.mark(source)).unwrap_or_default();
+        self.record(source, &mark, read.events, now_unix)
     }
 
     /// The boot id read at the start; none when it could not be read.
@@ -283,20 +294,14 @@ impl HealthKeeper {
         lock(&self.inner).file.boot_unix
     }
 
-    /// Keeps `state` as the last state of its source, its texts cut to their bounds, which every
-    /// heartbeat carries from now on; whether it differs from the state kept before. Past
-    /// `MAX_SOURCES` sources, a source not yet kept is passed over.
-    pub fn source_state(&self, state: pb::SourceState) -> bool {
-        let state = pb::SourceState {
-            source: cut(&state.source, MAX_SOURCE),
-            status: state.status,
-            reason: cut(&state.reason, MAX_SOURCE_REASON),
-        };
-        let mut inner = lock(&self.inner);
-        if !inner.sources.contains_key(&state.source) && inner.sources.len() >= MAX_SOURCES {
-            return false;
-        }
-        inner.sources.insert(state.source.clone(), state.clone()) != Some(state)
+    /// The mark `source` last kept; none before its first read on this host.
+    #[must_use]
+    pub fn mark(&self, source: &str) -> Option<String> {
+        lock(&self.inner)
+            .file
+            .sources
+            .get(source)
+            .map(|mark| mark.mark.clone())
     }
 
     fn save(&self, file: &HealthFile) {
@@ -326,15 +331,13 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources: inner.sources.values().cloned().collect(),
+            sources: inner.states.values().take(MAX_SOURCES).cloned().collect(),
         };
-        // The boot and the sources alone are far within the bound, so leaving out records is
-        // always enough.
-        for _ in 0..MAX_EVENTS {
+        for keep in (0..=health.events.len()).rev() {
+            health.events.truncate(keep);
             if health.encoded_len() <= MAX_HEALTH_BYTES {
                 break;
             }
-            health.events.pop();
         }
         health
     }

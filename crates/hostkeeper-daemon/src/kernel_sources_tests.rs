@@ -1,15 +1,18 @@
 //! The tests of `kernel_sources`: the reads of `/dev/kmsg` (`read_records`, `DevKmsg`), the
-//! journal of the boot before through `Journalctl` over a scripted `journalctl`, and `poll` of
-//! both sources (the kernel's log and its files) over a scratch host root and a scratch state
-//! directory, with a real `HealthKeeper`, its held records read back from the state file; the
-//! marks, the sources' states, `run` and `start`.
+//! journal of the boot before through `Journalctl` over a scripted `journalctl`, and the two
+//! sources (`KernelLog`, `KernelFiles`) read and handed to a real `HealthKeeper` through
+//! `HealthKeeper::read`, over a scratch host root and a scratch state directory, their held
+//! records read back from the state file; the marks and the sources' states. The sources under
+//! their worker, `at_root` and `KernelBoot` are in `kernel_sources_worker_tests.rs`.
 
 use std::collections::VecDeque;
 use std::io::Write as _;
 
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput};
 use hostkeeper_link::HostHealthSource;
-use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper};
+use std::sync::Arc;
+
+use hostkeeper_link::testing::{FakeClock, RecordingLog, ScriptedSleeper};
 use hostkeeper_testkit::Scratch;
 
 use super::*;
@@ -17,6 +20,35 @@ use crate::health_state::{self, Held};
 use crate::host_health::BootFacts;
 use crate::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_proto::health::MAX_SOURCE_REASON;
+
+/// The kernel's two sources as the tests drive them: each poll gives them the boot the keeper
+/// read at its start and reads each once, as `hardware_sources::poll` does.
+struct KernelSources {
+    log: KernelLog,
+    files: KernelFiles,
+}
+
+impl KernelSources {
+    fn new(root: &Path, kmsg: Box<dyn Kmsg>, journal: Box<dyn Journal>) -> KernelSources {
+        KernelSources {
+            log: KernelLog::new(kmsg, journal, KernelBoot::default()),
+            files: KernelFiles::new(root, KernelBoot::default()),
+        }
+    }
+
+    /// One read of each source at `now`, handed to `keeper`.
+    fn poll(&mut self, keeper: &HealthKeeper, now: u64) {
+        let boot = KernelBoot::of(keeper);
+        self.log.boot = boot.clone();
+        self.files.boot = boot;
+        let sources: [&mut dyn HardwareSource; 2] = [&mut self.log, &mut self.files];
+        for source in sources {
+            let mark = keeper.mark(source.name());
+            let read = source.read(mark.as_deref(), now);
+            keeper.read(source.name(), read, now);
+        }
+    }
+}
 
 /// The pstore dumps under `root`, listed and read.
 fn dumps(root: &Path) -> io::Result<Vec<Dump>> {
@@ -207,7 +239,6 @@ struct Host {
     state: Scratch,
     root: Scratch,
     launchctl: FakeLaunchctl,
-    log: Arc<RecordingLog>,
 }
 
 impl Host {
@@ -216,7 +247,6 @@ impl Host {
             state: scratch(&format!("{name}-s")),
             root: scratch(&format!("{name}-r")),
             launchctl: FakeLaunchctl::new(),
-            log: Arc::new(RecordingLog::default()),
         }
     }
 
@@ -258,7 +288,7 @@ impl Host {
 
     fn sources_over(&self, kmsg: Box<dyn Kmsg>) -> KernelSources {
         let journal = Journalctl::new(self.root.path(), Box::new(self.launchctl.clone()));
-        KernelSources::new(self.root.path(), kmsg, Box::new(journal), self.log.clone())
+        KernelSources::new(self.root.path(), kmsg, Box::new(journal))
     }
 
     /// Sources whose `/dev/kmsg` gives, a read each, the records `answers` name.
@@ -559,10 +589,6 @@ fn a_host_with_no_persistent_journal_is_unsupported_and_reads_one_made_later() {
         state_of(&keeper, "journal"),
         (pb::SourceStatus::Unsupported, reason.to_owned())
     );
-    assert_eq!(
-        host.log.lines()[0],
-        format!("error: health source journal: {reason}")
-    );
     assert!(host.launchctl.calls().is_empty());
     assert_eq!(host.held_ids("journal"), [id(BOOT_A, UE)]);
     assert_eq!(log_mark(&keeper).journal_read_in, "");
@@ -648,30 +674,23 @@ fn a_mark_that_does_not_parse_is_read_as_none() {
     );
 }
 
-/// Proves a state change is logged once, and `journalctl` ending 1 about the boot is read once.
+/// Proves the journal source's state follows each read: read, unreadable while `/dev/kmsg` fails,
+/// read again once it reads; and `journalctl` ending 1 about the boot is read once.
 #[test]
-fn a_change_of_a_sources_state_is_logged_once() {
+fn the_state_of_the_log_follows_each_read() {
     let host = Host::with_journal("statelog", no_boot());
     let keeper = host.keeper(BOOT_A);
     let boom = || io::Error::new(io::ErrorKind::PermissionDenied, "kmsg is closed");
-    let answers = vec![
-        Ok(Vec::new()),
-        Ok(Vec::new()),
-        Err(boom()),
-        Err(boom()),
-        Ok(Vec::new()),
-    ];
+    let answers = vec![Ok(Vec::new()), Err(boom()), Ok(Vec::new())];
     let mut sources = host.sources(answers);
-    for step in 0..5 {
+    let mut states = Vec::new();
+    for step in 0..3 {
         sources.poll(&keeper, NOW + 60 * step);
+        states.push(state_of(&keeper, "journal"));
     }
-    let lines = [
-        "health source journal: read",
-        "health source sysfs: read",
-        "error: health source journal: /dev/kmsg cannot be read: kmsg is closed",
-        "health source journal: read",
-    ];
-    assert_eq!(host.log.lines(), lines);
+    let closed = "/dev/kmsg cannot be read: kmsg is closed".to_owned();
+    assert_eq!(states, [ok(), (pb::SourceStatus::Unreadable, closed), ok()]);
+    assert_eq!(state_of(&keeper, "sysfs"), ok());
     assert!(host.held("journal").is_empty());
     assert_eq!(host.launchctl.calls().len(), 1);
     assert_eq!(log_mark(&keeper).journal_read_in, BOOT_A);
@@ -937,55 +956,7 @@ fn files_that_cannot_be_read_make_sysfs_unreadable() {
     assert!(pstore.starts_with("pstore cannot be read: "), "{pstore}");
 }
 
-// ---- run, start, at_host
+// ---- the sources' worker, at_root: in their own file
 
-/// Proves `run` polls at once and after each wait of `POLL_SECS` until the sleeper stops it.
-#[test]
-fn run_polls_every_wait_until_the_sleeper_stops_it() {
-    let host = Host::quiet("run");
-    let keeper = host.keeper(BOOT_A);
-    let sources = host.sources(vec![Ok(vec![UE]), Ok(vec![IO]), Ok(vec![AER])]);
-    let sleeper = ScriptedSleeper::new(2);
-    run(sources, &keeper, &FakeClock::new(NOW, 10), &sleeper);
-    assert_eq!(sleeper.waits(), [60, 60, 60]);
-    let expected = [id(BOOT_A, UE), id(BOOT_A, IO), id(BOOT_A, AER)];
-    assert_eq!(host.held_ids("journal"), expected);
-}
-
-/// Proves `start` runs one polling job on Linux and OpenRC with a keeper, none on a Mac or without.
-#[test]
-fn start_runs_one_job_on_linux_hosts_with_a_keeper_and_none_elsewhere() {
-    let cases = [
-        ("startmac", PlatformKind::Macos, true, 0),
-        ("startnone", PlatformKind::Linux, false, 0),
-        ("startlinux", PlatformKind::Linux, true, 1),
-        ("startopenrc", PlatformKind::Openrc, true, 1),
-    ];
-    for (name, kind, with_keeper, jobs) in cases {
-        let host = Host::quiet(name);
-        let keeper = Arc::new(host.keeper(BOOT_A));
-        let dispatch = ManualDispatch::default();
-        let sources = host.sources(vec![Ok(vec![UE])]);
-        let build = move || {
-            assert_eq!(jobs, 1, "sources are built only for a job");
-            sources
-        };
-        let clock = Arc::new(FakeClock::new(NOW, 10));
-        let sleeper = Box::new(ScriptedSleeper::new(0));
-        let keeper = with_keeper.then_some(keeper);
-        start(kind, keeper, build, clock, sleeper, &dispatch);
-        assert_eq!(dispatch.pending(), jobs, "{name}");
-        assert_eq!(dispatch.run_next(), jobs == 1, "{name}");
-        let held: Vec<String> = (0..jobs).map(|_| id(BOOT_A, UE)).collect();
-        assert_eq!(host.held_ids("journal"), held, "{name}");
-    }
-}
-
-/// Proves the host's own sources are built over `/` without reading anything.
-#[test]
-fn the_host_sources_are_built_without_reading_anything() {
-    let log = Arc::new(RecordingLog::default());
-    let sources = at_host(log.clone());
-    assert_eq!(sources.root.as_path(), Path::new("/"));
-    assert!(log.lines().is_empty());
-}
+#[path = "kernel_sources_worker_tests.rs"]
+mod worker;

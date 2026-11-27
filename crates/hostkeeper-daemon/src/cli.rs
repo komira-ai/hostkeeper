@@ -433,16 +433,15 @@ async fn start_and_serve(
         major,
         watchdog,
     );
-    crate::kernel_sources::start(
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
         platform.kind,
-        links.health.clone(),
-        || crate::kernel_sources::at_host(Arc::clone(&links.log)),
-        Arc::clone(&links.clock),
-        Box::new(ClockSleeper::new(
-            Arc::clone(&started.daemon().ctx().clock),
-            links.stop.clone(),
-        )),
-        links.dispatch.as_ref(),
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
     );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;
