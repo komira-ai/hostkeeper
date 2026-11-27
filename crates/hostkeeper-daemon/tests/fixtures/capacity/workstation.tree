@@ -1,0 +1,46 @@
+# The capacity files of a Linux workstation (28 CPUs, two NVMe disks, one wired and one wireless
+# NIC, container bridges and snap loop devices), recorded from the host with `cat` and `readlink`
+# and kept as they read, but for the disks' serials, which are replaced. Its SMBIOS entries are
+# readable by root only and are not recorded here.
+#
+# One entry a line: `f <path> <text>` a file (`\n` a newline), `l <path> <target>` a link, `d <path>`
+# a directory; every path under the host's root.
+f proc/meminfo MemTotal:       129217144 kB\nMemFree:        13403400 kB\nMemAvailable:   61683104 kB\nBuffers:        15282712 kB\nCached:         15599440 kB\n
+f proc/cmdline BOOT_IMAGE=/boot/vmlinuz-6.17.0-41-generic root=UUID=00000000-0000-4000-8000-000000000000 ro quiet splash\n
+f sys/devices/system/cpu/present 0-27\n
+f sys/devices/system/cpu/online 0-27\n
+f sys/devices/system/cpu/smt/control on\n
+l sys/block/loop0 ../devices/virtual/block/loop0
+f sys/devices/virtual/block/loop0/size 8\n
+f sys/devices/virtual/block/loop0/removable 0\n
+l sys/block/loop1 ../devices/virtual/block/loop1
+f sys/devices/virtual/block/loop1/size 1173440\n
+f sys/devices/virtual/block/loop1/removable 0\n
+l sys/block/loop33 ../devices/virtual/block/loop33
+f sys/devices/virtual/block/loop33/size 0\n
+f sys/devices/virtual/block/loop33/removable 0\n
+l sys/block/nvme0n1 ../devices/pci0000:00/0000:00:1d.0/0000:06:00.0/nvme/nvme0/nvme0n1
+f sys/devices/pci0000:00/0000:00:1d.0/0000:06:00.0/nvme/nvme0/nvme0n1/size 12502446768\n
+f sys/devices/pci0000:00/0000:00:1d.0/0000:06:00.0/nvme/nvme0/nvme0n1/removable 0\n
+l sys/devices/pci0000:00/0000:00:1d.0/0000:06:00.0/nvme/nvme0/nvme0n1/device ../../nvme0
+f sys/devices/pci0000:00/0000:00:1d.0/0000:06:00.0/nvme/nvme0/serial SN0000000000000001  \n
+l sys/block/nvme1n1 ../devices/pci0000:00/0000:00:1b.4/0000:03:00.0/nvme/nvme1/nvme1n1
+f sys/devices/pci0000:00/0000:00:1b.4/0000:03:00.0/nvme/nvme1/nvme1n1/size 3907029168\n
+f sys/devices/pci0000:00/0000:00:1b.4/0000:03:00.0/nvme/nvme1/nvme1n1/removable 0\n
+l sys/devices/pci0000:00/0000:00:1b.4/0000:03:00.0/nvme/nvme1/nvme1n1/device ../../nvme1
+f sys/devices/pci0000:00/0000:00:1b.4/0000:03:00.0/nvme/nvme1/serial SN0000000000000002  \n
+l sys/class/net/docker0 ../../devices/virtual/net/docker0
+f sys/devices/virtual/net/docker0/carrier 1\n
+f sys/devices/virtual/net/docker0/speed 10000\n
+l sys/class/net/eno1 ../../devices/pci0000:00/0000:00:1c.2/0000:05:00.0/net/eno1
+l sys/devices/pci0000:00/0000:00:1c.2/0000:05:00.0/net/eno1/device ../../../0000:05:00.0
+f sys/devices/pci0000:00/0000:00:1c.2/0000:05:00.0/net/eno1/carrier 1\n
+f sys/devices/pci0000:00/0000:00:1c.2/0000:05:00.0/net/eno1/speed 1000\n
+l sys/class/net/lo ../../devices/virtual/net/lo
+f sys/devices/virtual/net/lo/carrier 1\n
+l sys/class/net/vethb432aac ../../devices/virtual/net/vethb432aac
+f sys/devices/virtual/net/vethb432aac/carrier 1\n
+f sys/devices/virtual/net/vethb432aac/speed 10000\n
+l sys/class/net/wlp0s20f3 ../../devices/pci0000:00/0000:00:14.3/net/wlp0s20f3
+l sys/devices/pci0000:00/0000:00:14.3/net/wlp0s20f3/device ../../../0000:00:14.3
+f sys/devices/pci0000:00/0000:00:14.3/net/wlp0s20f3/carrier 0\n

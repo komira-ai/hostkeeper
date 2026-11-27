@@ -61,6 +61,9 @@
 //! - [`serial_baseline`]: the serial console baseline (the GRUB file, the getty's drop-in and the
 //!   getty) a Linux host whose config names a `serial_console` keeps, looked at every ten minutes
 //!   and reported in its heartbeats as `applied`, `reboot_pending`, `failed` or `unsupported`.
+//! - [`capacity`]: a Linux host's capacity (`MemTotal`, the SMBIOS memory devices, the CPUs,
+//!   the physical disks and the network interfaces that have a device), read from its files for
+//!   each heartbeat's host health ([`host_health`]).
 //! - [`mac`]: the real adapters of a Mac's package check (`getxattr`, `codesign`) and claims
 //!   (`ioreg`), over the process port of the launchd adapters.
 //! - [`ssh_host_mac`]: the Mac's host of the sshd setup that trusts the coordinator's SSH user CA:
@@ -169,6 +172,7 @@ pub mod auto_install;
 pub mod bmc;
 pub mod boot;
 pub mod builtin;
+pub mod capacity;
 pub mod checks;
 pub mod cli;
 pub mod console;

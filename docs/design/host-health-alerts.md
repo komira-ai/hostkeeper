@@ -1,7 +1,8 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1, the daemon's state file of HH3, its SMART and hwmon sources of HH11, its rasdaemon source of HH9,
-the Linux kernel sources of HH10 and its reader of the BMC's event log of HH8, marked **Built** where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3, its Linux capacity report of HH4, its rasdaemon
+source of HH9, its SMART and hwmon sources of HH11, the Linux kernel sources of HH10 and its reader of the BMC's event log of HH8,
+marked **Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -215,7 +216,9 @@ from each host model is section 10's.
 run the compare is deferred to the first report after the run, not dropped: a reboot that loses a DIMM is exactly the case. SEL
 deassertions are `deasserted` records, and the "log cleared" and "system boot" entries are `info`. Physical devices only: no `loop`,
 `ram`, `zram`, `dm`, `md`, `nbd`, `sr` or removable USB disk; a NIC only if it has a `/device` and had carrier in the baseline. CPUs
-compare `present` and `smt/control`, so turning SMT off is not a lost core.
+compare `present` and `smt/control`, so turning SMT off is not a lost core. (Built, the daemon's side of these filters:
+`crates/hostkeeper-daemon/src/capacity.rs`, which also leaves out a disk attached through USB and an SR-IOV virtual function, and in a
+kdump boot sends no capacity at all; the compare is HH5's.)
 
 ### 3.2 macOS (Apple silicon)
 
@@ -314,8 +317,8 @@ prerequisites report (about 4 KiB) are counted and never dropped (Built: `beat.r
 6 records of at most about 600 bytes (their strings at most 328 bytes and `raw` 256, with tags), 3.6 KiB, and the baseline without its
 memory devices, about 350 bytes. Together the three never-dropped reports are at most 13 of the 16 KiB. When a beat is still over,
 `fit`'s `DROP_ORDER` (Built) gains two groups, dropped first: the memory devices and the `sources`, then the services' `health_body`
-and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in each boot's
-first beats and when they change. A size test with 16 services and every part at its bound shows the beat fits [V].
+and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in every beat that
+has room for them (Built, section 4.3). A size test with 16 services and every part at its bound shows the beat fits [V].
 
 **Expected sources.** Every Linux host is expected to have a BMC (decision 6), rasdaemon, smartmontools and a persistent journal
 (3.3); a Mac the sources of 3.2. An expected source reported `unsupported` or `unreadable` raises `host_not_monitored`.
@@ -349,7 +352,12 @@ update moves it by a few MiB, a `crashkernel=` change by up to its size. The inc
 fault, about 110 MiB under 256 GiB [V: the host's installed RAM, from its inventory], and 251543660 kB (239.9 GiB) after: 16777216 kB
 less, exactly 16 GiB, one DIMM.
 
-The daemon reports the capacity in every beat; the coordinator keeps the baseline per host in its operations store (New: a table of
+The daemon reports the capacity in every beat (Built, on Linux: `crates/hostkeeper-daemon/src/capacity.rs`, read from `/proc` and
+`/sys` for each heartbeat, the SMBIOS memory devices decoded from `/sys/firmware/dmi/entries/17-*/raw` with no `dmidecode`, sent in
+every heartbeat that has room for them (the daemon is not told which heartbeats arrived, so a count of first heartbeats could be
+spent on lost ones), with the source state
+`smbios`: `unsupported` with no entries, `unreadable` when an entry does not decode; on a board of more than 32 slots the populated
+ones go first); the coordinator keeps the baseline per host in its operations store (New: a table of
 both backends; the files-store coordinator keeps its fleet in memory, and the Postgres one only each host's last beat, so a baseline
 must be a record of its own) and judges memory by two comparisons:
 

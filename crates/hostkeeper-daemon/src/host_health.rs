@@ -33,8 +33,19 @@
 //! that found nothing wrong. When the records and the states together would encode to more than
 //! the bound, the heartbeat carries fewer records, the least severe and newest left for the next.
 //!
-//! **Capacity** ([`HealthKeeper::set_capacity`]): the host's capacity as last read, kept in memory
-//! only and sent in every heartbeat's `baseline`; it is read again at every start of the daemon.
+//! **Capacity** ([`HealthKeeper::set_capacity`]): on a Mac, the host's capacity as last read,
+//! kept in memory only and sent in every heartbeat's `baseline`; it is read again at every start
+//! of the daemon.
+//!
+//! **Capacity on Linux** ([`HealthKeeper::reading_capacity`], [`at_host`]): every heartbeat's
+//! health carries the host's capacity as [`crate::capacity::read`] reads it then: `MemTotal`, the
+//! CPUs, the disks, the network interfaces and the SMBIOS memory devices, and the source state
+//! `smbios` of reading them among the other sources' states. In a kdump boot it carries none.
+//! When the records, the states and the capacity together would encode past the bound of 4096
+//! bytes, the memory devices go first, then the latest records, which wait for the next
+//! heartbeat; the source states are kept. The devices go in every heartbeat that has room for
+//! them, not in a count of first ones: the daemon is not told which heartbeats reached the
+//! coordinator, so a count could be spent on heartbeats that never arrived.
 //!
 //! **The boot before** ([`HealthKeeper::unclean_previous_boot`]): in a boot whose first start found
 //! the file last written in another boot, with no clean-shutdown marker, that boot. It is kept in
@@ -61,6 +72,7 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 use prost::Message;
 
+use crate::capacity;
 use crate::hardware_sources::SourceRead;
 use crate::health_state::{self, HEALTH_FILE_ASIDE, HealthFile, Marker, Read, SourceMark, cut};
 use crate::mac::TOOL_DEADLINE;
@@ -145,6 +157,8 @@ pub struct HealthKeeper {
     state_dir: PathBuf,
     probe: Box<dyn ShutdownProbe>,
     log: Arc<dyn Log>,
+    /// The root the host's capacity is read under; none where it is not read.
+    capacity_root: Option<PathBuf>,
     inner: Mutex<Inner>,
 }
 
@@ -213,6 +227,7 @@ impl HealthKeeper {
             state_dir: state_dir.to_path_buf(),
             probe,
             log,
+            capacity_root: None,
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
@@ -222,6 +237,14 @@ impl HealthKeeper {
         };
         keeper.save(&lock(&keeper.inner).file);
         keeper
+    }
+
+    /// The keeper reporting, in each heartbeat's health, the capacity of the Linux host whose
+    /// root is `root` (the module's doc); none reports none.
+    #[must_use]
+    pub fn reading_capacity(mut self, root: Option<&Path>) -> HealthKeeper {
+        self.capacity_root = root.map(Path::to_path_buf);
+        self
     }
 
     /// At SIGTERM: asks the probe whether the system is going down and, when it is, writes the
@@ -366,12 +389,36 @@ fn is_history(event: &pb::HardwareEvent, now_unix: u64) -> bool {
     event.time_unix != 0 && event.time_unix.saturating_add(HISTORY_SECS) < now_unix
 }
 
+/// Takes from `health` what it must lose to encode within [`MAX_HEALTH_BYTES`]: the memory
+/// devices, then its records from the last; the source states are kept.
+fn fit(health: &mut pb::HostHealth) {
+    if health.encoded_len() > MAX_HEALTH_BYTES {
+        health
+            .baseline
+            .iter_mut()
+            .for_each(|baseline| baseline.memory_devices.clear());
+    }
+    for keep in (0..=health.events.len()).rev() {
+        health.events.truncate(keep);
+        if health.encoded_len() <= MAX_HEALTH_BYTES {
+            break;
+        }
+    }
+}
+
 impl HostHealthSource for HealthKeeper {
     fn health(&self) -> pb::HostHealth {
+        let read = self.capacity_root.as_deref().and_then(capacity::read);
         let inner = lock(&self.inner);
+        let mut states = inner.states.clone();
+        let mut baseline = inner.capacity.clone();
+        if let Some(capacity) = read {
+            states.insert(capacity.smbios.source.clone(), capacity.smbios);
+            baseline = Some(capacity.baseline);
+        }
         let mut health = pb::HostHealth {
             events: inner.file.held.to_send(),
-            baseline: inner.capacity.clone(),
+            baseline,
             boot_id: if inner.boot_known {
                 inner.file.boot_id.clone()
             } else {
@@ -379,14 +426,9 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources: inner.states.values().take(MAX_SOURCES).cloned().collect(),
+            sources: states.values().take(MAX_SOURCES).cloned().collect(),
         };
-        for keep in (0..=health.events.len()).rev() {
-            health.events.truncate(keep);
-            if health.encoded_len() <= MAX_HEALTH_BYTES {
-                break;
-            }
-        }
+        fit(&mut health);
         health
     }
 
@@ -399,8 +441,8 @@ impl HostHealthSource for HealthKeeper {
 }
 
 /// The keeper of a host of `kind` whose state directory is `state_dir`, its boot read from the
-/// host's own files and programs ([`BootFacts::read`]) and its probe the platform's
-/// ([`shutdown_probe::for_platform`]).
+/// host's own files and programs ([`BootFacts::read`]), its probe the platform's
+/// ([`shutdown_probe::for_platform`]), and on Linux reading the host's capacity under `/`.
 #[must_use]
 pub fn at_host(
     kind: PlatformKind,
@@ -411,5 +453,6 @@ pub fn at_host(
     let sysctl = LaunchctlProcess::new(Path::new(SYSCTL), TOOL_DEADLINE);
     let boot = BootFacts::read(kind, Path::new("/"), clock, &sysctl);
     let probe = shutdown_probe::for_platform(kind, Path::new(OPENRC_RUN_DIR));
-    Arc::new(HealthKeeper::open(state_dir, boot, probe, log))
+    let keeper = HealthKeeper::open(state_dir, boot, probe, log);
+    Arc::new(keeper.reading_capacity((kind != PlatformKind::Macos).then_some(Path::new("/"))))
 }
