@@ -417,6 +417,38 @@ reporting `NOT_GRANTED` or `UNDETERMINED` is shown as that. The Host page's Over
 for a Mac whose last heartbeat the coordinator holds but which carries no state), and a warning line naming the profile's document while the
 grant is not granted; a host that is not a Mac, or whose heartbeat the coordinator does not hold (since its start), shows no row.
 
+### Hardware health
+
+The Mac's daemon reads its hardware sources into the host's hardware event log
+(docs/design/host-health-alerts.md section 3.2): each is a hardware source of
+`crates/hostkeeper-daemon/src/mac_health.rs`, read on a worker of its own as a Linux host's are
+(`hardware_sources.rs`), so a slow program holds no heartbeat. It only
+reads: it removes no report and runs each program with a fixed argument list.
+
+- **Kernel panic reports.** The `.panic` files of `/Library/Logs/DiagnosticReports`, and its
+  `.ips` files whose header says `bug_type` 210 (any other `.ips` is an app's crash or a hang);
+  regular files of the directory itself only, so `Retired/` is not read, the newest 512 of them.
+  Each is read once, to at
+  most 256 KiB, and is one record by its `incident_id` (`panic:<incident id>`), so the `.panic` and
+  `.ips` reports of one panic are one record (`crates/hostkeeper-daemon/src/mac_panic.rs`). A report
+  in the old text form, or with no usable id, is known by its file's name. An SError or an AMCC
+  (memory controller) fault is `panic_hardware`, critical; a watchdog (the SoC's, or a userspace
+  one naming the process), a kernel extension that is not Apple's and anything else are
+  `panic_software`, warnings. Read at the start, 2 minutes later, then every 5 minutes; on the
+  first read on a host, reports older than 7 days are `info` history.
+- **An unexpected restart.** In a boot whose boot before ended with no clean-shutdown marker, one
+  `host` warning, `unexpected_reboot`, merged with that boot's panic report when there is one;
+  judged 2 minutes after the daemon's start, once a boot, a restart of the daemon included. The marker is advisory on a Mac: launchd's SIGTERM at a shutdown and at
+  a `bootout` look alike.
+- **Capacity.** `sysctl -n hw.memsize hw.physicalcpu hw.logicalcpu` and
+  `system_profiler -json SPHardwareDataType SPNVMeDataType`, at the start, 2 minutes later, then daily: the
+  memory, the CPUs and each internal disk (BSD name, size, a digest of its serial;
+  `crates/hostkeeper-daemon/src/mac_capacity.rs`). A Mac lists no memory modules, and its memory
+  errors are not monitored (Apple silicon has no error counters to read).
+
+Each source's state is sent with the records (`panic`, `system_profiler`: read, or unreadable
+with its reason), so a source that could not be read never looks like one that found nothing.
+
 ### The Remote Login probe
 
 Whether the daemon needs Full Disk Access to turn on Remote Login (sshd) is not stated by Apple

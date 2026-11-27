@@ -1,0 +1,6 @@
+{"bug_type":"210","timestamp":"2026-11-23 22:01:02.00 +0000","os_version":"macOS 15.1 (24B83)","incident_id":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}
+{
+  "incident" : "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+  "panicString" : "panic(cpu 2 caller 0xfffffe0045678901): userspace watchdog timeout: no successful checkins from WindowServer in 120 seconds\nservice returned not alive with context : is_alive_func returned unhealthy : current req: 0, current state: 1\n",
+  "bug_type" : "210"
+}

@@ -1,0 +1,9 @@
+{"bug_type":"210","timestamp":"2026-11-21 12:30:00.00 +0100","os_version":"macOS 15.1 (24B83)","incident_id":"0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0"}
+{
+  "build" : "macOS 15.1 (24B83)",
+  "product" : "Mac14,13",
+  "incident" : "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0",
+  "date" : "2026-11-21 12:30:00.10 +0100",
+  "panicString" : "panic(cpu 0 caller 0xfffffe0023456789): AMCC0 PLANE2 error: a fault was reported at 0x81234560 @AppleT6020PlatformErrorHandler.cpp:812\nDebugger message: panic\n",
+  "bug_type" : "210"
+}

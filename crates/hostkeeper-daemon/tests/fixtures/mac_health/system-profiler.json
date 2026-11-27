@@ -1,0 +1,53 @@
+{
+  "SPHardwareDataType" : [
+    {
+      "_name" : "hardware_overview",
+      "activation_lock_status" : "activation_lock_disabled",
+      "boot_rom_version" : "11881.41.5",
+      "chip_type" : "Apple M2 Pro",
+      "machine_model" : "Mac14,12",
+      "machine_name" : "Mac mini",
+      "model_number" : "Z170000000LL/A",
+      "number_processors" : "proc 12:8:4",
+      "os_loader_version" : "11881.41.5",
+      "physical_memory" : "32 GB",
+      "platform_UUID" : "00000000-0000-0000-0000-000000000000",
+      "provisioning_UDID" : "00000000-000000000000000E",
+      "serial_number" : "SN-0002"
+    }
+  ],
+  "SPNVMeDataType" : [
+    {
+      "_items" : [
+        {
+          "_name" : "APPLE SSD AP0512Z",
+          "bsd_name" : "disk0",
+          "detachable_drive" : "no",
+          "device_model" : "APPLE SSD AP0512Z",
+          "device_revision" : "1161.40.4",
+          "device_serial" : "0000000000000001",
+          "partition_map_type" : "guid_partition_map_type",
+          "removable_media" : "no",
+          "size" : "500.28 GB",
+          "size_in_bytes" : 500277790720,
+          "smart_status" : "Verified",
+          "spnvme_trim_support" : "Yes",
+          "volumes" : []
+        }
+      ],
+      "_name" : "Apple SSD Controller"
+    },
+    {
+      "_items" : [
+        {
+          "_name" : "Example External NVMe",
+          "bsd_name" : "disk4",
+          "device_serial" : "EXT-0001",
+          "removable_media" : "yes",
+          "size_in_bytes" : 1000204886016
+        }
+      ],
+      "_name" : "Generic SSD Controller"
+    }
+  ]
+}

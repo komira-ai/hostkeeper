@@ -1,0 +1,6 @@
+{"bug_type":"210","timestamp":"2026-11-25 04:05:06.00 +0000","os_version":"macOS 15.1 (24B83)","incident_id":"FEDCBA98-7654-3210-FEDC-BA9876543210"}
+{
+  "incident" : "FEDCBA98-7654-3210-FEDC-BA9876543210",
+  "panicString" : "panic(cpu 3 caller 0xfffffe0067890123): zalloc: zone map exhausted while allocating from zone kalloc.48 @zalloc.c:4123\nDebugger message: panic\n",
+  "bug_type" : "210"
+}

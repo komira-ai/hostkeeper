@@ -14,8 +14,8 @@
 //! sources of a host of a kind, and [`start_host`] does so for the daemon, when it keeps a health
 //! state, each worker waiting on the daemon's clock until its stop flag is set: on Linux (systemd and OpenRC) SMART through `smartctl`
 //! ([`crate::smart`]), the hwmon temperatures ([`crate::hwmon`]), rasdaemon's database
-//! ([`crate::rasdaemon`]) and the kernel's log and files ([`crate::kernel_sources`]); none on a
-//! Mac yet.
+//! ([`crate::rasdaemon`]) and the kernel's log and files ([`crate::kernel_sources`]); on a Mac its
+//! panic reports and its capacity ([`crate::mac_health`]).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -169,8 +169,9 @@ pub fn for_host(
     }
 }
 
-/// Starts the sources of this host, a host of `kind` ([`for_host`] over `/` and [`SMARTCTL`]),
-/// each on a thread of its own, reading at `clock`'s seconds and waiting on `sleeper`'s.
+/// Starts the sources of this host, a host of `kind` ([`for_host`] over `/` and [`SMARTCTL`], and
+/// a Mac's of [`crate::mac_health::for_host`] over `keeper`), each on a thread of its own, reading
+/// at `clock`'s seconds and waiting on `sleeper`'s.
 pub fn at_host(
     kind: PlatformKind,
     keeper: &Arc<HealthKeeper>,
@@ -179,7 +180,8 @@ pub fn at_host(
     dispatch: &dyn Dispatch,
 ) {
     let boot = KernelBoot::of(keeper);
-    let sources = for_host(kind, Path::new("/"), Path::new(SMARTCTL), &boot);
+    let mut sources = for_host(kind, Path::new("/"), Path::new(SMARTCTL), &boot);
+    sources.extend(crate::mac_health::for_host(kind, keeper));
     start(sources, keeper, clock, sleeper, dispatch);
 }
 

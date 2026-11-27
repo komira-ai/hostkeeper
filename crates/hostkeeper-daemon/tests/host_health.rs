@@ -16,7 +16,7 @@ use hostkeeper_daemon::health_state::{
     Refused,
 };
 use hostkeeper_daemon::host_health::{
-    BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT,
+    BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT, UncleanBoot,
 };
 use hostkeeper_daemon::kernel_log::KmsgRecord;
 use hostkeeper_daemon::kernel_sources::{
@@ -735,6 +735,91 @@ fn a_macs_boot_time_is_read_through_sysctl() {
     );
     assert_eq!(read().boot_unix, 0);
     assert_eq!(read().boot_unix, 0);
+}
+
+/// Proves the boot before is unclean in a boot whose first start found the file last written in
+/// another boot with no clean-shutdown marker, and still at a second start in that boot (kept in
+/// the file); not at the first start on a host, not after an orderly stop, not when the boot id
+/// cannot be read, and not over a file moved aside; the keeper says the boot it runs in.
+#[test]
+fn the_boot_before_is_unclean_only_after_an_unclean_end() {
+    let dir = Scratch::new("health-before");
+    let (keeper, _) = start(&dir, boot("boot-1"), yes());
+    assert_eq!(
+        keeper.unclean_previous_boot(),
+        None,
+        "the first start on a host"
+    );
+    assert_eq!(
+        (keeper.boot_id().as_deref(), keeper.boot_unix()),
+        (Some("boot-1"), 1_795_000_000)
+    );
+    drop(keeper);
+    let (keeper, _) = start(&dir, boot("boot-2"), yes());
+    assert_eq!(
+        keeper.unclean_previous_boot(),
+        Some(UncleanBoot {
+            boot_id: "boot-1".to_owned(),
+            boot_unix: 1_795_000_000,
+        })
+    );
+    drop(keeper);
+    let (keeper, _) = start(&dir, boot("boot-2"), yes());
+    assert_eq!(
+        keeper.unclean_previous_boot(),
+        Some(UncleanBoot {
+            boot_id: "boot-1".to_owned(),
+            boot_unix: 1_795_000_000,
+        }),
+        "a restart in the same boot still knows it"
+    );
+    assert_eq!(
+        (
+            on_file(&dir).previous_boot_id.as_str(),
+            on_file(&dir).previous_boot_unix
+        ),
+        ("boot-1", 1_795_000_000)
+    );
+    keeper.stopping();
+    drop(keeper);
+    let (keeper, _) = start(&dir, boot("boot-3"), yes());
+    assert_eq!(
+        keeper.unclean_previous_boot(),
+        None,
+        "after an orderly stop"
+    );
+    drop(keeper);
+    let unknown = BootFacts {
+        boot_id: None,
+        ..boot("x")
+    };
+    let (keeper, _) = start(&dir, unknown, yes());
+    assert_eq!(keeper.unclean_previous_boot(), None, "no boot id");
+    assert_eq!(keeper.boot_id(), None);
+    drop(keeper);
+    fs::write(dir.path().join(HEALTH_FILE), b"{").expect("write");
+    let (keeper, _) = start(&dir, boot("boot-4"), yes());
+    assert_eq!(keeper.unclean_previous_boot(), None, "a file moved aside");
+}
+
+/// Proves the capacity set on the keeper is sent in every heartbeat's `baseline`, within the
+/// health's bounds, and a capacity of none sends none.
+#[test]
+fn the_capacity_is_sent_in_every_heartbeat() {
+    let dir = Scratch::new("health-capacity");
+    let (keeper, _) = start(&dir, boot("boot-1"), yes());
+    let capacity = pb::Baseline {
+        mem_total_kib: 33_554_432,
+        cpus_present: 12,
+        cpus_online: 12,
+        ..pb::Baseline::default()
+    };
+    keeper.set_capacity(Some(capacity.clone()));
+    let health = keeper.health();
+    assert_eq!(health.baseline, Some(capacity));
+    assert_eq!(check_health(&health), Ok(()));
+    keeper.set_capacity(None);
+    assert_eq!(keeper.health().baseline, None);
 }
 
 /// Proves the keeper gives the boot id and the boot time it was opened with, and no boot id when
