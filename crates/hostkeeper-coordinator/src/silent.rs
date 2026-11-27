@@ -117,13 +117,9 @@ pub(crate) fn silent_updates(
                     );
                     alert(name, id, version, silent.as_secs(), &said)
                 });
-            let mut alerts: Vec<Alert> = reported.collect();
-            for one in ordered {
-                if !alerts.iter().any(|a| a.subject.host == one.subject.host) {
-                    alerts.push(one);
-                }
-            }
-            alerts
+            // A host's order ends at its first beat that says it is updating, so a host is named
+            // by its last word or by its order, never by both.
+            reported.chain(ordered)
         })
         .collect()
 }
