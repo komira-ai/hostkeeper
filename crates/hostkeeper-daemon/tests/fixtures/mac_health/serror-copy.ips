@@ -1,0 +1,6 @@
+{"bug_type":"210","timestamp":"2026-11-20 03:00:00.00 +0000","os_version":"macOS 15.1 (24B83)","incident_id":"2b6f9c1e-7d1a-4c3e-9f20-6a1d0e5b8c44"}
+{
+  "incident" : "2b6f9c1e-7d1a-4c3e-9f20-6a1d0e5b8c44",
+  "panicString" : "panic(cpu 4 caller 0xfffffe0012345678): \"SError interrupt, ESR 0xbe000011\" @AppleARMPlatform.cpp:1234\n",
+  "bug_type" : "210"
+}

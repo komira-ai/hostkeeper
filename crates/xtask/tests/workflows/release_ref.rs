@@ -19,7 +19,9 @@
 //! is the workflow commit's, through [`super::xtask_calls`].
 //!
 //! It also refuses, in a job that calls xtask, a checkout of another repository or into a
-//! `path`: a later call would not run the checkout this rule reads.
+//! `path`: a later call would not run the checkout this rule reads. The one checkout it lets
+//! stand there is farm.yml's of komira's assert_remote sources into `buck-out/komira`
+//! ([`super::farm::is_tool_checkout`]), which leaves the workspace's own checkout as it was.
 //!
 //! What the floor's command line records, and so what is checked, is each verb's flags (a short
 //! form as an alias of its long one), whether each takes a value or is always required, and its
@@ -302,6 +304,9 @@ pub fn problems(file: &str, doc: &Node) -> Vec<String> {
         let mut workspace = Workspace::Own;
         for (at, step) in steps.iter().enumerate() {
             let n = at + 1;
+            if super::farm::is_tool_checkout(file, step) {
+                continue;
+            }
             if text(step, "uses").is_some_and(|u| u.starts_with("actions/checkout@")) {
                 let with = entry(step, "with");
                 let of = |key| with.and_then(|w| text(w, key));

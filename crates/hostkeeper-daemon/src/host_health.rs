@@ -33,6 +33,16 @@
 //! that found nothing wrong. When the records and the states together would encode to more than
 //! the bound, the heartbeat carries fewer records, the least severe and newest left for the next.
 //!
+//! **Capacity** ([`HealthKeeper::set_capacity`]): the host's capacity as last read, kept in memory
+//! only and sent in every heartbeat's `baseline`; it is read again at every start of the daemon.
+//!
+//! **The boot before** ([`HealthKeeper::unclean_previous_boot`]): in a boot whose first start found
+//! the file last written in another boot, with no clean-shutdown marker, that boot. It is kept in
+//! the file, so a later start of the daemon in the same boot (a restart, a crash) still knows it.
+//! A boot whose first start found no file, a file moved aside or a file with no boot id, or a
+//! start whose boot id cannot be read, has no boot before to judge: the first start on a host
+//! never reads as an unexpected restart.
+//!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
 
@@ -121,6 +131,15 @@ impl BootFacts {
     }
 }
 
+/// The boot before the one the daemon runs in, which ended with no clean-shutdown marker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UncleanBoot {
+    /// Its boot id.
+    pub boot_id: String,
+    /// When it began, Unix seconds; 0 when not read.
+    pub boot_unix: u64,
+}
+
 /// The daemon's hardware health: its state file in memory, written after every change.
 pub struct HealthKeeper {
     state_dir: PathBuf,
@@ -133,6 +152,8 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
+    /// The host's capacity as last read; none before it is.
+    capacity: Option<pb::Baseline>,
     /// The last state of each source, by its token.
     states: BTreeMap<String, pb::SourceState>,
 }
@@ -169,10 +190,16 @@ impl HealthKeeper {
             }
         };
         let mut file = found.unwrap_or_default();
+        if let Some(id) = &boot.boot_id
+            && *id != file.boot_id
+        {
+            file.previous_boot_id = std::mem::take(&mut file.boot_id);
+            file.previous_boot_unix = file.boot_unix;
+        }
         file.previous_clean = match &boot.boot_id {
             None => false,
             Some(id) if *id == file.boot_id => file.previous_clean,
-            Some(_) => file.marker == Marker::Clean && !file.boot_id.is_empty(),
+            Some(_) => file.marker == Marker::Clean && !file.previous_boot_id.is_empty(),
         };
         if let Some(id) = &boot.boot_id {
             file.boot_id.clone_from(id);
@@ -189,6 +216,7 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
+                capacity: None,
                 states: BTreeMap::new(),
             }),
         };
@@ -304,6 +332,26 @@ impl HealthKeeper {
             .map(|mark| mark.mark.clone())
     }
 
+    /// The boot before this one, when it ended with no clean-shutdown marker (the module's doc);
+    /// none otherwise, and when this start's boot id was not read.
+    #[must_use]
+    pub fn unclean_previous_boot(&self) -> Option<UncleanBoot> {
+        let inner = lock(&self.inner);
+        let file = &inner.file;
+        (inner.boot_known && !file.previous_clean && !file.previous_boot_id.is_empty()).then(|| {
+            UncleanBoot {
+                boot_id: file.previous_boot_id.clone(),
+                boot_unix: file.previous_boot_unix,
+            }
+        })
+    }
+
+    /// Keeps `capacity` as the host's capacity, which every heartbeat sends from now on; none
+    /// sends none.
+    pub fn set_capacity(&self, capacity: Option<pb::Baseline>) {
+        lock(&self.inner).capacity = capacity;
+    }
+
     fn save(&self, file: &HealthFile) {
         if let Err(e) = health_state::write(&self.state_dir, file, &|_| false) {
             self.log
@@ -323,7 +371,7 @@ impl HostHealthSource for HealthKeeper {
         let inner = lock(&self.inner);
         let mut health = pb::HostHealth {
             events: inner.file.held.to_send(),
-            baseline: None,
+            baseline: inner.capacity.clone(),
             boot_id: if inner.boot_known {
                 inner.file.boot_id.clone()
             } else {

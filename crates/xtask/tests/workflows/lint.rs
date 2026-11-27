@@ -12,8 +12,8 @@
 //!   local action or reusable workflow is code this lint does not read), but the one call of
 //!   [`mac_farm::CALL`] from artifacts.yml ([`mac_farm::local_call_allowed`]), a workflow of
 //!   this directory that this lint reads ([`mac_farm::file_problems`]). In [`farm::FILE`]
-//!   alone, [`farm::FARM_CONNECT`] is pinned by commit with no version comment: komira tags no
-//!   release of it;
+//!   alone, [`farm::FARM_CONNECT`] and [`farm::BUCK2_FARM`] are pinned by commit with no version
+//!   comment: komira tags no release of them;
 //! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
 //!   calls the CI client, the job of [`cp_deploy::calls_updater`] that calls
 //!   docker-swarm-updater's deploy workflow, and the job of [`mac_farm::calls_farm`] that calls
@@ -51,7 +51,11 @@
 //!   a service has no image;
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
 //! - it is [`farm::FILE`] and breaks a rule of its own ([`farm::problems`]: its triggers, its one
-//!   job, its rights, farm-connect's inputs, and the `local: 0` check after the build);
+//!   job, its rights, farm-connect's inputs, every buck2 build on the farm through komira's
+//!   buck2-farm action, and the checks between the builds);
+//! - it is one of [`step_bounds::FILES`], the workflows that reach the build farm, and a job of it
+//!   has no `timeout-minutes`, or a step has none or one that is not under its job's
+//!   ([`step_bounds::problems`]);
 //! - it is [`mac_farm::FILE`] and breaks a rule of its own ([`mac_farm::file_problems`]: its one
 //!   trigger, `workflow_call`, its one job, its rights and its steps);
 //! - it is neither [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`], it does not run for a pull
@@ -118,6 +122,7 @@ use super::release_macos;
 use super::release_red;
 use super::release_ref;
 use super::set_desired;
+use super::step_bounds;
 use super::xtask_calls;
 use super::yaml::{self, Node, Value};
 
@@ -491,6 +496,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     }
     if file == mac_farm::FILE {
         problems.extend(mac_farm::file_problems(&doc));
+    }
+    if step_bounds::FILES.contains(&file) {
+        problems.extend(step_bounds::problems(&doc));
     }
     if net_install_file {
         problems.extend(net_install::problems(&doc));
