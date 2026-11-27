@@ -319,6 +319,7 @@ fn host(rig: &Rig) -> Host {
         maintenance: Some(maintenance),
         bmc: None,
         serial_console: None,
+        health: None,
     };
     Host {
         heartbeater: links.heartbeater(&daemon),

@@ -60,6 +60,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::names::Version;
 use hostkeeper_enroll::{Enroller, RETRY_SECS};
+use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::{
     BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, FullDiskAccessSource,
     GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig,
@@ -74,6 +75,7 @@ use hostkeeper_steps::Clock;
 use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
 use crate::facts_file::FactsFile;
+use crate::host_health::HealthKeeper;
 use crate::host_identity::HostIdentity;
 use crate::link_adapters::{
     DaemonHalts, DaemonMaintain, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
@@ -170,6 +172,10 @@ pub struct Links {
     /// The host's serial console baseline ([`crate::serial_baseline`]), which every heartbeat
     /// reports; none on a host whose config names no `serial_console`.
     pub serial_console: Option<Arc<dyn SerialConsoleSource>>,
+    /// The host's hardware health ([`crate::host_health`]), which every heartbeat to a coordinator
+    /// that advertises `host-health-v1` reports, and whose clean-shutdown marker is judged at
+    /// SIGTERM ([`crate::start::serve_until`]); none where a daemon keeps none.
+    pub health: Option<Arc<HealthKeeper>>,
 }
 
 impl Links {
@@ -267,6 +273,10 @@ impl Links {
                 }),
                 bmc: self.bmc.clone(),
                 serial_console: self.serial_console.clone(),
+                health: self
+                    .health
+                    .clone()
+                    .map(|keeper| keeper as Arc<dyn HostHealthSource>),
             },
         )
     }

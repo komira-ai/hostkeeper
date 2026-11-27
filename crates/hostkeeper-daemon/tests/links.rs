@@ -104,6 +104,7 @@ fn links_with(
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 
@@ -543,6 +544,8 @@ fn files_under(root: &Path) -> HostFiles {
 #[test]
 fn the_host_links_read_the_pki_directory_and_log_through_the_daemon() {
     let rig = Rig::new("links-host");
+    // The state directory the daemon's start makes, where the host's links keep its health.
+    std::fs::create_dir_all(&rig.state).expect("the state directory");
     let (daemon, alerts) = alerting(rig.daemon());
     let daemon = Arc::new(daemon);
     let files = files_under(rig.scratch.path());

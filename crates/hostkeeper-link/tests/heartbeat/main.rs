@@ -22,6 +22,7 @@ mod grpc_reply;
 mod halts;
 mod health;
 mod host_facts;
+mod host_health_source;
 mod host_ssh;
 mod kbf;
 mod link;

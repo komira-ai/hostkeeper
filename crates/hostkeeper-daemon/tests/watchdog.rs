@@ -130,6 +130,7 @@ fn links(
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     };
     (links, jobs)
 }
