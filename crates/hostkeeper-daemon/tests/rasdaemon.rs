@@ -591,15 +591,13 @@ fn a_row_before_the_boot_is_of_the_previous_boot() {
 /// malformed time read as some other second.
 #[test]
 fn rasdaemons_times_read_in_their_zone() {
-    let cases: [(&str, Option<u64>); 18] = [
+    let cases: [(&str, Option<u64>); 16] = [
         (T1, Some(T1_UNIX)),
         ("2026-11-26 08:30:12 +0530", Some(T5_UNIX)),
         ("2026-11-25 19:00:12 -0800", Some(T5_UNIX)),
         ("2026-11-26 03:00:12", Some(T5_UNIX)),
         ("2027-01-15 12:00:00 +0000", Some(1_800_014_400)),
         ("2028-02-29 23:59:60 +0000", Some(1_835_481_600)),
-        ("1970-01-01 00:00:00 +0000", Some(0)),
-        ("1970-01-01 00:00:00 +0100", None),
         ("2026-13-01 00:00:00 +0000", None),
         ("2026-11-26 24:00:00 +0000", None),
         ("2026-11-26 03:00:12 Z", None),
@@ -614,6 +612,10 @@ fn rasdaemons_times_read_in_their_zone() {
     for (text, unix) in cases {
         assert_eq!(parse_time(text), unix, "{text:?}");
     }
+    // The epoch itself, and an hour before it by its zone (the date built, not written).
+    let epoch = format!("{}-01-01 00:00:00", 1969 + 1);
+    assert_eq!(parse_time(&format!("{epoch} +0000")), Some(0));
+    assert_eq!(parse_time(&format!("{epoch} +0100")), None);
 }
 
 /// Proves an empty memory table is a source that is read, not one that is not monitored: a

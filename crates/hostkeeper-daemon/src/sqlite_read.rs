@@ -3,7 +3,7 @@
 //!
 //! **Why not SQLite.** The daemon's Linux build is static, for musl, with the host's gcc, which
 //! builds only C that links against no libc (`.cargo/config.toml`); SQLite's own C is not such
-//! C. So this reads the file format itself (<https://www.sqlite.org/fileformat2.html>): the
+//! C. So this reads the file format itself (SQLite's documented "Database File Format"): the
 //! header, the table b-trees (interior and leaf pages, with overflow pages), and the records of
 //! their cells. It reads table b-trees only, never an index, and writes nothing.
 //!
@@ -519,7 +519,7 @@ fn value(serial: u64, body: &[u8]) -> Result<(Value, usize)> {
         _ => {
             let len = usize::try_from((serial - 12) / 2).unwrap_or(usize::MAX);
             let bytes = take(body, 0, len)?;
-            if serial % 2 == 0 {
+            if serial.is_multiple_of(2) {
                 Ok((Value::Blob(bytes.to_vec()), len))
             } else {
                 Ok((

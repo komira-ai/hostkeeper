@@ -484,7 +484,7 @@ pub fn parse_time(text: &str) -> Option<u64> {
         .filter(|d| d.len() == 4 && d.bytes().all(|b| b.is_ascii_digit()))?;
     let offset = digits.parse::<i64>().ok()?;
     let offset = sign * ((offset / 100) * 3600 + (offset % 100) * 60);
-    // Days from 1970-01-01 of the civil date (the proleptic Gregorian calendar, March-based).
+    // Days from the Unix epoch of the civil date (the proleptic Gregorian calendar, March-based).
     let year = year - i64::from(month <= 2);
     let era = year.div_euclid(400);
     let of_era = year - era * 400;
