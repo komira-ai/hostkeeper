@@ -157,7 +157,7 @@ message Hook {
 }
 
 // The bound of each hook step, in seconds. Every bound but `prepare` is above 0; `prepare` 0 is
-// unbounded.
+// the updater's own ceiling (3600 s), at which the update ends deferred.
 message StepBounds {
   uint64 prepare = 1;
   uint64 cutover = 2;

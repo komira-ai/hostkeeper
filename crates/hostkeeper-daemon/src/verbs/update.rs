@@ -515,7 +515,7 @@ fn update_order(
         hook_args: hook.command.iter().skip(1).cloned().collect(),
         previous_hook,
         bounds: Bounds {
-            // `prepare = 0` is the unbounded `prepare` of the manifest.
+            // `prepare = 0`: the runner bounds it by its ceiling (`PREPARE_CEILING_SECS`).
             prepare_secs: timeouts.prepare.map_or(0, NonZeroU64::get),
             cutover_secs: timeouts.cutover.get(),
             verify_secs: timeouts.verify.get(),

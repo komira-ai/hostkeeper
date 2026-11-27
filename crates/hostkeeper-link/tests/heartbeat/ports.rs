@@ -166,11 +166,13 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "proto_map_prerequisites_tests.rs",
         "proto_map_serial_console_tests.rs",
         "proto_map_tests.rs",
+        "reach.rs",
         "repositories.rs",
         "serial_console.rs",
         "testing.rs",
         "testing_health.rs",
         "testing_maintenance.rs",
+        "testing_reach.rs",
         "testing_serial_console.rs",
         "wire_map.rs",
     ];

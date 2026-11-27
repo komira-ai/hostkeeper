@@ -5,20 +5,21 @@
 use std::sync::Arc;
 
 use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_link::testing::RecordingLog;
+use hostkeeper_link::testing::{FakeClock, FakeLookup, RecordingLog};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, ClientIdentity, CoordinatorLink, EndpointError, HEAD_MAX, Heartbeat,
-    JsonMtlsLink, LinkError, Order, OrderId, OrderRef, Platform, REPLY_MAX, Reason, Reply,
+    JsonMtlsLink, LinkError, Order, OrderId, OrderRef, Platform, REPLY_MAX, Reach, Reason, Reply,
     ReplyFault, Target, TrustFault, Verb,
 };
 
 use crate::tls::{
-    COORDINATOR, Ca, Close, Farm, PipeTransport, Pki, config_text, http, link, serve, server_config,
+    COORDINATOR, COORDINATOR_IP, Ca, Close, Farm, PipeTransport, Pki, config_text, http, link,
+    serve, server_config,
 };
 use crate::{service, version};
 
 /// An empty heartbeat of a daemon at 0.9.0.
-fn beat() -> Heartbeat {
+pub(crate) fn beat() -> Heartbeat {
     Heartbeat {
         platform: Platform::LinuxX86_64,
         agent_version: version("0.9.0"),
@@ -365,54 +366,71 @@ fn the_mtls_link_refuses_a_reply_with_an_unknown_key_or_over_the_bound() {
     );
 }
 
-/// A link to `coordinator`, and what its transport dialed when it sent a heartbeat (with no
-/// one answering).
-fn dialed(name: &str, coordinator: &str) -> Vec<(String, u16)> {
+/// Hosts and ports, in the order a transport dialed them or a lookup was asked for them.
+type Calls = Vec<(String, u16)>;
+
+/// A link to `coordinator`, and what its transport dialed and its lookup was asked when it
+/// sent a heartbeat (with no one answering).
+fn dialed(name: &str, coordinator: &str) -> (Calls, Calls) {
     let farm = Farm::new();
     let pki = Pki::with_bundle(name, &farm.ca.pem);
     let config = DaemonConfig::parse(&config_text(coordinator, &farm.ca.sha256_hex()))
         .expect("a daemon config");
     let transport = Arc::new(PipeTransport::default());
     let log = Arc::new(RecordingLog::default());
-    let link = JsonMtlsLink::new(&config, &pki.root(), transport.clone(), log).expect("a link");
+    let lookup = Arc::new(FakeLookup::answering(&[COORDINATOR_IP]));
+    let reach = Reach::new(&config, lookup.clone(), log.clone()).expect("a reach");
+    let link = JsonMtlsLink::new(
+        &config,
+        &pki.root(),
+        Arc::new(reach),
+        transport.clone(),
+        Arc::new(FakeClock::new(0, 0)),
+        log,
+    );
     assert_eq!(
         link.heartbeat(&farm.host.identity(), &beat()),
         Err(LinkError::Transport(std::io::ErrorKind::ConnectionRefused))
     );
-    transport.dialed()
+    (transport.dialed(), lookup.asked())
 }
 
 /// Catches a link that dials another host or port than the daemon config names, drops a port,
-/// keeps the brackets of an address, or posts under a path it was not given: the host and port
-/// of the config are dialed, 443 when it names none; a path is refused, and so is a host no
-/// certificate can name.
+/// keeps the brackets of an address, or posts under a path it was not given: the name of the
+/// config is looked up on its port, 443 when it names none, and the address it looks up to is
+/// dialed on that port; an address in the URL is dialed as it is, with no lookup; a path is
+/// refused, and so is a host no certificate can name.
 #[test]
 fn the_link_dials_the_host_and_port_of_the_daemon_config() {
+    let ip = COORDINATOR_IP.to_string();
     let cases = [
-        ("https://coordinator.test:8443", ("coordinator.test", 8443)),
-        ("https://coordinator.test", ("coordinator.test", 443)),
-        ("https://coordinator.test/", ("coordinator.test", 443)),
-        ("https://127.0.0.1:9443", ("127.0.0.1", 9443)),
-        ("https://[::1]:7443", ("::1", 7443)),
-        ("https://[::1]", ("::1", 443)),
+        ("https://coordinator.test:8443", (ip.as_str(), 8443), true),
+        ("https://coordinator.test", (ip.as_str(), 443), true),
+        ("https://coordinator.test/", (ip.as_str(), 443), true),
+        ("https://127.0.0.1:9443", ("127.0.0.1", 9443), false),
+        ("https://[::1]:7443", ("::1", 7443), false),
+        ("https://[::1]", ("::1", 443), false),
     ];
-    for (n, (coordinator, (host, port))) in cases.into_iter().enumerate() {
+    for (n, (coordinator, (host, port), named)) in cases.into_iter().enumerate() {
+        let asked = if named {
+            vec![(COORDINATOR.to_owned(), port)]
+        } else {
+            Vec::new()
+        };
         assert_eq!(
             dialed(&format!("link-dial-{n}"), coordinator),
-            [(host.to_owned(), port)],
+            (vec![(host.to_owned(), port)], asked),
             "{coordinator}"
         );
     }
 
     let ca = Ca::new("unused");
-    let pki = Pki::empty("link-dial-refused");
     let refused = |coordinator: &str| {
         let config = DaemonConfig::parse(&config_text(coordinator, &ca.sha256_hex()))
             .expect("a daemon config");
-        JsonMtlsLink::new(
+        Reach::new(
             &config,
-            &pki.root(),
-            Arc::new(PipeTransport::default()),
+            Arc::new(FakeLookup::answering(&[])),
             Arc::new(RecordingLog::default()),
         )
         .err()

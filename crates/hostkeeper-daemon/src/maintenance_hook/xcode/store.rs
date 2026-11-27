@@ -5,6 +5,9 @@
 //! On a host the client is made for each read from the daemon config and the pki directory
 //! ([`HostStore`]): the hook is its own process, and a config that cannot be read or a
 //! coordinator address that cannot be dialed is [`StoreError::Unusable`], which the stage defers.
+//! The coordinator's name is dialed where a reach of the read's own says
+//! ([`crate::coordinator_address::host_reach`]): the addresses it looks up to, then the config's
+//! `coordinator_ip`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,6 +16,8 @@ use std::sync::Arc;
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_link::{CoordinatorGet, GetError, Got, Limit, Log, PkiCertSource, TcpTransport};
 use hostkeeper_steps::Clock;
+
+use crate::coordinator_address::{host_lookup, host_reach};
 
 /// Why the store gave no body.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -79,16 +84,18 @@ impl HostStore {
     fn client(&self) -> Result<CoordinatorGet, StoreError> {
         let config = DaemonConfig::load(&self.config, self.trusted_uid)
             .map_err(|error| StoreError::Unusable(format!("{}: {error}", self.config.display())))?;
+        let reach = host_reach(&config, None, host_lookup(), Arc::new(Quiet))
+            .map_err(|error| StoreError::Unusable(error.to_string()))?;
         let certs = Arc::new(PkiCertSource::new(&self.pki, Arc::new(Quiet)));
         let transport = Arc::new(TcpTransport::new(Arc::clone(&self.clock)));
-        CoordinatorGet::new(
+        Ok(CoordinatorGet::new(
             &config,
             &self.pki,
             certs,
+            Arc::new(reach),
             transport,
             Arc::clone(&self.clock),
-        )
-        .map_err(|error| StoreError::Unusable(error.to_string()))
+        ))
     }
 }
 

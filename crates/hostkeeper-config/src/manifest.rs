@@ -158,7 +158,8 @@ impl ManifestRefusal {
 /// The bound of each step, in seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timeouts {
-    /// `None` is the unbounded form (`prepare = 0`).
+    /// `None` is `prepare = 0`, which the updater runs under its ceiling (crate `hostkeeper-steps`,
+    /// `PREPARE_CEILING_SECS`).
     pub prepare: Option<NonZeroU64>,
     pub cutover: NonZeroU64,
     pub verify: NonZeroU64,

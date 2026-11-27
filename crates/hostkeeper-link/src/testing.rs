@@ -34,12 +34,15 @@ use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
 pub use health::FakeHostHealth;
 pub use maintenance::{FakeMaintain, FakeMaintenance};
+pub use reach::{FakeLookup, LOOKUP_FAILED};
 pub use serial_console::FakeSerialConsole;
 
 #[path = "testing_health.rs"]
 mod health;
 #[path = "testing_maintenance.rs"]
 mod maintenance;
+#[path = "testing_reach.rs"]
+mod reach;
 #[path = "testing_serial_console.rs"]
 mod serial_console;
 

@@ -49,6 +49,9 @@ pub enum Kind {
     MaintenanceNotBack,
     /// A host declined a service's desired version several times in a row for one reason.
     RepeatedDeferral,
+    /// A host whose last word of a service is an update running has been silent long enough that
+    /// the word holds no update slot and no rollout place ([`crate::silent`]).
+    SilentWhileUpdating,
 }
 
 impl Kind {
@@ -78,6 +81,7 @@ impl Kind {
             Self::MaintenanceHalted => "maintenance_halted",
             Self::MaintenanceNotBack => "maintenance_not_back",
             Self::RepeatedDeferral => "repeated_deferral",
+            Self::SilentWhileUpdating => "silent_while_updating",
         }
     }
 
@@ -93,7 +97,8 @@ impl Kind {
             | Self::HostHalt
             | Self::MaintenanceHalted
             | Self::MaintenanceNotBack
-            | Self::RepeatedDeferral => proto::AlertSeverity::Critical,
+            | Self::RepeatedDeferral
+            | Self::SilentWhileUpdating => proto::AlertSeverity::Critical,
             Self::WaitingForOperator
             | Self::DuplicateClaimPending
             | Self::HeldOnBadVersion
@@ -132,6 +137,7 @@ impl Kind {
             Self::MaintenanceHalted => proto::AlertKind::MaintenanceHalted,
             Self::MaintenanceNotBack => proto::AlertKind::MaintenanceNotBack,
             Self::RepeatedDeferral => proto::AlertKind::RepeatedDeferral,
+            Self::SilentWhileUpdating => proto::AlertKind::SilentWhileUpdating,
         }
     }
 }

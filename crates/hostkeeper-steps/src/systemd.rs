@@ -35,8 +35,7 @@
 //! ```
 //!
 //! Its `RuntimeMaxSec=` is the call's [`AdditiveCall::bound`]: the seconds, or `infinity` for
-//! [`Bound::Unbounded`] (a `drain` whose run names no deadline), as for a `prepare` whose
-//! manifest timeout is 0. Its exit, its last line, its log and a [`StepLauncher::stop`] of its
+//! [`Bound::Unbounded`] (a `drain` whose run names no deadline). Its exit, its last line, its log and a [`StepLauncher::stop`] of its
 //! unit while it runs are read as for a step.
 //!
 //! A tool run ([`tool_command`]) has the line

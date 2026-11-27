@@ -64,7 +64,11 @@
 //!   `silent_host`;
 //! - `repeated_deferral`: a host that declined a service's desired version
 //!   [`crate::defer::REPEATED_DEFERRALS`] times in a row for one reason ([`failures`]), until it
-//!   updates, gives another reason or another version is wanted.
+//!   updates, gives another reason or another version is wanted;
+//! - `silent_while_updating`: a host whose last word of a service is an update running (or its
+//!   promotion pending) and that has been silent for [`crate::silent::SILENT_UPDATE_AFTER`]: that
+//!   word no longer holds its update slot or its service's rollout place ([`crate::silent`]),
+//!   until the host heartbeats again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -295,6 +299,7 @@ pub(crate) fn derive_in(
     alerts.extend(failures::of_hosts(fleet, ops, services, groups, wanted, at));
     alerts.extend(maintenance_alerts::halted(ops));
     alerts.extend(maintenance_alerts::not_back(ops));
+    alerts.extend(crate::silent::silent_updates(fleet, &packages, at.now));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
