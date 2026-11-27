@@ -1,0 +1,8 @@
+# 0x01a2: Memory #0x53 (DIMM_D1), Correctable ECC, asserted, 02:41:07
+a2 01 02 43 9c 07 6b 20 00 04 0c 53 6f a0 00 03
+# 0x01a3: Memory #0x53 (DIMM_D1), Correctable ECC, asserted, 02:58:30
+a3 01 02 56 a0 07 6b 20 00 04 0c 53 6f a0 00 03
+# 0x01a4: Memory #0x53 (DIMM_D1), Uncorrectable ECC, asserted, 03:00:12
+a4 01 02 bc a0 07 6b 20 00 04 0c 53 6f a1 00 03
+# 0x01a5: System Boot Initiated #0x73, Initiated by power up, 03:01:20
+a5 01 02 00 a1 07 6b 20 00 04 1d 73 6f 00 ff ff

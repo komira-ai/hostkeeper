@@ -1,6 +1,7 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1 and the daemon's state file of HH3, marked **Built** where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3 and its reader of the BMC's event log of HH8, marked
+**Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -161,6 +162,25 @@ NICs), which the coordinator compares and records as `capacity_short` (`baseline
 previous boot (`board`); hwmon temperatures against their driver's own `crit` (`thermal`, the drivers `coretemp`, `k10temp`, `nvme`);
 ext4 `errors_count` and read-only remounts (`disk`); and a missing or silent BMC (`host`, `bmc_missing`, decision 6). A filesystem
 nearly full is not hardware: it is part of `storage_failing` (5.1) with no hardware record.
+
+**The BMC's event log, as built** (HH8; Built: `crates/hostkeeper-daemon/src/sel_source.rs`, the reader; `sel.rs` and
+`sel_tables.rs`, the decoder and its tables; `sdr.rs`, the sensor names; the requests in `ipmi.rs`, `BmcRequest`). The reader runs
+on a thread of its own on a Linux host, every 60 s, and after a read that failed twice as long, up to 300 s. Each read asks
+`Get Device ID`; a host with no `/dev/ipmi0` is source `sel` `unsupported`, a BMC that does not answer `unreadable`, and the
+second such read in a row holds one `bmc_missing` record (`host`, subject `BMC`, `warning`, `asserted`), its `deasserted` record
+(`about` it) held at the first read a BMC answers again; a daemon that may not open the device is `unreadable` and raises nothing.
+A record's `event_id` is `sel:<record id>@<the SEL's last erase time>`; its `raw` is the entry as `ipmitool sel list` prints it,
+the SDR's sensor name after the sensor (`01a4 | 11/26/2026 | 03:00:12 | Memory #0x53 DIMM_D1 | Uncorrectable ECC | Asserted`),
+and its `subject` that name with its underscores read as spaces (`DIMM D1`), or the sensor's type and number when the SDR does not
+name it. A correctable ECC entry, a correctable machine check and a correctable bus error are `info`, counted per subject and
+hour into one record (2.1), held once the hour is over; "correctable ECC logging limit reached" is the `warning` of the table. A
+condition (a threshold, a failed or absent power supply, a disabled memory device, a throttled part) is `asserted`; any
+deassertion is an `info` record `deasserted`, `about` the assertion of the same generator, sensor, event type and offset when the
+reader saw it. A temperature past any threshold is a `warning` (`thermal_critical` past a critical or non-recoverable one,
+`thermal_threshold` past a non-critical one); a fan below a lower critical or non-recoverable threshold `critical`
+(`fan_failed`), past any other `warning`. The SDR is read whole (reservation 0) only when its last addition or erase changed. The
+fixtures are written byte for byte from the IPMI 2.0 tables (`crates/hostkeeper-daemon/tests/fixtures/sel` and `sdr`); a capture
+from each host model is section 10's.
 
 **Guards.** No capacity compare in a kdump boot (`/proc/vmcore` exists, or the command line has `elfcorehdr`). During a maintenance
 run the compare is deferred to the first report after the run, not dropped: a reboot that loses a DIMM is exactly the case. SEL
@@ -346,11 +366,13 @@ that changes the host, the cordon, is a maintenance run, which runs each service
 
 - **Read-only.** No pstore record removed, no SEL cleared, no rasdaemon row touched, no self-test, no `fsck`, no write to any sysfs
   file. A SMART self-test or `verifyVolume` is an operator's maintenance run, never a poll.
-- **IPMI.** `Get Device ID`, `Get SEL Info`, `Get SEL Entry` with reservation 0 and the SDR reads, and nothing else: `Reserve SEL` can
+- **IPMI.** `Get Device ID`, `Get SEL Info`, `Get SEL Entry` with reservation 0 and the SDR reads (`Get SDR Repository Info`,
+  `Get SDR` with reservation 0), and nothing else (Built: the closed table `BmcRequest` of `crates/hostkeeper-daemon/src/ipmi.rs`): `Reserve SEL` can
   cancel another tool's reservation, and `Clear SEL` and `Delete SEL Entry` destroy evidence. The requests are one static table, and a
   test asserts that nothing else can be sent. Calls run on a blocking thread with a deadline (an `ioctl` on a wedged BMC can hang), one
-  at a time under a lock shared with the existing BMC address reads, with backoff after a timeout. If `ipmi_rs` has no SEL and SDR
-  commands, raw requests go through the same wrapper [V].
+  at a time under a lock shared with the existing BMC address reads, with backoff after a timeout. Built: the requests are sent raw
+  through `ipmi_rs`'s device wrapper, as the address reads are, each answer awaited at most a second (`ANSWER_TIMEOUT`), under one
+  lock of `ipmi.rs`, on the reader's own thread, whose waits double after a failed read up to 300 s.
 - **Programs.** Every program the health look can run is an entry of one static table of an absolute path and fixed arguments (the
   pattern of the probe's `STEPS`, Built: `crates/hostkeeper-daemon/src/maintenance_hook/probe.rs`), with one New slot for a disk or a
   label whose value must be a name the host listed (a `/sys/block` name of `^[a-z0-9]+$`, a unit of a manifest) and may not start with

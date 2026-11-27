@@ -3,11 +3,13 @@ load("//:buildrules.bzl", "cargo_package")
 # The Linux farm compiles out this member's code and tests under cfg(target_os = "macos"); release.yml's job macos-test runs them on a Mac (docs/farm.md).
 
 # What this package reads beyond src/, tests/ and build.rs, which a Buck2 action sees only when
-# declared (a unit sees its own src/, tests/ or build.rs alone). Tests share the installer's fakes (`#[path]`) and read the packaging, hello's package, the README they are held to and the Mac's boot id fixture of hostkeeper-launchd.
+# declared (a unit sees its own src/, tests/ or build.rs alone). Tests share the installer's fakes (`#[path]`) and read the packaging, the SEL and SDR fixtures (from src/'s unit tests), hello's package, the README they are held to and the Mac's boot id fixture of hostkeeper-launchd.
 cargo_package(
     path = ".",
     extra_srcs = [
         "tests/fixtures/maintenance",
+        "tests/fixtures/sdr",
+        "tests/fixtures/sel",
         "//:README.md",
         "//:packaging/linux",
         "//crates/hostkeeper-install:tests/macos_pkg/support",

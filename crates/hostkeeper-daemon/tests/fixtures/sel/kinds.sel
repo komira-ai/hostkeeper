@@ -1,0 +1,62 @@
+# 0x0010 Memory Device Disabled, DIMM_D1
+10 00 02 a0 b1 06 6b 20 00 04 0c 53 6f a4 00 03
+# 0x0011 Processor IERR, CPU1 Status
+11 00 02 a1 b1 06 6b 20 00 04 07 31 6f 00 ff ff
+# 0x0012 Processor Thermal Trip
+12 00 02 a2 b1 06 6b 20 00 04 07 31 6f 01 ff ff
+# 0x0013 Processor uncorrectable machine check
+13 00 02 a3 b1 06 6b 20 00 04 07 31 6f 0b ff ff
+# 0x0014 Power Supply Failure detected, PSU2 Status, asserted
+14 00 02 a4 b1 06 6b 20 00 04 08 62 6f 01 ff ff
+# 0x0015 Power Supply Failure detected, deasserted
+15 00 02 a5 b1 06 6b 20 00 04 08 62 ef 01 ff ff
+# 0x0016 Fan FAN3 Lower Critical going low
+16 00 02 a6 b1 06 6b 20 00 04 04 41 01 52 02 05
+# 0x0017 Temperature CPU1 Temp Upper Critical going high
+17 00 02 a7 b1 06 6b 20 00 04 01 30 01 59 60 5a
+# 0x0018 Temperature CPU1 Temp Upper Critical going high, deasserted
+18 00 02 a8 b1 06 6b 20 00 04 01 30 81 59 55 5a
+# 0x0019 Temperature CPU1 Temp Upper Non-critical going high
+19 00 02 a9 b1 06 6b 20 00 04 01 30 01 57 52 50
+# 0x001a OEM record type 0xc1 with a timestamp
+1a 00 c1 aa b1 06 6b 57 01 00 de ad be ef 01 02
+# 0x001b OEM record type 0xe0, no timestamp
+1b 00 e0 30 31 32 33 34 35 36 37 38 39 3a 3b 3c
+# 0x001c Event Logging Disabled #0x72 Log area reset/cleared
+1c 00 02 ac b1 06 6b 20 00 04 10 72 6f 02 ff ff
+# 0x001d System Boot Initiated #0x73, a pre-init timestamp
+1d 00 02 34 12 00 00 20 00 04 1d 73 6f 00 ff ff
+# 0x001e sensor type 0xc5 (OEM), sensor-specific offset 3
+1e 00 02 ae b1 06 6b 20 00 04 c5 90 6f 03 ff ff
+# 0x001f OS Critical Stop #0x74 Run-time stop
+1f 00 02 af b1 06 6b 20 00 04 20 74 6f 01 ff ff
+# 0x0020 Watchdog2 #0x75 Hard reset
+20 00 02 b0 b1 06 6b 20 00 04 23 75 6f 01 ff ff
+# 0x0021 Power Supply #0x63, generic redundancy: Redundancy Lost
+21 00 02 b1 b1 06 6b 20 00 04 08 63 0b 01 ff ff
+# 0x0022 Memory #0x54 (name in Unicode), Uncorrectable ECC
+22 00 02 b2 b1 06 6b 20 00 04 0c 54 6f a1 00 04
+# 0x0023 Memory DIMM_D1 Correctable ECC
+23 00 02 b3 b1 06 6b 20 00 04 0c 53 6f a0 00 03
+# 0x0024 Memory DIMM_D1 Correctable ECC
+24 00 02 b4 b1 06 6b 20 00 04 0c 53 6f a0 00 03
+# 0x0025 Memory DIMM_D1 Correctable ECC
+25 00 02 b5 b1 06 6b 20 00 04 0c 53 6f a0 00 03
+# 0x0026 Processor CPU1 Status correctable machine check, unspecified time
+26 00 02 ff ff ff ff 20 00 04 07 31 6f 0c ff ff
+# 0x0027 Memory DIMM_D1, OEM event type 0x75 offset 2
+27 00 02 b7 b1 06 6b 20 00 04 0c 53 75 02 ff ff
+# 0x0028 Power Supply #0x63, generic redundancy, an offset with no state: 0x0e
+28 00 02 b8 b1 06 6b 20 00 04 08 63 0b 0e ff ff
+# 0x0029 Fan FAN3 Lower Non-recoverable going low
+29 00 02 b9 b1 06 6b 20 00 04 04 41 01 04 ff ff
+# 0x002a Fan FAN3 Upper Critical going high
+2a 00 02 ba b1 06 6b 20 00 04 04 41 01 09 ff ff
+# 0x002b Fan FAN3 Lower Non-critical going low
+2b 00 02 bb b1 06 6b 20 00 04 04 41 01 00 ff ff
+# 0x002c Voltage #0x80 Lower Critical going high
+2c 00 02 bc b1 06 6b 20 00 04 02 80 01 03 ff ff
+# 0x002d Voltage #0x80 threshold offset 0x0c, past the table
+2d 00 02 bd b1 06 6b 20 00 04 02 80 01 0c ff ff
+# 0x002e Memory DIMM_D1 sensor-specific offset 0x0f, past the table
+2e 00 02 be b1 06 6b 20 00 04 0c 53 6f 0f ff ff
