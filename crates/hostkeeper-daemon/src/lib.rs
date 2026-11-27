@@ -52,6 +52,9 @@
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
 //!   device every ten minutes.
+//! - [`kernel_sources`]: the kernel's evidence of hardware faults on a Linux host, its log
+//!   ([`kernel_log`]) and its files ([`kernel_files`]), read every minute into the hardware records
+//!   its heartbeats report ([`host_health`]).
 //! - [`rasdaemon`]: rasdaemon's database, read every minute on a Linux host into hardware event
 //!   records held in the daemon's health state ([`host_health`]), through a reader of the SQLite
 //!   file format that takes no lock and writes nothing ([`sqlite_read`]).
@@ -184,6 +187,9 @@ pub mod installed;
 pub mod installers;
 pub mod ipmi;
 pub mod keep_awake;
+pub mod kernel_files;
+pub mod kernel_log;
+pub mod kernel_sources;
 #[cfg(test)]
 mod key_fixture_tests;
 mod launchd_plist;

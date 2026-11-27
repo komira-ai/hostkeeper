@@ -13,8 +13,9 @@
 //! until the sleeper says stop. [`start`] gives each source its worker; [`at_host`] starts the
 //! sources of a host of a kind, and [`start_host`] does so for the daemon, when it keeps a health
 //! state, each worker waiting on the daemon's clock until its stop flag is set: on Linux (systemd and OpenRC) SMART through `smartctl`
-//! ([`crate::smart`]), the hwmon temperatures ([`crate::hwmon`]) and rasdaemon's database
-//! ([`crate::rasdaemon`]); none on a Mac yet.
+//! ([`crate::smart`]), the hwmon temperatures ([`crate::hwmon`]), rasdaemon's database
+//! ([`crate::rasdaemon`]) and the kernel's log and files ([`crate::kernel_sources`]); none on a
+//! Mac yet.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ use hostkeeper_steps::Clock;
 
 use crate::host_health::HealthKeeper;
 use crate::hwmon::HwmonSource;
+use crate::kernel_sources::{self, KernelBoot};
 use crate::rasdaemon::RasdaemonSource;
 use crate::smart::{SMARTCTL, SMARTCTL_DEADLINE, SmartSource};
 
@@ -138,21 +140,31 @@ pub fn start(
     }
 }
 
-/// The sources of a host of `kind` whose root is `root`: on Linux SMART, through the `smartctl`
-/// at `smartctl` (absent: `unsupported`), the hwmon temperatures and rasdaemon's database; none on
-/// a Mac.
+/// The sources of a host of `kind` whose root is `root`, in the boot `boot`: on Linux SMART,
+/// through the `smartctl` at `smartctl` (absent: `unsupported`), the hwmon temperatures,
+/// rasdaemon's database, and the kernel's log and files ([`crate::kernel_sources::at_root`]); none
+/// on a Mac.
 #[must_use]
-pub fn for_host(kind: PlatformKind, root: &Path, smartctl: &Path) -> Vec<Box<dyn HardwareSource>> {
+pub fn for_host(
+    kind: PlatformKind,
+    root: &Path,
+    smartctl: &Path,
+    boot: &KernelBoot,
+) -> Vec<Box<dyn HardwareSource>> {
     match kind {
-        PlatformKind::Linux | PlatformKind::Openrc => vec![
-            Box::new(SmartSource::new(
-                root,
-                smartctl,
-                Box::new(LaunchctlProcess::new(smartctl, SMARTCTL_DEADLINE)),
-            )),
-            Box::new(HwmonSource::new(root)),
-            Box::new(RasdaemonSource::new(root)),
-        ],
+        PlatformKind::Linux | PlatformKind::Openrc => {
+            let mut sources: Vec<Box<dyn HardwareSource>> = vec![
+                Box::new(SmartSource::new(
+                    root,
+                    smartctl,
+                    Box::new(LaunchctlProcess::new(smartctl, SMARTCTL_DEADLINE)),
+                )),
+                Box::new(HwmonSource::new(root)),
+                Box::new(RasdaemonSource::new(root)),
+            ];
+            sources.extend(kernel_sources::at_root(root, boot));
+            sources
+        }
         PlatformKind::Macos => Vec::new(),
     }
 }
@@ -166,7 +178,8 @@ pub fn at_host(
     sleeper: &dyn Fn() -> Box<dyn Sleeper + Send>,
     dispatch: &dyn Dispatch,
 ) {
-    let sources = for_host(kind, Path::new("/"), Path::new(SMARTCTL));
+    let boot = KernelBoot::of(keeper);
+    let sources = for_host(kind, Path::new("/"), Path::new(SMARTCTL), &boot);
     start(sources, keeper, clock, sleeper, dispatch);
 }
 
