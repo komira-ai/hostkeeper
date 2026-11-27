@@ -97,6 +97,11 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 # self-signature, a poll's signed nonce, the request id); the RS256 signature of a CI token
 # (hostkeeper-oidc).
 ring = "0.17.14"
+# SQLite itself, in the daemon's tests only (a dev-dependency): they make rasdaemon's database
+# with it, so that the daemon's own reader of the file format (`sqlite_read`) is read against what
+# SQLite writes. `bundled` builds SQLite's C for the test build; the daemon's static build, which
+# compiles no C but ring's, never links it.
+rusqlite = { version = "0.43.0", default-features = false, features = ["bundled"] }
 # The RPM packages `cargo xtask channels rpm` reads (the header of each package, for the
 # repository's `primary.xml` and the signature header it signs) and the tests build; the reader
 # and builder only (no signing, no zstd, xz or bzip2), pure Rust (MIT).
