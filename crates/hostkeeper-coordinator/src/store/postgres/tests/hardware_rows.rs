@@ -267,3 +267,28 @@ fn the_release_before_runs_on_a_database_with_0033_and_this_one_on_its() {
         "0033 alone ran"
     );
 }
+
+/// Proves: a record whose time is past what the table's `bigint` holds is refused whole, naming
+/// the time, and so is a page asked from such a time; nothing is written; and the log's debug form
+/// shows no connection detail.
+///
+/// Catches: a time wrapped into a negative number, which would put the record at the start of the
+/// log, and a write that lands the records before the one refused.
+#[test]
+fn a_time_past_the_table_is_refused_whole() {
+    let (_db, store, log) = rows();
+    let past = record("host-a", "sel:09", u64::MAX, "memory", "critical");
+    let fine = record("host-a", "sel:08", 1, "memory", "critical");
+    let why = format!("{} is above the largest time the database keeps", u64::MAX);
+    assert_eq!(log.write(&[fine, past]), Err(why.clone()));
+    assert_eq!(
+        log.page(&Query {
+            since_unix: u64::MAX,
+            ..Query::default()
+        }),
+        Err(why)
+    );
+    assert!(every(&log).is_empty());
+    assert_eq!(format!("{log:?}"), "PgHardwareLog { .. }");
+    store.stop();
+}

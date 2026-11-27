@@ -686,7 +686,7 @@ pub(crate) fn conformance(subject: &dyn Subject) {
     again.extend_from_slice(rest);
     again.push(rest[0].clone());
     live.write(&again).expect("the second write");
-    for store in [live, subject.restarted()] {
+    let check = |store: &dyn HardwareLog| {
         for query in contract_queries() {
             assert_eq!(
                 store.page(&query).expect("read"),
@@ -694,7 +694,10 @@ pub(crate) fn conformance(subject: &dyn Subject) {
                 "{query:?}"
             );
         }
-    }
+    };
+    // The live store first: starting another may stop it (the database's lock moves).
+    check(live.as_ref());
+    check(subject.restarted().as_ref());
 }
 
 /// The in-memory store: started again, it is the same store.

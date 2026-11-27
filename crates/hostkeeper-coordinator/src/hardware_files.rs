@@ -46,19 +46,27 @@ impl FileLog {
         format!("{}: {why}", self.path.display())
     }
 
-    /// What the file holds, its torn last line cut off.
-    fn read(&self) -> Result<Held, String> {
-        let bytes = match fs::read(&self.path) {
+    /// The whole lines of the file, its torn last line cut off the file first; none when there
+    /// is no file.
+    fn whole_lines(&self) -> io::Result<Vec<u8>> {
+        let mut bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
-            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Held::default()),
-            Err(why) => return Err(self.at(why)),
+            Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(why) => return Err(why),
         };
         let whole = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |n| n + 1);
         if whole < bytes.len() {
-            self.cut(whole).map_err(|why| self.at(why))?;
+            self.cut(whole)?;
+            bytes.truncate(whole);
         }
+        Ok(bytes)
+    }
+
+    /// What the file holds, its torn last line cut off.
+    fn read(&self) -> Result<Held, String> {
+        let bytes = self.whole_lines().map_err(|why| self.at(why))?;
         let mut held = Held::default();
-        for (n, line) in bytes[..whole].split_inclusive(|b| *b == b'\n').enumerate() {
+        for (n, line) in bytes.split_inclusive(|b| *b == b'\n').enumerate() {
             let record: Record = serde_json::from_slice(line)
                 .map_err(|why| self.at(format!("line {} is not a record: {why}", n + 1)))?;
             held.hold(record);
@@ -73,14 +81,20 @@ impl FileLog {
         file.sync_data()
     }
 
-    /// Appends `text` to the file, made if it is not there, and syncs it.
-    fn append(&self, text: &[u8]) -> io::Result<()> {
+    /// Appends one JSON line of each of `records` to the file, made if it is not there, and
+    /// syncs it.
+    fn append(&self, records: &[Record]) -> io::Result<()> {
+        let mut text = Vec::new();
+        for record in records {
+            serde_json::to_writer(&mut text, record)?;
+            text.push(b'\n');
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .mode(0o600)
             .open(&self.path)?;
-        file.write_all(text)?;
+        file.write_all(&text)?;
         file.sync_data()
     }
 }
@@ -93,14 +107,9 @@ impl HardwareLog for FileLog {
             None => self.read()?,
         };
         let new = held.new_of(records);
-        let mut text = Vec::new();
-        for record in &new {
-            serde_json::to_writer(&mut text, record).map_err(|why| self.at(why))?;
-            text.push(b'\n');
-        }
-        if !text.is_empty() {
+        if !new.is_empty() {
             // A failed append leaves `kept` empty: the file is read again at the next call.
-            self.append(&text).map_err(|why| self.at(why))?;
+            self.append(&new).map_err(|why| self.at(why))?;
         }
         for record in new {
             held.hold(record);

@@ -471,19 +471,26 @@ pub(super) fn with_side_stores(
     }
 }
 
-/// `coordinator` keeping the hardware event log in the database's table `hardware_events`, or,
-/// over files, in the file `<state-file>.hardware-events`; in its memory with neither.
+/// `coordinator` keeping the hardware event log where [`hardware_log_of`] puts it.
 pub(super) fn with_hardware_log(
     coordinator: Coordinator,
     flags: &Serve,
     database: Option<&Postgres>,
 ) -> Coordinator {
-    let log: Arc<dyn HardwareLog> = match (database, &flags.state_file) {
+    coordinator.with_hardware_log(hardware_log_of(database, flags.state_file.as_deref()))
+}
+
+/// The hardware event log in the database's table `hardware_events`, or, over files, in the file
+/// `<state-file>.hardware-events`; in memory with neither.
+pub(super) fn hardware_log_of(
+    database: Option<&Postgres>,
+    state_file: Option<&Path>,
+) -> Arc<dyn HardwareLog> {
+    match (database, state_file) {
         (Some(store), _) => Arc::new(PgHardwareLog::new(store.clone())),
         (None, Some(state)) => Arc::new(FileLog::new(hardware_events_path(state))),
         (None, None) => Arc::new(MemoryLog::default()),
-    };
-    coordinator.with_hardware_log(log)
+    }
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
@@ -507,3 +514,7 @@ pub(super) fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, 
         },
     })
 }
+
+#[cfg(test)]
+#[path = "config_state_hardware_tests.rs"]
+mod hardware_tests;

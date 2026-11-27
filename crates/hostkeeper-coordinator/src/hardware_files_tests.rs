@@ -207,3 +207,21 @@ fn a_write_that_cannot_append_fails() {
     fs::remove_dir(&path).expect("the place is fixed");
     assert_eq!(every(&log), Ok(Vec::new()));
 }
+
+/// Proves: a write whose file cannot be made (its directory is not there) fails naming the file,
+/// writes nothing, and a write once the directory is there writes every record.
+///
+/// Catches: a failed append answered as written, and a store that keeps in memory records the
+/// file never took.
+#[test]
+fn a_write_whose_file_cannot_be_made_fails_and_keeps_nothing() {
+    let (dir, _) = file("hardware-files-no-directory");
+    let path = dir.path().join("gone").join("desired.json.hardware-events");
+    let log = FileLog::new(path.clone());
+    let why = log.write(&mixed()).expect_err("refused");
+    assert!(why.starts_with(&path.display().to_string()), "{why}");
+    assert_eq!(every(&log), Ok(Vec::new()));
+    fs::create_dir(path.parent().expect("a parent")).expect("the directory");
+    log.write(&mixed()).expect("written");
+    assert_eq!(every(&FileLog::new(path)).map(|page| page.len()), Ok(5));
+}

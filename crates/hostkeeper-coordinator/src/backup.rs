@@ -119,8 +119,9 @@ pub struct StatePaths {
     /// The desired-state file, as `serve --state-file` names it. The releases
     /// (`<state-file>.releases`), the registry of package repositories
     /// (`<state-file>.repositories`), the spent ids of CI's tokens (`<state-file>.jti`), the
-    /// verdicts (`<state-file>.verdicts`), the users and API tokens (`<state-file>.accounts`) and
-    /// the lab layout (`<state-file>.layout`) are beside it, and the lock taken is
+    /// verdicts (`<state-file>.verdicts`), the users and API tokens (`<state-file>.accounts`), the
+    /// lab layout (`<state-file>.layout`) and the hardware event log
+    /// (`<state-file>.hardware-events`) are beside it, and the lock taken is
     /// `<state-file>.lock`, the one `serve` holds.
     #[arg(long)]
     pub state_file: PathBuf,

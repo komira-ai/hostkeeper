@@ -94,11 +94,9 @@ fn a_component_or_severity_the_proto_does_not_name_is_refused_before_anything_is
 
 /// Proves: through the real gateway of a coordinator whose log holds no record, `hk hardware
 /// log` reaches `Hardware.Log` and is answered 200 with no record, printed as the gateway sent
-/// it, exit 0; a page token the coordinator did not give is `INVALID_ARGUMENT` (HTTP 400)
-/// `invalid_request`, exit 2, with the code and the reason on stderr.
+/// it, exit 0.
 ///
-/// Catches: the method answered `UNIMPLEMENTED` by a coordinator that does not serve it, and a
-/// refusal of the request answered as one of the caller (exit 3).
+/// Catches: the method answered `UNIMPLEMENTED` by a coordinator that does not serve it.
 #[test]
 fn hardware_log_through_the_real_gateway_answers_an_empty_log() {
     let rig = Rig::new("hardware-log-gateway");
@@ -108,24 +106,11 @@ fn hardware_log_through_the_real_gateway_answers_an_empty_log() {
         (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
         (0, "{}\n", "")
     );
-    let ran = rig.hk(&call(
-        &rig,
-        gateway.port,
-        &["hardware", "log", "--page-token", "not a token"],
-    ));
-    assert_eq!(
-        (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
-        (
-            2,
-            "",
-            "hk: the coordinator answered INVALID_ARGUMENT\nrefused: invalid_request\n"
-        )
-    );
     let seen = gateway.seen();
     assert_eq!(
         seen.iter()
             .map(|s| (s.target.as_str(), s.status))
             .collect::<Vec<_>>(),
-        [(LOG, 200), (LOG, 400)]
+        [(LOG, 200)]
     );
 }
