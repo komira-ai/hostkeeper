@@ -177,9 +177,10 @@ fn the_release_before_runs_on_a_database_with_0028_and_this_one_on_its() {
             vec![Some("29".to_owned())],
             vec![Some("30".to_owned())],
             vec![Some("31".to_owned())],
-            vec![Some("32".to_owned())]
+            vec![Some("32".to_owned())],
+            vec![Some("33".to_owned())]
         ],
-        "0028 to 0032 ran"
+        "0028 to 0033 ran"
     );
     assert_eq!(
         old.rows("SELECT count(*) FROM xcode_releases"),

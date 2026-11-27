@@ -28,6 +28,8 @@ use crate::alerts::Thresholds;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{migrate_marker, ops_path, restore_marker};
 use crate::enrollment::os_random;
+use crate::hardware_files::{FileLog, hardware_events_path};
+use crate::hardware_log::{HardwareLog, MemoryLog};
 use crate::initial_admin::InitialAdmin;
 use crate::jobs::Jobs;
 use crate::jti_file::jti_path;
@@ -40,6 +42,7 @@ use crate::ssh_book::Book;
 use crate::ssh_ledger::Ledger;
 use crate::store::postgres::admin_rows::PgAdmin;
 use crate::store::postgres::alert_rows::PgAlerts;
+use crate::store::postgres::hardware_rows::PgHardwareLog;
 use crate::store::postgres::login_rows::PgLoginRows;
 use crate::store::postgres::periodic::PgJobs;
 use crate::store::postgres::ssh::PgLedger;
@@ -439,18 +442,20 @@ pub(super) fn with_login(
         ))
 }
 
-/// `coordinator` reading the list of Xcode releases at `--xcode-feed-url` (none: not at all) and
-/// keeping it in the database's table, or, over files, in the file beside the state file; and,
-/// with `--xcode-dir`, keeping Xcode archives in that directory.
+/// `coordinator` with the stores kept beside the state, in the database's tables or, over files,
+/// in files beside the state file: the hardware event log ([`with_hardware_log`]), and the list
+/// of Xcode releases read at `--xcode-feed-url` (none: not at all); and, with `--xcode-dir`,
+/// keeping Xcode archives in that directory.
 ///
 /// # Errors
 /// [`StartError::XcodeDir`]: `--xcode-dir` is not a directory that can be read, or an upload a
 /// stopped coordinator left in it could not be removed.
-pub(super) fn with_xcode(
+pub(super) fn with_side_stores(
     coordinator: Coordinator,
     flags: &Serve,
     database: Option<&Postgres>,
 ) -> Result<Coordinator, StartError> {
+    let coordinator = with_hardware_log(coordinator, flags, database);
     let known: Arc<dyn KnownReleases> = match database {
         Some(store) => Arc::new(PgReleases::new(store.clone())),
         None => Arc::new(FileReleases::new(xcode_releases_path(
@@ -464,6 +469,21 @@ pub(super) fn with_xcode(
         None => Ok(coordinator),
         Some(dir) => coordinator.with_xcode_dir(dir, flags.xcode.xcode_max_bytes),
     }
+}
+
+/// `coordinator` keeping the hardware event log in the database's table `hardware_events`, or,
+/// over files, in the file `<state-file>.hardware-events`; in its memory with neither.
+pub(super) fn with_hardware_log(
+    coordinator: Coordinator,
+    flags: &Serve,
+    database: Option<&Postgres>,
+) -> Coordinator {
+    let log: Arc<dyn HardwareLog> = match (database, &flags.state_file) {
+        (Some(store), _) => Arc::new(PgHardwareLog::new(store.clone())),
+        (None, Some(state)) => Arc::new(FileLog::new(hardware_events_path(state))),
+        (None, None) => Arc::new(MemoryLog::default()),
+    };
+    coordinator.with_hardware_log(log)
 }
 
 /// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and

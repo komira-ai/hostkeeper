@@ -274,6 +274,17 @@ export namespace hostkeeper_operator_v1 {
   export interface HaltRecord { nodeId?: string; check?: string; target?: string; report?: hostkeeper_agent_v1.UpdateResult; }
   export interface HaltRequest { service?: string; reason?: string; }
   export interface HaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface HardwareLogRequest {
+    hostId?: string;
+    serial?: string;
+    sinceUnix?: string;
+    component?: hostkeeper_agent_v1.HardwareComponent;
+    severity?: hostkeeper_agent_v1.HardwareSeverity;
+    limit?: number;
+    pageToken?: string;
+  }
+  export interface HardwareLogResponse { records?: hostkeeper_operator_v1.HardwareRecord[]; nextPageToken?: string; }
+  export interface HardwareRecord { hostId?: string; machineSerial?: string; observedUnix?: string; bootId?: string; by?: string; event?: hostkeeper_agent_v1.HardwareEvent; }
   export interface HoldMark { scope?: hostkeeper_operator_v1.HoldScope; service?: string; reason?: string; setBy?: string; setUnix?: string; }
   export interface HoldRequest { scope?: hostkeeper_operator_v1.HoldScope; service?: string; reason?: string; }
   export interface HoldResponse { hold?: hostkeeper_operator_v1.HoldMark; entry?: hostkeeper_operator_v1.AuditEntry; }

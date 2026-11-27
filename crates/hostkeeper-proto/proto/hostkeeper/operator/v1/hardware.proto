@@ -1,0 +1,101 @@
+// hostkeeper.operator.v1: the `Hardware` service of the operator API and its refusals
+// (`HardwareRefusal`): each host's hardware event log, kept by the coordinator
+// (docs/design/host-health-alerts.md section 2). A record says what part of the machine, how bad,
+// from where, in a sentence a person reads, and the line the source printed; one schema on Linux
+// and on a Mac. A record is written once, by its host and its `event_id`, and is never changed or
+// removed. The rest of the package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and
+// `Audit` and `AuditRefusal` among it, is operator.proto; this file is the same package and API,
+// kept apart so that each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Hardware` takes the operator's credential only (a token of the tokens file, a
+// stored API token, which acts as its owner, or a signed-in session); no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `HardwareRefusal`, written as the
+// value's name without the prefix, in lower case; the status code is the one each value names.
+// Reading changes nothing.
+//
+// Units: as operator.proto says; times are unix seconds. A host id is a node id. A serial is 1 to
+// 64 bytes of `A-Za-z0-9._-`, as an inventory record's. A `limit` is capped at 256, and 0 means
+// the cap.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number. A reader treats an enum value it does
+// not know as UNSPECIFIED, and shows a record whose component, source or code it does not know by
+// its `message`.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// `HardwareEvent` and its enums, which a record of the log carries.
+import "hostkeeper/agent/v1/host_health.proto";
+
+// The hosts' hardware event logs. Reading writes no audit entry.
+service Hardware {
+  // The records of the hardware event log that match every filter set, newest first (by the time
+  // the source gives, then by host id and `event_id`, both descending), as many as `limit` allows,
+  // after the record `page_token` names. Changes nothing and is not audited.
+  rpc Log(HardwareLogRequest) returns (HardwareLogResponse);
+}
+
+// Why `Hardware` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum HardwareRefusal {
+  HARDWARE_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  HARDWARE_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Hardware` does not take.
+  HARDWARE_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a host id that is no node id, a serial that is not 1 to 64 bytes of
+  // `A-Za-z0-9._-`, or a page token this coordinator did not give.
+  HARDWARE_REFUSAL_INVALID_REQUEST = 3;
+  // INTERNAL: the hardware event log could not be read; asking again is safe.
+  HARDWARE_REFUSAL_STORE_FAILED = 4;
+}
+
+message HardwareLogRequest {
+  // The host whose records to list; every host when absent.
+  optional string host_id = 1;
+  // The machine whose records to list, by its hardware serial (the inventory's), whatever host
+  // id it had; every machine when absent.
+  optional string serial = 2;
+  // Only the records the source says happened at or after this time; 0 for every record.
+  uint64 since_unix = 3;
+  // Only the records of this part of the machine; every part when unspecified.
+  hostkeeper.agent.v1.HardwareComponent component = 4;
+  // Only the records at least this bad (`warning` lists the warnings and the critical ones);
+  // every record when unspecified.
+  hostkeeper.agent.v1.HardwareSeverity severity = 5;
+  // The most records to return; capped at 256, and 0 means the cap.
+  uint32 limit = 6;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 7;
+}
+
+message HardwareLogResponse {
+  // Newest first, as `Log` says.
+  repeated HardwareRecord records = 1;
+  // The token of the next page; empty on the last.
+  string next_page_token = 2;
+}
+
+// One record of a host's hardware event log: what its source said (`event`), and what the
+// coordinator added when it wrote it.
+message HardwareRecord {
+  // The host.
+  string host_id = 1;
+  // The machine's hardware serial, from the host's inventory record when the record was written;
+  // empty when it had none.
+  string machine_serial = 2;
+  // When the coordinator first had the record.
+  uint64 observed_unix = 3;
+  // The boot the host was in when it read the record; empty for a record of no boot.
+  string boot_id = 4;
+  // For an operator's note, the operator who wrote it; empty otherwise.
+  string by = 5;
+  // The record as its source gave it: its `event_id`, time, part, severity, state, source, code,
+  // message, raw line and the record it is `about`.
+  hostkeeper.agent.v1.HardwareEvent event = 6;
+}

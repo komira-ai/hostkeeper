@@ -336,6 +336,7 @@ mod fleet_rows;
 mod gate;
 mod generations;
 mod group_sets;
+mod hardware_rows;
 mod host_groups;
 mod instance;
 mod jobs_rows;

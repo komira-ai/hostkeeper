@@ -96,6 +96,9 @@
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
+//! - [`hardware_log`]: each host's hardware event log, kept in the database's table
+//!   `hardware_events` or in a file beside the state file (`hardware_files`), written once per
+//!   record and never changed, and answered by `Hardware.Log`;
 //! - [`stamp`]: the commit and the version `--version` prints;
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them; `health`, the plain
@@ -164,6 +167,8 @@ pub(crate) mod group_scope;
 pub(crate) mod group_uninstall;
 pub mod grpc;
 pub mod halt;
+pub(crate) mod hardware_files;
+pub mod hardware_log;
 pub(crate) mod health;
 pub mod holds;
 pub(crate) mod host_group_proto;
@@ -305,6 +310,8 @@ mod audit_refusal_tests;
 mod audit_rotation_tests;
 #[cfg(test)]
 pub(crate) mod backup_accounts_tests;
+#[cfg(test)]
+mod backup_hardware_tests;
 #[cfg(test)]
 pub(crate) mod backup_layout_tests;
 #[cfg(test)]

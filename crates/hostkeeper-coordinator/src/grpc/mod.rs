@@ -1,6 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Repositories, HostGroups, Users, ApiTokens, Maintenance}` on the private one (the `Mdm` service
+//! Repositories, HostGroups, Users, ApiTokens, Maintenance, Hardware}` on the private one (the `Mdm` service
 //! is no longer served: a call of it is `UNIMPLEMENTED`; a method of an operator service with no
 //! handler yet is listed in [`PENDING`], which is empty now),
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
@@ -46,6 +46,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::api_tokens_server::ApiTokensServ
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::console_server::ConsoleServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
+use hostkeeper_proto::hostkeeper::operator::v1::hardware_server::HardwareServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::layout_server::LayoutServer;
@@ -73,6 +74,7 @@ use self::operator::{
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_console::ConsoleService;
+use self::operator_hardware::HardwareService;
 use self::operator_host_groups::HostGroupsService;
 use self::operator_layout::LayoutService;
 use self::operator_maintenance::MaintenanceService;
@@ -98,6 +100,7 @@ pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
 mod operator_console;
+mod operator_hardware;
 mod operator_host_groups;
 mod operator_layout;
 mod operator_maintenance;
@@ -158,6 +161,8 @@ const CONSOLE: &str = "hostkeeper.operator.v1.Console";
 const XCODE: &str = "hostkeeper.operator.v1.Xcode";
 /// The full name of the operator API's `Maintenance`.
 const MAINTENANCE: &str = "hostkeeper.operator.v1.Maintenance";
+/// The full name of the operator API's `Hardware`.
+const HARDWARE: &str = "hostkeeper.operator.v1.Hardware";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -323,7 +328,8 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | REPOSITORIES
-                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE | XCODE | MAINTENANCE,
+                | HOST_GROUPS | USERS | API_TOKENS | LAYOUT | SSH | CONSOLE | XCODE | MAINTENANCE
+                | HARDWARE,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -561,6 +567,11 @@ where
         }
         Some(MAINTENANCE) => {
             let server = MaintenanceServer::new(MaintenanceService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(HARDWARE) => {
+            let server = HardwareServer::new(HardwareService::new(coordinator))
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }

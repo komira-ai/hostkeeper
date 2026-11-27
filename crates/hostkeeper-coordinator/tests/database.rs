@@ -345,7 +345,7 @@ fn services_have_repository(database: &Database) -> bool {
 
 /// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
 /// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
-/// `0009` to `0032`, so `schema_version` holds 1 to 32 and the column is there, and an operator's
+/// `0009` to `0033`, so `schema_version` holds 1 to 33 and the column is there, and an operator's
 /// change is held by the audit table.
 ///
 /// Catches: a release that cannot start on the database the release before left, or that starts
@@ -362,7 +362,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 
     drop(start(args.clone()));
     database.lock_is_free();
-    // The schema of 0.1.252: `0009` to `0032` taken back, the column, the tables and their
+    // The schema of 0.1.252: `0009` to `0033` taken back, the column, the tables and their
     // `schema_version` rows.
     run(
         &database,
@@ -378,6 +378,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
          DROP TABLE fleet_hosts, fleet_bakes, fleet_orders, cluster_quiet; \
          DROP TABLE sessions, login_failures, login_gate, periodic_jobs, alerts; \
          DROP TABLE xcode_releases; \
+         DROP TABLE hardware_events; DROP FUNCTION hardware_events_append_only(); \
          DROP TABLE maintenance_hosts, maintenance_runs; \
          DROP TABLE fleet_tries; DROP SEQUENCE desired_seq; \
          ALTER TABLE desired DROP COLUMN set_seq, DROP COLUMN set_for; \
@@ -389,7 +390,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
     assert!(!services_have_repository(&database));
 
     let parts = start(args);
-    assert_eq!(schema_versions(&database), (1..=32).collect::<Vec<i32>>());
+    assert_eq!(schema_versions(&database), (1..=33).collect::<Vec<i32>>());
     assert!(services_have_repository(&database));
     let done = parts
         .coordinator

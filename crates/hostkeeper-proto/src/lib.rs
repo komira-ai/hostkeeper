@@ -14,8 +14,9 @@
 //!   the log of every change; `Alerts`, the conditions that need a person; `Rollouts`, the
 //!   update plans; `Mdm`, the devices the MDM policy gate knows; `Console`, a host's serial
 //!   console, power and boot device through its BMC, or a Mac's screen (console.proto);
-//!   `Maintenance`, the maintenance runs an operator schedules (maintenance.proto); and `Xcode`,
-//!   the archives of the coordinator's Xcode store (xcode.proto).
+//!   `Maintenance`, the maintenance runs an operator schedules (maintenance.proto); `Xcode`,
+//!   the archives of the coordinator's Xcode store (xcode.proto); and `Hardware`, each host's
+//!   hardware event log (hardware.proto).
 //! - `hostkeeper.release.v1`: no service; the messages of a release, a list of artifacts per
 //!   platform, one per installer, each with its manifest, which the operator API's
 //!   `SetDesired` and `GetRelease` carry, and an agent's order the one entry picked for its host
@@ -49,8 +50,8 @@ pub mod hostkeeper {
     }
     pub mod operator {
         /// What an operator and CI ask of the coordinator: `Hosts`, `Releases`, `Services`,
-        /// `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Console`, `Maintenance` and
-        /// `Xcode`.
+        /// `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Console`, `Maintenance`, `Xcode`
+        /// and `Hardware`.
         pub mod v1 {
             tonic::include_proto!("hostkeeper.operator.v1");
         }

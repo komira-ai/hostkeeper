@@ -5,8 +5,8 @@
 //!
 //! - beside `--state-file`: the state file itself, the releases set with targets
 //!   (`.releases`), the registry of package repositories (`.repositories`), the spent ids of CI's
-//!   tokens (`.jti`), the verdicts (`.verdicts`), the users and API tokens (`.accounts`) and the
-//!   lab's layout (`.layout`);
+//!   tokens (`.jti`), the verdicts (`.verdicts`), the users and API tokens (`.accounts`), the
+//!   lab's layout (`.layout`) and the hardware event log (`.hardware-events`);
 //! - beside the ops file (`--ops-file`, by default the state file's name with `.ops` added): the
 //!   ops file itself, the audit file (`.audit`) and each of its sealed segments (`.audit.<n>`,
 //!   named `ops-audit.<n>` in a snapshot, with the number it has), the halts file (`.halts`), a
@@ -55,6 +55,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::accounts::accounts_path;
 use crate::audit_file;
+use crate::hardware_files::hardware_events_path;
 use crate::jti_file::jti_path;
 use crate::layout::layout_path;
 use crate::lock::{LockError, StateLock, lock_path};
@@ -154,6 +155,7 @@ impl StatePaths {
             ("state-verdicts", verdicts_path(state)),
             ("state-accounts", accounts_path(state)),
             ("state-layout", layout_path(state)),
+            ("state-hardware-events", hardware_events_path(state)),
             ("ops", ops.clone()),
             (AUDIT, audit_file::path_of(&ops)),
             ("ops-halts", halts_path(&ops)),

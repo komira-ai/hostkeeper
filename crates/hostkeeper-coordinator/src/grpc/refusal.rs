@@ -8,8 +8,9 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
-    HostGroupsRefusal, HostsRefusal, LayoutRefusal, MaintenanceRefusal, ReleasesRefusal,
-    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
+    HardwareRefusal, HostGroupsRefusal, HostsRefusal, LayoutRefusal, MaintenanceRefusal,
+    ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal, SshRefusal,
+    UsersRefusal, XcodeRefusal,
 };
 use tonic::{Code, Status};
 
@@ -337,6 +338,17 @@ pub(crate) fn xcode(refusal: XcodeRefusal) -> Status {
         XcodeRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "XCODE_REFUSAL_")
+}
+
+/// The status of a refusal by `Hardware`.
+pub(crate) fn hardware(refusal: HardwareRefusal) -> Status {
+    let code = match refusal {
+        HardwareRefusal::Unspecified | HardwareRefusal::StoreFailed => Code::Internal,
+        HardwareRefusal::Unauthorized => Code::Unauthenticated,
+        HardwareRefusal::Forbidden => Code::PermissionDenied,
+        HardwareRefusal::InvalidRequest => Code::InvalidArgument,
+    };
+    refused(code, refusal.as_str_name(), "HARDWARE_REFUSAL_")
 }
 
 /// The status of a refusal by `Maintenance`.

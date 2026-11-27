@@ -166,20 +166,12 @@ pub struct Coordinator {
     pub(crate) repository_naming: Mutex<()>,
     /// The list of Xcode releases and the Xcode store ([`crate::xcode_feed`]).
     pub(crate) xcode: crate::xcode_feed::Xcode,
+    /// Each host's hardware event log ([`crate::hardware_log`]).
+    pub(crate) hardware: Arc<dyn crate::hardware_log::HardwareLog>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
     set_waits: Mutex<Option<std::sync::mpsc::Sender<SetProgress>>>,
-}
-
-/// What a test hears of CI's set of a desired state while it races another change.
-#[cfg(test)]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum SetProgress {
-    /// The set found the fleet's lock held, and waits for it.
-    Waits,
-    /// The set returned.
-    Returned,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -236,6 +228,7 @@ impl Coordinator {
             discovery: crate::repository_discover::Limits::default(),
             repository_naming: Mutex::new(()),
             xcode: crate::xcode_feed::Xcode::default(),
+            hardware: Arc::new(crate::hardware_log::MemoryLog::default()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -997,3 +990,5 @@ mod group_calls;
 mod maintain;
 #[path = "service_store.rs"]
 mod store_calls;
+#[cfg(test)]
+pub(crate) use store_calls::SetProgress;

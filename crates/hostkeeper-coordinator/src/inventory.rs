@@ -511,7 +511,7 @@ fn mac(text: &str) -> Result<String, proto::EnrollmentRefusal> {
 }
 
 /// Whether `text` is a serial a record may hold: 1 to 64 of `A-Za-z0-9._-`.
-fn is_serial(text: &str) -> bool {
+pub(crate) fn is_serial(text: &str) -> bool {
     (1..=MAX_SERIAL).contains(&text.len())
         && text
             .bytes()
