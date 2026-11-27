@@ -1,0 +1,7 @@
+4,0,8000000,-;mce: [Hardware Error]: Machine check events logged
+4,1,8000100,-;[Hardware Error]: Corrected error, no action required.
+4,2,8000200,-;[Hardware Error]: CPU:2 (19:1:1) MC17_STATUS[-|CE|MiscV|AddrV|-|-|SyndV|CECC|-|-|-]: 0x9c2040000000011b
+4,3,8000300,-;[Hardware Error]: Error Addr: 0x00000004a2b3c400
+4,4,8000400,-;[Hardware Error]: Unified Memory Controller Ext. Error Code: 0, DRAM ECC error.
+4,5,8000500,-;[Hardware Error]: cache level: L3/GEN, tx: GEN, mem-tx: RD
+0,6,9000000,-;[Hardware Error]: Uncorrected, software restartable error.

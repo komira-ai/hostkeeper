@@ -1,7 +1,7 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1, the daemon's state file of HH3 and its reader of the BMC's event log of HH8, marked
-**Built** where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3, the Linux kernel sources of HH10 and the reader of the
+BMC's event log of HH8, marked **Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -165,9 +165,35 @@ Built: `crates/hostkeeper-daemon/src/hwmon.rs`);
 ext4 `errors_count` and read-only remounts (`disk`); and a missing or silent BMC (`host`, `bmc_missing`, decision 6). A filesystem
 nearly full is not hardware: it is part of `storage_failing` (5.1) with no hardware record.
 
+**Built (HH10)**: the kernel's log and its own files, two sources of `hardware_sources.rs` (HH11) in
+`crates/hostkeeper-daemon/src/kernel_sources.rs`, each read every 60 s on a worker of its own from the daemon's start on a Linux or
+OpenRC host (`journalctl` runs with a 30 s deadline and a 64 KiB output cap; the reads of `/proc`, `/sys` and `/dev/kmsg` are of the
+kernel's own files and never block), judged by the pure functions of `kernel_log.rs` and `kernel_files.rs`, whose module docs give
+each rule; the fixtures are in `crates/hostkeeper-daemon/tests/fixtures/kernel/`.
+
+- Source `journal`: this boot's lines are followed on `/dev/kmsg` (opened once without blocking; at most 4096 records a read; the
+  mark, the journal's cursor of 4.4, is the boot and the next sequence number). Once in each boot the boot before is read with
+  `journalctl --dmesg --boot=-1 --output=json --reverse --lines=100` (the delegated program of 4.2), keeping only the lines logged
+  after the last one read on `/dev/kmsg` in that boot, which are the lines before a crash. Machine checks (by the status's UC bit),
+  EDAC (by DIMM label), AER, APEI's `[Hardware Error]:` records (one record per error, by `section_type`; those with no `{<n>}` are
+  BERT's and `of_previous_boot`), AMD's machine check decoder and I/O errors of physical disks give records; every other line
+  gives none. The records of one read that agree in code, subject, severity and boot are one record that counts them. A record's
+  id is `journal:<boot>:<usec>:<digest of the line>`, so a line read on `/dev/kmsg` and again from the journal is one record. A
+  host with no `/var/log/journal` reports the source `unsupported`, and `/dev/kmsg` is still followed.
+- Source `sysfs`: taint M (`cpu`, critical), B (`memory`), D and L (`cpu`, warning), once a boot; `HardwareCorrupted` (`memory`,
+  warning) each time it grows in a boot; each ext4 filesystem's `errors_count` (`disk`, warning) each time it grows; a filesystem of a
+  block device mounted read-write in this boot and read-only now (`disk`, critical, asserted; deasserted when it is writable again,
+  unmounted, or its boot ended); and the dumps of `/sys/fs/pstore` and of `/var/lib/systemd/pstore` (`board`: critical
+  `panic_hardware` when a panic or an oops names an uncorrected hardware error, else a panic or an oops warning, else `info`), each
+  read once.
+  Nothing is written, removed or cleared.
+- Each read reports its source's state in `HostHealth.sources` (`ok`, `unsupported` or `unreadable` with its reason).
+- Not built: a filesystem nearly full (`statvfs`). No field of `HostHealth` (HH1) carries a filesystem's fullness, and it is not a
+  hardware record, so it waits for a decision on how the heartbeat carries it.
+
 **The BMC's event log, as built** (HH8; Built: `crates/hostkeeper-daemon/src/sel_source.rs`, the reader; `sel.rs` and
 `sel_tables.rs`, the decoder and its tables; `sdr.rs`, the sensor names; the requests in `ipmi.rs`, `BmcRequest`). The reader is a
-source of `crate::hardware_sources` (`for_host` lists it on Linux, after SMART and hwmon), on a worker of its own, every 60 s,
+source of `crate::hardware_sources` (`for_host` lists it on Linux, after SMART, hwmon and the kernel sources), on a worker of its own, every 60 s,
 and after a read that failed twice as long, up to 300 s; its one mark holds the SEL's and the open `bmc_missing`. Each read asks
 `Get Device ID`; a host with no `/dev/ipmi0` is source `sel` `unsupported`, a BMC that does not answer `unreadable`, and the
 second such read in a row holds one `bmc_missing` record (`host`, subject `BMC`, `warning`, `asserted`), its `deasserted` record
@@ -647,7 +673,7 @@ Each lands with its own tests, among them one that fails without it. A daemon pu
 | HH7 | Coordinator: `service_unhealthy` and `service_crash_loop`, the likely-cause join | HH5, HH6 |
 | HH8 | Daemon, Linux: the SEL and SDR decoder, `Get Device ID` | HH3 |
 | HH9 | Daemon, Linux: rasdaemon's database | HH3 |
-| HH10 | Daemon, Linux: the journal's kernel lines, `/dev/kmsg`, taint, pstore, `HardwareCorrupted`, ext4 errors, read-only remounts, `statvfs` | HH3 |
+| HH10 | Daemon, Linux: the journal's kernel lines, `/dev/kmsg`, taint, pstore, `HardwareCorrupted`, ext4 errors, read-only remounts, `statvfs` (Built, but `statvfs`: section 3.1) | HH3 |
 | HH11 | Daemon, Linux: `smartctl --json` and hwmon, with the source states | HH3 |
 | HH12 | Daemon, Mac: boot id, marker, the panic parser and classifier, `system_profiler` and the capacity | HH3 |
 | HH13 | Daemon, Mac: `SMARTStatus`, the thermal rule, the `runs` ring | HH12 |
