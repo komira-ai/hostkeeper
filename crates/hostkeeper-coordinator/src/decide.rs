@@ -48,11 +48,13 @@
 //!    not leave fewer live hosts of its role up than its `min_up` (`below_min_up`). A host holds
 //!    a slot while updating, while its promotion is pending, after a failed update until it
 //!    heartbeats healthy, and from the order the coordinator gave it (an update, an install or an
-//!    uninstall) until the host reports it or the order ages out, [`crate::fleet::ORDER_AGE`].
+//!    uninstall) until the host reports it or the order ages out, [`crate::fleet::ORDER_AGE`],
+//!    while the host still heartbeats (a silent host keeps it, for at most
+//!    [`crate::silent::SILENT_UPDATE_AFTER`]: [`crate::fleet::Fleet::is_ordered`]).
 //!    The asking host's own order is never counted against it, so a host asking again under its
 //!    own order is told the same again. A host the service no longer counts (excluded, out of its
 //!    selector, not announcing it) still holds its slot until its beats or its order's age free
-//!    it ([`Fleet::occupants_of`]).
+//!    it, the age only while it still heartbeats ([`Fleet::occupants_of`]).
 //!
 //! A host moved into its group ([`crate::moving`]) is told [`Gate::Moving`] for every package, before
 //! every rule above but a halt, until the group's plans admit it and, if its daemon announced

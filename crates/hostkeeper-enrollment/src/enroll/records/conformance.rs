@@ -205,6 +205,7 @@ fn running(version: &str, at_unix: u64) -> pb::Running {
             service: "api".to_owned(),
             version: version.to_owned(),
             installer: "deb".to_owned(),
+            updating: None,
         }],
         at_unix,
         bmc: None,

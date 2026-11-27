@@ -5,9 +5,13 @@
 //! | Step | Does |
 //! |---|---|
 //! | `prepare`, `cleanup`, `uninstall` | Nothing |
-//! | `cutover` | Restarts every `run` unit and waits, within the step's bound, for each to be active; one that is not is `Failed`, `release`, [`REASON_UNIT_INACTIVE`] |
-//! | `verify` | Passes when every `run` unit is active and the health URL, if any, answers 2xx; otherwise defers ([`VERIFY_RETRY_SECS`]), until the runner's verify window is over |
+//! | `cutover` | Restarts every `run` unit and waits, within the step's bound, for the run set to be live (one of its units active); a set none of whose units is active in time is `Failed`, `release`, [`REASON_UNIT_INACTIVE`] |
+//! | `verify` | Passes when the run set is live (one of its units active) and the health URL, if any, answers 2xx; otherwise defers ([`VERIFY_RETRY_SECS`]), until the runner's verify window is over |
 //! | `rollback` | Restarts the `run` units of the release `current` was switched back to; for a first install, whose package the switch removed, nothing |
+//!
+//! A run set is live when any one of its units is active, as the observer reads it
+//! (`hostkeeper_observe`): a standby unit kept inactive by design (one of tierstore's two
+//! instances) neither fails a cutover nor holds a verify (design 5.6 and 5.8).
 //!
 //! They apply to a repository version (one with `target.json`, [`crate::target`]) whose manifest
 //! names no hook command. The daemon's own service runs [`BUILTIN_EXIT`], every step
@@ -30,7 +34,7 @@ use crate::verbs::force::SELF_SERVICE;
 
 /// The reason of a `cutover` whose `run` unit did not become active within the step's bound.
 pub const REASON_UNIT_INACTIVE: &str = "unit_inactive";
-/// The reason of a `verify` that defers: a `run` unit is not active, or the health URL did not
+/// The reason of a `verify` that defers: no `run` unit is active, or the health URL did not
 /// answer 2xx.
 pub const REASON_NOT_SERVING: &str = "not_serving";
 /// The seconds a deferring `verify` asks to be run again after.
@@ -57,9 +61,11 @@ pub fn builtin(ports: BuiltinPorts) -> Builtin {
     Arc::new(move |step: Step, order: &UpdateOrder, bound: Bound| run(&ports, step, order, bound))
 }
 
-/// Starts each of `run`, then asks after each until it has been seen active once, every
-/// [`POLL_SECS`] on `clock`, within `bound_secs` of the start. An answer that is an error
-/// counts as not active. `Err` names what failed to start, or what was not active in time.
+/// Starts each of `run`, then asks after them until one has been seen active, every
+/// [`POLL_SECS`] on `clock`, within `bound_secs` of the start: the run set is live, as the
+/// observer reads it, and a unit kept inactive by design is a standby. An answer that is an error
+/// counts as not active; an empty `run` has nothing to wait for. `Err` names what failed to
+/// start, or every unit when none was active in time.
 pub fn start_and_wait(
     units: &dyn UnitControl,
     clock: &dyn Clock,
@@ -73,15 +79,13 @@ pub fn start_and_wait(
     // The wait is of this process, so of this boot: the monotonic clock alone measures it, and an
     // unreadable boot id never makes it endless.
     let began = clock.mono_secs();
-    let mut waiting: Vec<&String> = run.iter().collect();
     loop {
-        waiting.retain(|unit| !units.is_active(unit).unwrap_or(false));
-        if waiting.is_empty() {
+        if is_live(units, run) {
             return Ok(());
         }
         let spent = clock.mono_secs().saturating_sub(began);
         if spent >= bound_secs {
-            let names: Vec<&str> = waiting.iter().map(|unit| unit.as_str()).collect();
+            let names: Vec<&str> = run.iter().map(String::as_str).collect();
             return Err(format!(
                 "not active within {bound_name} ({bound_secs}): {}",
                 names.join(", ")
@@ -89,6 +93,15 @@ pub fn start_and_wait(
         }
         clock.sleep_secs(POLL_SECS.min(bound_secs - spent));
     }
+}
+
+/// Whether the run set `run` is live: one of its units is active (an answer that is an error is
+/// not), or it has none.
+fn is_live(units: &dyn UnitControl, run: &[String]) -> bool {
+    run.is_empty()
+        || run
+            .iter()
+            .any(|unit| units.is_active(unit).unwrap_or(false))
 }
 
 /// The exit of a step that failed or deferred for `reason`, with `detail`.
@@ -162,7 +175,7 @@ fn run(ports: &BuiltinPorts, step: Step, order: &UpdateOrder, bound: Bound) -> S
     }
 }
 
-/// Stops and starts every unit of `run`, then waits for each to be active.
+/// Stops and starts every unit of `run`, then waits for the run set to be live.
 fn restart(ports: &BuiltinPorts, run: &[String], bound_secs: u64, step: Step) -> StepExit {
     let stopped = run.iter().try_for_each(|unit| {
         ports
@@ -185,13 +198,13 @@ fn restart(ports: &BuiltinPorts, run: &[String], bound_secs: u64, step: Step) ->
     }
 }
 
-/// Whether every unit of `run` is active and the health URL of `service` answers 2xx.
+/// Whether the run set `run` is live (one of its units active) and the health URL of `service`
+/// answers 2xx.
 fn verify(ports: &BuiltinPorts, service: &ServiceName, run: &[String]) -> StepExit {
-    let inactive: Vec<&str> = run
-        .iter()
-        .filter(|unit| !ports.units.is_active(unit).unwrap_or(false))
-        .map(String::as_str)
-        .collect();
+    let inactive: Vec<&str> = match is_live(&*ports.units, run) {
+        true => Vec::new(),
+        false => run.iter().map(String::as_str).collect(),
+    };
     let defer = |detail: &str| {
         exit(
             75,

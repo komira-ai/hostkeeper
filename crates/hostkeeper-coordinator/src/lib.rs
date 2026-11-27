@@ -477,6 +477,8 @@ mod one_live_update_coordinator_tests;
 #[cfg(test)]
 mod one_live_update_release_tests;
 #[cfg(test)]
+mod one_live_update_restart_tests;
+#[cfg(test)]
 mod one_live_update_tests;
 #[cfg(test)]
 mod operator_layout_sled_tests;

@@ -74,8 +74,9 @@ daemon start (packages-repositories.md sections 5 and 4.7). The placer's unit li
 ### 6.3 Built-in steps, for a service with no hand-over of its own
 
 A manifest whose `hook.command` is empty gets the daemon's built-in steps (a non-empty command is the absolute path of a file the package installs, with leading arguments, packages-native.md section 10.2), which are shipped code like an installer:
-`prepare` and `cleanup` do nothing; `cutover` restarts every `run` unit and waits for it to be active within its bound;
-`verify` passes when every `run` unit is active and `health_url`, if any, answers 2xx, and defers otherwise until
+`prepare` and `cleanup` do nothing; `cutover` restarts every `run` unit and waits within its bound for the run set to be
+live (one of its units active, as hostkeeper-design.md section 5.8 reads it, so a standby unit kept inactive fails
+nothing); `verify` passes when the run set is live and `health_url`, if any, answers 2xx, and defers otherwise until
 `verify_deadline_secs`; `rollback` restarts the units again, after the switch back; `uninstall` does nothing. This is
 what most packaged services need, and what an OCI image needs, since an image carries no hook.
 

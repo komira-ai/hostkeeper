@@ -416,6 +416,7 @@ fn a_heartbeat_mark_raced_by_a_change_of_the_host_keeps_the_change() {
             service: "api".to_owned(),
             version: "2.0".to_owned(),
             installer: "deb".to_owned(),
+            updating: None,
         }],
     };
     two.mine

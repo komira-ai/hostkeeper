@@ -1,6 +1,8 @@
 //! What each host runs, as its daemon said in its last heartbeat (packages-native.md, section
-//! 10.6): the daemon's name and version, and each service that is not absent with its version
-//! and the installer it runs from. `Hosts.List` answers it as `Host.running`.
+//! 10.6): the daemon's name and version, and each service that is not absent with its version,
+//! the installer it runs from and the version it is updating to, if any. `Hosts.List` answers it
+//! as `Host.running`. A restarted coordinator reads the services a host was updating back as
+//! update slots the host holds ([`crate::fleet::Fleet::hold_restored`]).
 //!
 //! The coordinator keeps the last record of each host it heard ([`Kept`]), replaced by every
 //! heartbeat, and with enrollment keeps it with the host's enrollment too
@@ -102,18 +104,19 @@ fn said(
                 .unwrap_or_default()
         }
     };
-    let top = legacy.map(|name| (name, beat.version.as_str(), beat.health));
+    let top = legacy.map(|name| (name, &beat.version, beat.health, &beat.updating));
     let listed = announced
         .iter()
-        .map(|one| (one.name.as_str(), one.version.as_str(), one.health));
+        .map(|one| (one.name.as_str(), &one.version, one.health, &one.updating));
     let mut services: Vec<RunningService> = top
         .into_iter()
         .chain(listed)
-        .filter(|(_, _, health)| *health != Health::Absent)
-        .map(|(name, version, _)| RunningService {
+        .filter(|(_, _, health, _)| *health != Health::Absent)
+        .map(|(name, version, _, updating)| RunningService {
             service: name.to_owned(),
-            version: version.to_owned(),
+            version: version.as_str().to_owned(),
             installer: installer(name),
+            updating: updating.as_ref().map(|to| to.as_str().to_owned()),
         })
         .collect();
     services.sort_by(|a, b| a.service.cmp(&b.service));

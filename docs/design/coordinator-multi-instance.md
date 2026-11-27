@@ -257,8 +257,10 @@ Two paths:
      decision against the desired state, so nothing in it needs the deciding path;
   3. the **release of slots**: `DELETE FROM fleet_orders WHERE host_id = $h AND service = $s AND target = <version the
      applied beat reports>` (the host reached the target; today `Fleet` drops the order on that beat), also only when the
-     beat was applied. A slot is also freed by age: `ORDER_AGE` is read as a filter by every reader, and the deciding
-     transaction, under the gate, deletes the aged rows. Deleting a row without the gate only frees a slot, so a decision
+     beat was applied. A slot is also freed by age while the host still heartbeats: `ORDER_AGE` is read as a filter by
+     every reader (the order of a host silent for `DOWN_AFTER` holds whatever its age), and the deciding transaction,
+     under the gate, deletes the aged rows; an abandon (`Hosts.Exclude --abandon`) or a retirement ends the row at the
+     instance's next decision. Deleting a row without the gate only frees a slot, so a decision
      that reads the row a moment before the delete is conservative (one fewer order), never wrong;
   4. the gap rule above, the state-version vector (section 6), the host's deny row and the host's queued orders. (**Built**, M6: 1 to 3 and the gap rule, `fleet_rows.rs`; the versions and the deny row stay reads of their own, the queued orders still per instance: the companion, sections 5 and 5.3.)
   A cache is reloaded only by the rule of section 6 ("Invalidation": rows and version read in one snapshot, so a cache is

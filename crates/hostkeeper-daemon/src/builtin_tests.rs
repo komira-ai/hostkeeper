@@ -237,14 +237,15 @@ fn prepare_cleanup_and_uninstall_do_nothing() {
     assert_eq!(rig.calls(), vec![]);
 }
 
-/// Proves cutover stops and starts each run unit, in the order of `run`, and returns once each is
-/// active. Catches a cutover that only starts, which leaves the old process running.
+/// Proves cutover stops and starts each run unit, in the order of `run`, and returns once the run
+/// set is live: one unit active, here `a`, which answers inactive twice while the standby `b`
+/// never becomes active. Catches a cutover that only starts, which leaves the old process running.
 #[test]
-fn cutover_restarts_every_run_unit_and_waits_for_each() {
+fn cutover_restarts_every_run_unit_and_waits_for_the_set_to_be_live() {
     let rig = Rig::new("builtin-cutover");
     let order = rig.order(None, &entry(&["a.service", "b.service"], None));
-    rig.units.set_active("a.service");
-    rig.units.active_after("b.service", 2);
+    rig.units.active_after("a.service", 2);
+    rig.units.active_after("b.service", 1_000);
     assert_eq!(rig.step(Step::Cutover, &order, secs(60)), BUILTIN_EXIT);
     let calls = rig.calls();
     assert_eq!(
@@ -258,9 +259,9 @@ fn cutover_restarts_every_run_unit_and_waits_for_each() {
     );
     let asks = calls
         .iter()
-        .filter(|call| **call == UnitCall::IsActive("b.service".to_owned()))
+        .filter(|call| **call == UnitCall::IsActive("a.service".to_owned()))
         .count();
-    assert_eq!(asks, 3, "b answers inactive twice, then active");
+    assert_eq!(asks, 3, "a answers inactive twice, then active");
     assert_eq!(rig.clock.mono_secs(), 1000 + 2 * POLL_SECS);
 }
 
@@ -330,10 +331,30 @@ fn the_last_wait_is_the_rest_of_the_bound() {
     assert_eq!(clock.mono_secs(), 1000 + POLL_SECS * 2 + 1);
 }
 
-/// Proves only the units still not active are named, and one seen active stays done.
+/// Proves a run set with one unit that never becomes active (a standby, as one of tierstore's two
+/// instances) is live once the other is active: the wait succeeds at once, on the first poll.
 #[test]
-fn only_the_units_still_inactive_are_named() {
+fn a_standby_that_never_becomes_active_does_not_fail_the_wait() {
+    let rig = Rig::new("builtin-standby");
+    rig.units.active_after("b.service", 1_000);
+    let result = start_and_wait(
+        &*rig.units,
+        &*rig.clock,
+        &["a.service".to_owned(), "b.service".to_owned()],
+        3,
+        "the cutover bound",
+    );
+    assert_eq!(result, Ok(()));
+    assert_eq!(rig.clock.mono_secs(), 1000);
+}
+
+/// Proves a run set none of whose units is active within the bound fails naming every unit, in the
+/// order of `run`, with the wait ending at the bound. Catches a failure that names only some of
+/// them.
+#[test]
+fn every_unit_is_named_when_none_is_active_in_time() {
     let rig = Rig::new("builtin-named");
+    rig.units.active_after("a.service", 1_000);
     rig.units.active_after("b.service", 1_000);
     let result = start_and_wait(
         &*rig.units,
@@ -344,8 +365,9 @@ fn only_the_units_still_inactive_are_named() {
     );
     assert_eq!(
         result,
-        Err("not active within the cutover bound (3): b.service".to_owned())
+        Err("not active within the cutover bound (3): a.service, b.service".to_owned())
     );
+    assert_eq!(rig.clock.mono_secs(), 1003);
 }
 
 /// Proves no run units is a wait that ends at once.
@@ -539,9 +561,10 @@ fn an_entry_that_needs_a_newer_daemon_fails_with_manifest_invalid() {
     assert_eq!(line(&exit)["reason"], "manifest_invalid");
 }
 
-/// Proves verify passes when every run unit is active and the health URL answers 2xx.
+/// Proves verify passes when the run set is live (its one unit is active) and the health URL
+/// answers 2xx.
 #[test]
-fn verify_passes_when_every_unit_is_active_and_healthy() {
+fn verify_passes_when_the_unit_is_active_and_healthy() {
     let rig = Rig::new("builtin-verify-ok");
     let order = rig.order(None, &entry(&["web.service"], Some(URL)));
     rig.current("2.0.0");
@@ -552,14 +575,27 @@ fn verify_passes_when_every_unit_is_active_and_healthy() {
     assert_eq!(rig.health.requests(), vec![URL.to_owned()]);
 }
 
-/// Proves verify defers (exit 75, class `environment`, reason `not_serving`, retry in 5 seconds)
-/// naming the units that are not active, and does not ask the health URL.
+/// Proves verify passes on a run set with one active unit and one inactive standby, going on to
+/// the health check, which it asks once.
 #[test]
-fn verify_defers_naming_the_inactive_units() {
-    let rig = Rig::new("builtin-verify-down");
+fn verify_passes_with_one_active_unit_and_a_standby() {
+    let rig = Rig::new("builtin-verify-standby");
     let order = rig.order(None, &entry(&["a.service", "b.service"], Some(URL)));
     rig.current("2.0.0");
     rig.units.set_active("a.service");
+    rig.manager.set("a.service", ActiveState::Active, None);
+    rig.health.answer(URL, 200);
+    assert_eq!(rig.step(Step::Verify, &order, secs(60)), BUILTIN_EXIT);
+    assert_eq!(rig.health.requests(), vec![URL.to_owned()]);
+}
+
+/// Proves verify defers (exit 75, class `environment`, reason `not_serving`, retry in 5 seconds)
+/// naming every run unit when none is active, and does not ask the health URL.
+#[test]
+fn verify_defers_naming_every_unit_when_none_is_active() {
+    let rig = Rig::new("builtin-verify-down");
+    let order = rig.order(None, &entry(&["a.service", "b.service"], Some(URL)));
+    rig.current("2.0.0");
     let exit = rig.step(Step::Verify, &order, secs(60));
     assert_eq!(exit.code, Some(75));
     assert_eq!(
@@ -567,7 +603,7 @@ fn verify_defers_naming_the_inactive_units() {
         serde_json::json!({
             "class": "environment",
             "reason": "not_serving",
-            "detail": "not active: b.service",
+            "detail": "not active: a.service, b.service",
             "retry_after_secs": VERIFY_RETRY_SECS,
         })
     );

@@ -102,19 +102,27 @@ pub(crate) fn prune_instances(tx: &mut Tx<'_>, at: Option<i64>) -> Result<u64, p
 }
 
 /// Deletes the orders of `fleet_orders` that have aged out ([`crate::fleet::ORDER_AGE`] or
-/// more since they were given): every reader already takes them as freed slots, so deleting one
-/// without the gate frees nothing a decision holds (section 5.2); how many went.
+/// more since they were given) of a host that still heartbeats: one whose row of `fleet_hosts`
+/// was seen within [`crate::fleet::DOWN_AFTER`], or that has none. Every reader already takes
+/// them as freed slots, so deleting one without the gate frees nothing a decision holds (section
+/// 5.2); the order of a host gone silent holds its slot past its age (for at most
+/// [`crate::silent::SILENT_UPDATE_AFTER`]: [`crate::fleet::Fleet::is_ordered`]) and is kept while
+/// the host stays silent, so its alert stands. How many went.
 ///
 /// # Errors
 /// The client's error.
 pub(crate) fn prune_orders(tx: &mut Tx<'_>, at: Option<i64>) -> Result<u64, postgres::Error> {
-    let age = i64::try_from(crate::fleet::ORDER_AGE.as_secs()).unwrap_or(i64::MAX);
+    let secs = |secs: u64| i64::try_from(secs).unwrap_or(i64::MAX);
+    let age = secs(crate::fleet::ORDER_AGE.as_secs());
+    let down = secs(crate::fleet::DOWN_AFTER.as_secs());
+    let now = now_of(1);
     tx.execute(
         &format!(
-            "DELETE FROM fleet_orders WHERE at_unix <= {} - $2",
-            now_of(1)
+            "DELETE FROM fleet_orders o WHERE o.at_unix <= {now} - $2 AND NOT EXISTS \
+             (SELECT 1 FROM fleet_hosts h WHERE h.host_id = o.host_id \
+             AND h.seen_unix <= {now} - $3)"
         ),
-        &[&at, &age],
+        &[&at, &age, &down],
     )
 }
 
@@ -127,7 +135,7 @@ pub(crate) struct Pruned {
     pub(crate) login_failures: u64,
     /// Rows of instances not seen for a day.
     pub(crate) instances: u64,
-    /// Orders that aged out.
+    /// Orders that aged out, of hosts that still heartbeat.
     pub(crate) fleet_orders: u64,
 }
 

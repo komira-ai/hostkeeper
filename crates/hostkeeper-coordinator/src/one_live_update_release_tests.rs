@@ -184,9 +184,10 @@ fn a_bake_is_counted_with_its_own_services_version_and_beats() {
 
 /// Behaviour: an order of `c` to `d1` at 100 s holds `a` on `d2` (`rollout_elsewhere`) at 219 s
 /// and frees it at 220 s; `d1` asking again at 160 s is told again without its order being held
-/// longer. `d2` beats before each question: a host that is silent is no host of the plan.
-/// Catches an order of one service not holding another, and a repeated order that extends the
-/// hold.
+/// longer. `d2` beats before each question: a host that is silent is no host of the plan; `d1`
+/// goes on heartbeating idle without reporting the order (a beat at 160 s and at 220 s), since a
+/// silent ordered host keeps its slot past the age. Catches an order of one service not
+/// holding another, and a repeated order that extends the hold.
 #[test]
 fn an_order_of_one_service_holds_another_until_it_ages_out() {
     let mut f = Farm::new();
@@ -197,6 +198,7 @@ fn an_order_of_one_service_holds_another_until_it_ages_out() {
     assert_eq!(f.ask("c", "d1", 160), go("2.0"), "told again");
     f.daemon("a", "d2", beat("1.0"), 219);
     assert_eq!(f.why("a", "d2", 219), gate(Gate::RolloutElsewhere));
+    f.daemon("c", "d1", beat("1.0"), 220);
     f.daemon("a", "d2", beat("1.0"), 220);
     assert_eq!(f.why("a", "d2", 220), go("2.0"));
 }

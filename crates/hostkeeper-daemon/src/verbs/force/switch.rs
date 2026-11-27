@@ -11,8 +11,9 @@
 //!     version `current` names changes nothing;
 //! 12. nothing, for the same reason;
 //! 13. `daemon-reload`;
-//! 14. and 15. the target's `run` units are started, and each must be seen active once within
-//!     `force_start_secs`, polled on the daemon's clock;
+//! 14. and 15. the target's `run` units are started, and the run set must be seen live (one of
+//!     its units active, as the observer reads a run set; a standby unit kept inactive by design
+//!     fails nothing) within `force_start_secs`, polled on the daemon's clock;
 //! 16. the verdict, `Succeeded` or `Failed` with `link_failed` (steps 9 to 12),
 //!     `daemon_reload_failed` (step 13) or `start_failed` (steps 14 and 15);
 //! 18. when the force switched `current` to another version, the prune, whatever the verdict
@@ -224,9 +225,10 @@ fn stop_left(ctx: &Ctx, service: &ServiceName, from: Option<&str>) -> Result<(),
     Ok(())
 }
 
-/// Steps 14 and 15: starts each of `run`, then asks after each until it has been seen active
-/// once, every [`super::FORCE_POLL_SECS`] on the daemon's clock, within `force_start_secs` of the start
-/// ([`crate::builtin::start_and_wait`]). An answer that is an error counts as not active.
+/// Steps 14 and 15: starts each of `run`, then asks after them until one has been seen active
+/// (the run set is live), every [`super::FORCE_POLL_SECS`] on the daemon's clock, within
+/// `force_start_secs` of the start ([`crate::builtin::start_and_wait`]). An answer that is an error
+/// counts as not active.
 fn start(ctx: &Ctx, run: &[String]) -> Result<(), String> {
     crate::builtin::start_and_wait(
         &*ctx.units,

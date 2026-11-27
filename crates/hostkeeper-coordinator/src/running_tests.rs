@@ -413,6 +413,54 @@ fn the_store_is_written_only_when_what_the_host_runs_changes() {
     );
 }
 
+/// Proves: the enrollment store keeps, for each service a heartbeat lists, the version the host
+/// said it was updating it to, and none once a heartbeat says it no longer is: what a restarted
+/// coordinator holds the host's update slot by ([`crate::fleet::Fleet::hold_restored`]).
+///
+/// Catches: a record that never keeps the update a host runs (a restart then lets a second update
+/// be ordered while it runs), or keeps it after the update ended (a restart then holds the slot of
+/// a host that is done until it beats).
+#[test]
+fn the_store_keeps_the_version_each_service_is_updating_to() {
+    let f = Fixture::new("running-updating");
+    f.approve("m-1", "db-1", APPROVED, false);
+    let updating = |f: &Fixture| -> Vec<(String, Option<String>)> {
+        f.enrollment
+            .enrollment
+            .store()
+            .enrolled_host(&hostkeeper_enrollment::names::HostId::parse("db-1").expect("an id"))
+            .expect("read")
+            .expect("enrolled")
+            .running
+            .expect("kept")
+            .services
+            .into_iter()
+            .map(|one| (one.service, one.updating))
+            .collect()
+    };
+    let mut web = runs(WEB, "1.0");
+    web.updating = Some(crate::testutil::version("1.1"));
+    f.beat("db-1", "storage", FIRST, vec![web, runs(DB, "2.0")]);
+    assert_eq!(
+        updating(&f),
+        [
+            (DB.to_owned(), None),
+            (WEB.to_owned(), Some("1.1".to_owned()))
+        ]
+    );
+    f.beat(
+        "db-1",
+        "storage",
+        FIRST + 15,
+        vec![runs(WEB, "1.1"), runs(DB, "2.0")],
+    );
+    assert_eq!(
+        updating(&f),
+        [(DB.to_owned(), None), (WEB.to_owned(), None)],
+        "the update ended"
+    );
+}
+
 /// What the enrollment store kept of `host`: when.
 fn listed_kept(f: &Fixture, host: &str) -> Option<u64> {
     f.enrollment

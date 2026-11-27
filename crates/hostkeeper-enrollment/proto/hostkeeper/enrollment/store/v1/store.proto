@@ -184,6 +184,11 @@ message RunningService {
   string version = 2;
   // The installer it runs with; empty when the coordinator did not know it.
   string installer = 3;
+  // The version the daemon said it was updating the service to; absent when it was not
+  // updating. A restarted coordinator counts the host as holding its update slot until the host
+  // beats again (design section 8.2). A release before it does not read it, and drops it when it
+  // rewrites this record.
+  optional string updating = 4;
 }
 
 enum DenyState {

@@ -217,7 +217,8 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   restart the first report heard starts it again.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
   an update (it reports one `updating` or its promotion pending) or has an order outstanding,
-  until the host's own heartbeats or its order's age free it; an excluded host whose last update
+  until the host's own heartbeats or its order's age free it (the age only while the host still
+  heartbeats: a silent host keeps it until `--abandon`, or an hour of silence, `SILENT_UPDATE_AFTER`); an excluded host whose last update
   failed and that is not healthy holds none, since nothing of an update runs there and the
   service no longer orders it. With `abandon`, for a host that is gone mid-update,
   the slot is freed at once; the audit entry is `exclude_abandon` with `possibly_mid_update` in

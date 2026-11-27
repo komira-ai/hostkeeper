@@ -606,6 +606,8 @@ async fn a_deferral_that_repeats_its_reason_is_an_alert_and_holds_nobody_else() 
     declines(&farm, "m1", 2_010, "host_setup_missing");
     declines(&farm, "m2", 2_010, "host_setup_missing");
     assert_eq!(farm.tell("t1", &[("db", "1.0")]), update("db", "2.0"));
+    // t1 runs db 2.0 by its next beat: a silent ordered host would hold the farm's one slot.
+    assert_eq!(farm.tell("t1", &[("db", "2.0")]), NOTHING);
     at(&farm, 2_310);
     assert_eq!(order_with(&farm, "m1", vec![]), None);
     declines(&farm, "m1", 2_311, "host_setup_missing");
