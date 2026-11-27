@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Alert, Kind, Said, Subject, halted_by};
+use super::{Alert, Kind, Said, Subject, halt_holds, halted_by};
 use crate::host_groups::{GroupName, HostGroups};
 use crate::ops::{Halt, OpsState};
 
@@ -42,11 +42,11 @@ pub(super) fn halts_in(ops: &OpsState, groups: &HostGroups) -> Vec<Alert> {
                 .collect::<Vec<_>>()
                 .join(", ");
             let message = format!(
-                "{} is halted at {} by {} in host group {places}: nothing is ordered for it \
-                 there until an operator clears the halt",
+                "{} is halted at {} by {} in host group {places}: {}",
                 subject.service,
                 halt.target,
-                halted_by(halt)
+                halted_by(halt),
+                halt_holds(halt, " there")
             );
             Alert {
                 subject,

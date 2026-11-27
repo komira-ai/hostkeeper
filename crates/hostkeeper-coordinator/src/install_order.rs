@@ -108,7 +108,7 @@ fn holds_back(
     if installed_on(fleet, name, id) {
         return false;
     }
-    if fleet.is_halted_in(earlier) {
+    if fleet.halts_host_in(earlier, want.map(|want| &want.version), id) {
         return true;
     }
     let Some(want) = want else {

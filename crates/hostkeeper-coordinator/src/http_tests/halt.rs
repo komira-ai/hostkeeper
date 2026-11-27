@@ -211,19 +211,34 @@ async fn other_services_are_untouched() {
     assert_eq!(kbf, json!({"reply": "update", "version": "2.0"}));
 }
 
-/// Catches: a new desired version lifting a halt: after the version is set to 3.0 the halt of
-/// the update to 2.0 stands, nobody is ordered 3.0, and the convergence still names it.
+/// Catches: a new desired version lifting a hook's halt, or the halt holding every host across
+/// it (komira-ai/hostkeeper#418): after CI sets 3.0 the halt of the update to 2.0 stands and the
+/// convergence still names it, the host that raised it is told nothing and held `halted`, and
+/// another host is ordered 3.0.
 #[tokio::test]
-async fn a_new_desired_version_does_not_clear_a_halt() {
+async fn a_new_desired_version_keeps_the_halt_on_its_host_and_orders_the_others() {
     let rig = farm("halt-new-desired").await;
     send(&rig, "s1", "storage", &beat("1.0", HALT)).await;
     rig.set(r#"{"version":"3.0","min_up":{"storage":0,"frontend":0}}"#)
         .await;
     let nothing = json!({"reply": "nothing"});
-    assert_eq!(send(&rig, "d1", "daemon", &beat("1.0", "")).await, nothing);
+    assert_eq!(
+        send(&rig, "s1", "storage", &beat("1.0", HALT)).await,
+        nothing
+    );
+    assert_eq!(
+        send(&rig, "d1", "daemon", &beat("1.0", "")).await,
+        json!({"reply": "update", "version": "3.0"})
+    );
+    let held = holds(&rig, "kbf").await;
+    assert!(
+        held.contains(&("s1".to_owned(), json!("halted"))),
+        "{held:?}"
+    );
     let state = convergence(&rig, "kbf").await;
     assert_eq!(state["state"], "halted");
     assert_eq!(state["desired"], "3.0");
+    assert_eq!(state["halt"]["node_id"], "s1");
     assert_eq!(state["halt"]["target"], "2.0");
 }
 

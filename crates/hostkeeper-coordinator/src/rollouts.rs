@@ -118,8 +118,9 @@ fn entered(service: &str, view: &View) -> String {
 
 /// Writes, for the service `def` at its desired version `want`, the position its plan reaches by
 /// itself now (every stage it may enter, [`reach`]), after a heartbeat and under the fleet's
-/// lock: one write, with one audit entry by the coordinator. Nothing is written while the service
-/// is halted, its version is marked bad, the plan is paused or the coordinator is quiet, nor when
+/// lock: one write, with one audit entry by the coordinator. Nothing is written while a halt holds
+/// every host of the service at `want` ([`crate::halt::stops`]), its version is marked bad, the
+/// plan is paused or the coordinator is quiet, nor when
 /// the plan has no host left to order. A write that fails is logged, and the next heartbeat tries
 /// again; the decision reads the position the plan reaches either way ([`View::effective`]).
 pub(crate) fn advance(
@@ -140,7 +141,8 @@ pub(crate) fn advance(
             .nodes()
             .all(|(id, node)| node.announced.contains_key(service) || !fleet.is_assigned(def, id));
     let marks = ops.read(|state| state.marks_in(group, service));
-    if rolled || marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
+    let stopped = crate::halt::stops(&marks, &want.version) || marks.bad.contains(&want.version);
+    if rolled || stopped || fleet.is_quiet(now) {
         return;
     }
     let kept_now = ops.read(|state| state.rollout_in(group, service));
@@ -257,7 +259,7 @@ impl Coordinator {
         now: Duration,
     ) -> Option<proto::RolloutPlan> {
         let want = want?;
-        let halted = crate::halt::standing(ops, def.group(), &def.name).is_some()
+        let halted = crate::halt::stops(&ops.marks_in(def.group(), &def.name), &want.version)
             || ops
                 .services
                 .get(&def.name)
@@ -319,7 +321,8 @@ impl Coordinator {
             .ops
             .read(|state| state.rollouts.get(&def.name).cloned());
         let view = View::effective(def, &want, kept_now.as_ref(), &fleet, now);
-        let stopped = marks.halt.is_some() || marks.bad.contains(&want.version);
+        let stopped =
+            crate::halt::stops(&marks, &want.version) || marks.bad.contains(&want.version);
         let waiting = view.wait(def, &want, &fleet, now) == Some(Wait::ManualAdvance);
         if stopped || fleet.is_quiet(now) || !waiting {
             return Err(proto::RolloutsRefusal::NotWaiting);

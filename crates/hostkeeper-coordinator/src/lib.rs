@@ -380,6 +380,8 @@ mod group_first_install_tests;
 #[cfg(test)]
 mod group_force_tests;
 #[cfg(test)]
+mod group_halt_scope_tests;
+#[cfg(test)]
 mod group_incident_tests;
 #[cfg(test)]
 mod group_install_order_tests;

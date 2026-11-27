@@ -18,7 +18,9 @@
 //!   ([`crate::stages`]).
 //! - `halted`: a host reported a failure no version can repair and an operator has not
 //!   cleared it. It wins over every other state, and the convergence names the halt
-//!   (`halt`: the host, the check and the version); see [`crate::halt`].
+//!   (`halt`: the host, the check and the version); see [`crate::halt`]. A halt the desired
+//!   version moved past still holds its hosts, so the service cannot converge until it is
+//!   cleared, and it stays `halted` while the other hosts are ordered the new version.
 //! - `in_progress`: everything else.
 //!
 //! A host the desired version's release picks no entry for ([`crate::picks`]: `no_target`,
@@ -55,7 +57,9 @@ pub enum State {
     /// A live host failed its update to the desired version.
     Blocked,
     /// A host reported a failure no version can repair and an operator has not cleared it
-    /// ([`crate::halt`]): nothing is ordered, whatever the other hosts say.
+    /// ([`crate::halt`]), whatever the other hosts say. Nothing is ordered while the desired
+    /// version is one the halt was raised for; after that, the hosts that reported it alone are
+    /// held ([`crate::halt::HaltScope`]).
     Halted,
     /// Neither.
     InProgress,
