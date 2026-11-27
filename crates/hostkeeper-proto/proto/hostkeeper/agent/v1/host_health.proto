@@ -131,7 +131,8 @@ message Baseline {
   // The kernel's `MemTotal`, KiB; on a Mac `hw.memsize` in KiB. 0: not read.
   uint64 mem_total_kib = 1;
   // The memory devices SMBIOS lists (type 17), populated or not, at most 32; empty on a Mac, which
-  // has none to read. Sent in a boot's first heartbeats and when they change.
+  // has none to read. Sent in every heartbeat that has room for them; the first part of the
+  // health dropped when it does not fit.
   repeated MemoryDevice memory_devices = 2;
   // The CPUs present and online, as the kernel counts them (`/sys/devices/system/cpu/present` and
   // `online`; on a Mac `hw.physicalcpu` and `hw.logicalcpu`).
