@@ -42,6 +42,8 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
             health: Health::Unhealthy,
             health_detail: Some("probe refused".to_owned()),
             drift: None,
+            health_body: None,
+            restarts: None,
         },
     );
     let mut heartbeater = rig.heartbeater();
@@ -67,6 +69,9 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 record_try: None,
                 installer: None,
                 drift: None,
+                health_reason: None,
+                health_body: None,
+                restarts: None,
             },
             ServiceFacts {
                 local_halt: None,
@@ -84,6 +89,9 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 record_try: Some(1),
                 installer: Some("tarball".to_owned()),
                 drift: None,
+                health_reason: None,
+                health_body: None,
+                restarts: None,
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,
@@ -100,6 +108,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -415,6 +424,8 @@ fn the_drift_the_observer_found_is_in_the_services_facts() {
             health: Health::Healthy,
             health_detail: None,
             drift: Some(found.clone()),
+            health_body: None,
+            restarts: None,
         },
     );
     let mut heartbeater = rig.heartbeater();

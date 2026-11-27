@@ -45,6 +45,7 @@ fn loaded(info: &JobInfo) -> Result<UnitState, String> {
         active,
         sub: info.state.word().to_owned(),
         main_pid,
+        restarts: None,
     })
 }
 
@@ -60,6 +61,7 @@ impl<L: Launchctl> ServiceManager for LaunchdServiceManager<L> {
                 active: ActiveState::NotFound,
                 sub: "not loaded".to_owned(),
                 main_pid: None,
+                restarts: None,
             }),
             JobStatus::Loaded(info) => loaded(&info).map_err(manager_error),
         }

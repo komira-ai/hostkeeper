@@ -360,7 +360,15 @@ or the release has no target, no package for the host's platform or no build for
 and takes no place in its plan, whichever stage each plan is in. So a config package listed after
 its service is never ordered to a host that does not run the service. A package that is not
 installed because a halt, a hold, an exclusion, a version marked bad, the quiet start or a gate of
-its plan holds it also holds the later ones back. Updates are not ordered by the list.
+its plan holds it also holds the later ones back. A package the host runs counts as installed
+whatever holds it: excluding a host from hostkeeper (`hosts exclude --service hostkeeper`), to keep
+it out of a hostkeeper rollout, leaves the host's later packages to be installed, and an exclusion
+holds them back only where the host does not run the excluded package. One that the host was
+ordered to install at the group's desired version and declined (it reports the deferral, as a
+service whose first install needs the files of its config package does until they are there) does
+not, while it waits out its deferral, is ordered again or waits for another order on the host: the
+config package listed after it is ordered, and the service's next install finds its files. Updates
+are not ordered by the list.
 A later package whose every host left to order waits `install_order` (behind an earlier package
 that failed its install on one host, say: on that host for good, and, under `failed_hosts =
 FAILED_HOSTS_STOP`, on the others too while they wait `stage_failed`) has nothing to order: it takes no place of `--live-rollouts` and holds no other service of any group, and its plan

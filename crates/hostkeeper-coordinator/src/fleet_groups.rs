@@ -12,7 +12,9 @@ use hostkeeper_wire::version::Version;
 
 use super::{Fleet, Host};
 use crate::assignment::ServiceAssignments;
+use crate::halt::HaltScope;
 use crate::holds::HoldMark;
+use crate::host_groups::GroupName;
 use crate::rollouts::Rollout;
 use crate::services::ServiceDef;
 
@@ -38,7 +40,7 @@ pub struct Marks {
     pub excluded: BTreeSet<(String, String)>,
     /// Per service, where its update plan stands ([`crate::rollouts`]).
     pub rollouts: BTreeMap<String, Rollout>,
-    /// The services that are halted.
+    /// The services that are halted (whom each halt holds: `halt_scopes`).
     pub halted: BTreeSet<String>,
     /// Per service, the versions marked bad.
     pub bad: BTreeMap<String, Vec<Version>>,
@@ -47,7 +49,7 @@ pub struct Marks {
     pub acked: BTreeMap<String, BTreeSet<(String, String)>>,
     /// Per host group and package, where its update plan stands.
     pub group_rollouts: BTreeMap<String, BTreeMap<String, Rollout>>,
-    /// Per host group, the packages that are halted in it.
+    /// Per host group, the packages that are halted in it (whom each halt holds: `halt_scopes`).
     pub group_halted: BTreeMap<String, BTreeSet<String>>,
     /// Per host group and package, the hosts its standing force orders.
     pub group_forced: BTreeMap<String, BTreeMap<String, BTreeSet<HostId>>>,
@@ -59,6 +61,10 @@ pub struct Marks {
     /// it is done, deferred or put back. A package plan leaves them out and `min_up` counts them
     /// down ([`crate::stages`]), and no package order goes to them ([`crate::decide`]).
     pub(crate) in_maintenance: BTreeSet<HostId>,
+    /// Whom the standing halt of each halted service holds ([`HaltScope`]), by the host group it
+    /// stands in (`None`: the service's own) and the service. A service `halted` or
+    /// `group_halted` names with no scope here holds every host.
+    pub(crate) halt_scopes: BTreeMap<(Option<String>, String), HaltScope>,
 }
 
 impl Marks {
@@ -117,17 +123,48 @@ impl Fleet {
         }
     }
 
-    /// Whether `def` is halted: its group's halt, for a service made for a group.
-    #[must_use]
-    pub(crate) fn is_halted_in(&self, def: &ServiceDef) -> bool {
-        match def.group() {
-            None => self.marks.halted.contains(&def.name),
+    /// Whether the halt of `service` in `group` (`None`: the service's own) holds every host
+    /// while `desired` is its desired version, or, given `id`, holds that host
+    /// ([`HaltScope::holds_every_host`], [`HaltScope::holds`]). A halted service whose marks
+    /// name no scope holds every host.
+    pub(super) fn halt_holds(
+        &self,
+        group: Option<&str>,
+        service: &str,
+        desired: Option<&Version>,
+        id: Option<&HostId>,
+    ) -> bool {
+        let halted = match group {
+            None => self.marks.halted.contains(service),
             Some(group) => self
                 .marks
                 .group_halted
-                .get(group.as_str())
-                .is_some_and(|halted| halted.contains(&def.name)),
-        }
+                .get(group)
+                .is_some_and(|halted| halted.contains(service)),
+        };
+        let key = (group.map(str::to_owned), service.to_owned());
+        halted
+            && self
+                .marks
+                .halt_scopes
+                .get(&key)
+                .is_none_or(|scope| match id {
+                    None => scope.holds_every_host(desired),
+                    Some(id) => scope.holds(desired, id.as_str()),
+                })
+    }
+
+    /// Whether the halt of `def` (its group's, for a service made for a group) holds the host
+    /// `id` while `desired` is its desired version ([`Self::halt_holds`]).
+    #[must_use]
+    pub(crate) fn halts_host_in(
+        &self,
+        def: &ServiceDef,
+        desired: Option<&Version>,
+        id: &HostId,
+    ) -> bool {
+        let group = def.group().map(GroupName::as_str);
+        self.halt_holds(group, &def.name, desired, Some(id))
     }
 
     /// The versions of `service` marked bad: in every group alike.
@@ -136,11 +173,14 @@ impl Fleet {
         self.marks.bad.get(service).map_or(&[], Vec::as_slice)
     }
 
-    /// Whether `def` is halted, or `version` of it is marked bad: its plan orders no one. A
-    /// service made for a group is halted by its group's halt; a version is bad in every group.
+    /// Whether a halt of `def` holds every host of it at `version` ([`Self::halt_holds`]),
+    /// or `version` of it is marked bad: its plan orders no one. A service made for a group is
+    /// halted by its group's halt; a version is bad in every group.
     #[must_use]
     pub(crate) fn is_stopped_in(&self, def: &ServiceDef, version: &Version) -> bool {
-        self.is_halted_in(def) || self.bad_versions(&def.name).contains(version)
+        let group = def.group().map(GroupName::as_str);
+        self.halt_holds(group, &def.name, Some(version), None)
+            || self.bad_versions(&def.name).contains(version)
     }
 
     /// Whether the standing force of `def` orders the host `id`: its group's, for a service made

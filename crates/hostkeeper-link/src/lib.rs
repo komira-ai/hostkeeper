@@ -43,7 +43,9 @@
 //! the managed block of the login account's `authorized_keys`, only while the coordinator
 //! advertises [`Feature::OperatorKeysV1`]. Its host prerequisites ([`PushedPrerequisites`]) go to
 //! the daemon's [`PrerequisitesSink`], which makes sure of them on the host, only while the
-//! coordinator advertises [`Feature::PrerequisitesV1`].
+//! coordinator advertises [`Feature::PrerequisitesV1`]. The host's hardware health comes from the
+//! daemon's [`HostHealthSource`], asked only while the coordinator advertises
+//! [`Feature::HostHealthV1`], and the records a reply names written go back to it.
 //!
 //! [`GrpcMtlsLink`] ([`grpc`]) is the same call over gRPC (`Coordinator.Heartbeat` of
 //! `hostkeeper.agent.v1`) and HTTP/2 on the same mutual TLS, reaching the coordinator through a
@@ -58,8 +60,10 @@ pub mod dial;
 pub mod fetch;
 pub mod full_disk_access;
 pub mod grpc;
+mod health;
 pub mod heartbeater;
 pub mod host_facts;
+pub mod host_health;
 pub mod host_ssh;
 mod maintenance;
 pub mod mtls;
@@ -79,9 +83,10 @@ pub mod testing;
 mod wire_map;
 
 pub use beat::{
-    ANNOUNCED, FACTS, Feature, Features, Fitted, Health, Heartbeat, Liveness, LocalHalt,
-    MAINTENANCE, MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize, PRIVATE_REPOSITORY,
-    Platform, REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts, TrustedRootFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Fitted, HOST_HEALTH, Health, Heartbeat, Liveness,
+    LocalHalt, MAINTENANCE, MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize,
+    PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts,
+    TrustedRootFacts, fit,
 };
 pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};
@@ -94,6 +99,7 @@ pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
 pub use host_facts::PushedFacts;
+pub use host_health::HostHealthSource;
 pub use host_ssh::{PASSWORD_KEEP, PASSWORD_OFF, PushedSsh, SshReport};
 pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};

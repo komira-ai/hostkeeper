@@ -1346,7 +1346,7 @@ excludes it with <code>abandon</code>.</li>
 <li><strong>A hook hangs, fails or lies.</strong> A hang is stopped at its bound and is a failure. A failure before
 commit is rolled back. The halt exit code, or a rollback that fails (see
 <a href="#hooks">Update hooks</a>), halts the service on that host until cleared (it clears itself once when the host reports the service absent), and the
-coordinator halts the service fleet-wide. A step that cannot be stopped keeps the service locked until an operator aborts it with <code>hk hosts abort</code> (the coordinator&rsquo;s
+coordinator halts the service fleet-wide while that version is desired, and on that host alone once another version is. A step that cannot be stopped keeps the service locked until an operator aborts it with <code>hk hosts abort</code> (the coordinator&rsquo;s
 <code>Hosts.Abort</code> does not reach the shipped daemon), and an abort tries the stop
 <span data-cell="c-abort" data-source="crates/hostkeeper-daemon/src/verbs/abort.rs" data-item="ABORT_STOP_ATTEMPTS">3</span>
 times. A hook that passes <code>verify</code> while its service is down is not caught by the daemon. The

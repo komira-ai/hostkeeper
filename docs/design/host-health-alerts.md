@@ -1,6 +1,6 @@
 # Host health alerts: one hardware event log per host
 
-Status: design. Nothing of it is built. It extends the alerts of
+Status: design, built in part (the wire of HH1 and the daemon's state file of HH3, marked **Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -248,7 +248,9 @@ And on `ServiceBeat` (New; fields 1 to 15 are taken): `health_reason` 16 (the ob
 non-2xx reply, so js-agent's `503 not placeable: <reason>` reaches the coordinator), and `restarts` 18 (the restart counter, the
 restarts in the last 10 minutes, the last result and exit status).
 
-**Held until written.** The daemon keeps every record it has made in a queue of its state file (at most 256; past that the oldest
+**Held until written** (Built: `crates/hostkeeper-daemon/src/health_state.rs`, the queue, and `host_health.rs`, the
+`HostHealthSource` of `crates/hostkeeper-link/src/host_health.rs`, which no coordinator advertises yet). The daemon keeps every
+record it has made in a queue of its state file (at most 256; past that the oldest
 `info` records of a source are folded into one `info` record that counts them, and no warning or critical record is ever folded). It
 sends at most 6 of them in a beat, the most severe first, then the oldest. The coordinator writes each to the log by its `event_id` and
 answers with the ids it wrote (New: `HeartbeatResponse.health_written`, an answer field sent only to an agent that announced
@@ -320,6 +322,12 @@ must be a record of its own) and judges memory by two comparisons:
 
 ### 4.4 The state file and the clean-shutdown marker
 
+Built: `crates/hostkeeper-daemon/src/health_state.rs` (the file, `health-state.json` in the state directory),
+`host_health.rs` (read at start, `running`, `clean` at SIGTERM, the boot and machine ids), `shutdown_probe.rs` (the probes below; on
+OpenRC the runlevel OpenRC is changing to, its `softlevel` file reading `shutdown` or `reboot` [V]) and `terminate.rs` (the
+daemon's SIGTERM, which `start::serve_until` waits for). The high-water marks are each source's own text, kept by the sources of HH8
+to HH12; the baseline is HH4's. A Mac and a Linux host with no `/etc/machine-id` key the file by nothing, which any machine reads.
+
 The daemon keeps a state file in its state directory, written whole (write, fsync, rename), keyed by machine id: the boot id, the
 baseline, the high-water marks (the SEL's last record id and add time, rasdaemon's ids, the panic reports' incident ids, the pstore
 names, the journal's cursor), the clean-shutdown marker and the events still held. At start the daemon writes `running`. At SIGTERM it
@@ -355,7 +363,8 @@ that changes the host, the cordon, is a maintenance run, which runs each service
   hourly; on a Mac `launchctl print` and `pmset` every 60 s, `diskutil` every 15 minutes, `powermetrics` at most every 5 minutes and
   only under a thermal limit, `system_profiler` at start and 2 minutes later.
 - **History is not news.** The first run on a host with an old SEL, old rasdaemon rows or old panic reports writes those older than 7
-  days as `info` records marked history, which raise nothing. A cleared SEL (record ids start again, the count falls) resets the marks.
+  days as `info` records marked history, which raise nothing (Built: `HealthKeeper::record` of
+  `crates/hostkeeper-daemon/src/host_health.rs`, for the first read of each source on a host, the message starting `history: `). A cleared SEL (record ids start again, the count falls) resets the marks.
   A BMC timestamp from before its clock was set after a power loss ("pre-init") is ordered by record id instead.
 - **macOS.** Panic reports need no privacy grant [V]; the daemon already reports whether it has Full Disk Access (Built:
   `crates/hostkeeper-daemon/src/full_disk_access.rs`).

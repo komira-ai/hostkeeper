@@ -9,10 +9,18 @@
 //! | not of the pinned CA, or not for client authentication | enroll again with the same key, `renewal_of` the host |
 //! | expired (past `not_after`)                  | enroll again with the same key, `renewal_of` the host |
 //! | valid, not as the CA issues it now          | `Renew` at once, signed by the key the host holds |
+//! | valid, a renewal asked on the host          | `Renew` at once, signed by the key the host holds |
 //! | valid, before the middle of it              | nothing ([`Outcome::Idle`])                   |
 //! | valid, from the middle of it on             | `Renew`, signed by the key the host holds     |
 //!
-//! The rows are tried in this order. "Not as the CA issues it now" is a certificate whose DNS
+//! The rows are tried in this order. "A renewal asked on the host" is the pki directory's `RENEW`
+//! file, which root writes with `hostkeeper renew` ([`crate::PkiDir::ask_renewal`]): the step
+//! renews as it does at the middle of the validity, the same `Renew` for the same key, and the
+//! ask is removed once a generation is stored (by this renewal, or by an enrollment for a host
+//! that returns) or the coordinator refuses the renewal. A step that fails otherwise (the
+//! coordinator out of reach, its CA not the pinned one, an issued certificate refused) keeps the
+//! ask, and the next step asks again. An ask is honoured whatever the coordinator answered for the
+//! generation before. "Not as the CA issues it now" is a certificate whose DNS
 //! names are not exactly the host id, or whose extended key usage is not client authentication
 //! alone (`verify.rs`): one issued before this daemon's version of the CA's profile. It is renewed
 //! at the first step (so at daemon start) and at any later step, but once per generation: a
@@ -249,6 +257,7 @@ impl Enroller {
             Fit::Return => self.enroll(Some(held)),
             _ if validity::expired(wall, held.not_after) => self.enroll(Some(held)),
             Fit::Unlike if self.answered != Some(held.number) => self.renew(held),
+            _ if self.ports.store.renewal_asked()? => self.renew(held),
             _ if validity::renewal_due(wall, held.not_before, held.not_after) => self.renew(held),
             _ => Ok(Outcome::Idle),
         }
@@ -463,6 +472,7 @@ impl Enroller {
         match self.ports.coordinator.renew(&request)? {
             RenewAnswer::Refused(reason) => {
                 self.answered = Some(held.number);
+                self.clear_ask();
                 Err(Error::RenewRefused(reason))
             }
             RenewAnswer::Issued(issued) => {
@@ -497,6 +507,7 @@ impl Enroller {
             },
         };
         self.answered = Some(stored.number);
+        self.clear_ask();
         Ok(Identity {
             host_id: verified.host_id,
             generation: stored.number,
@@ -506,6 +517,13 @@ impl Enroller {
             ca: stored.ca_path(),
             key: stored.key_path(),
         })
+    }
+
+    /// Removes the renewal asked on the host, which a stored generation or a refusal answered.
+    /// It is cleanup, as removing a finished pending key is: a failure is not reported, and the
+    /// next step, finding the ask still there, renews once more and removes it then.
+    fn clear_ask(&self) {
+        let _ = self.ports.store.clear_renewal();
     }
 }
 

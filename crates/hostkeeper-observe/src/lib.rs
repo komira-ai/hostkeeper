@@ -8,7 +8,10 @@
 //!   the one sealed for that version ([`ProcessProbe`], [`ExpectedExe`]; `/proc` in [`proc`]).
 //! - Health, from the manifest's `[health] url`: one HTTP GET per active instance, to a loopback
 //!   literal, no redirect followed, 4 KiB read at most, only 2xx healthy ([`HealthClient`];
-//!   the real probe in [`health`]).
+//!   the real probe in [`health`]); the first bytes of the body of an answer that is not 2xx go
+//!   with it.
+//! - Restarts, from the service manager too: each run unit's restart counter, last result and
+//!   exit code ([`UnitRestarts`]); [`RestartWindow`] counts the recent ones across observations.
 //!
 //! [`Observer::observe`] makes one consistent [`Observation`] of these; [`beat_health`] maps it to
 //! the heartbeat's `Health` and version. An observation that fails is `unobserved` and is never
@@ -29,6 +32,7 @@ pub mod health;
 pub mod observe;
 pub mod ports;
 pub mod proc;
+pub mod restarts;
 pub mod socket;
 pub mod systemd;
 pub mod url;
@@ -38,14 +42,15 @@ pub use command::ProcessRunner;
 pub use error::{ObserveError, RunError};
 pub use health::{Connect, HttpHealthClient, TcpConnect};
 pub use observe::{
-    Current, HealthView, Observation, ObserveOptions, Observer, Ports, ServiceInput, ServiceState,
-    UnhealthyReason, UnobservedReason, VersionView,
+    Current, HealthView, Observation, ObserveOptions, Observer, Ports, RunUnitRestarts,
+    ServiceInput, ServiceState, UnhealthyReason, UnobservedReason, VersionView,
 };
 pub use ports::{
     ActiveState, CommandOutput, CommandRunner, Deadline, ExeStat, ExpectedExe, HealthClient,
-    HealthReply, ProcessIdentity, ProcessProbe, ServiceManager, UnitState,
+    HealthReply, ProcessIdentity, ProcessProbe, ServiceManager, UnitRestarts, UnitState,
 };
 pub use proc::ProcProbe;
+pub use restarts::RestartWindow;
 pub use socket::unlink_stale_registration_socket;
 pub use systemd::SystemdManager;
 pub use url::{HealthUrl, UrlRefusal};

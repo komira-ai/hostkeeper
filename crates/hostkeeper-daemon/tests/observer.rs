@@ -99,6 +99,8 @@ fn status_reports_the_observation_and_the_installed_version_per_service() {
             },
             health: HealthView::Healthy,
             recorded: Some("1.0.0".to_owned()),
+            health_body: None,
+            restarts: Vec::new(),
         })
     );
     assert_eq!(
@@ -115,6 +117,8 @@ fn status_reports_the_observation_and_the_installed_version_per_service() {
             version: VersionView::NotLive,
             health: HealthView::NotProbed,
             recorded: Some("1.0.0".to_owned()),
+            health_body: None,
+            restarts: Vec::new(),
         })
     );
     assert_eq!(
@@ -181,6 +185,8 @@ fn an_observation_never_waits_for_a_running_step() {
             },
             health: HealthView::NotProbed,
             recorded: Some(support::BASE.to_owned()),
+            health_body: None,
+            restarts: Vec::new(),
         })
     );
     assert!(Arc::ptr_eq(daemon.observer(), &rig.observer));
@@ -246,6 +252,8 @@ fn observation(state: Observed, version: VersionView, health: HealthView) -> Obs
         version,
         health,
         recorded: Some("1.0.0".to_owned()),
+        health_body: None,
+        restarts: Vec::new(),
     }
 }
 

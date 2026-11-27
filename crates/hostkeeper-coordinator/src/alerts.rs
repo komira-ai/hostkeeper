@@ -300,6 +300,20 @@ pub(crate) fn derive_in(
     alerts
 }
 
+/// What `halt` holds, as its alert says it, `there` naming where (empty, or ` there` for a host
+/// group): an operator's halt holds every host; a halt a host reported holds the hosts that
+/// reported it, and every host while a version it was reported at is desired
+/// ([`crate::halt::HaltScope`]).
+fn halt_holds(halt: &Halt, there: &str) -> String {
+    if halt.origin == HaltOrigin::Operator {
+        return format!("nothing is ordered for it{there} until an operator clears the halt");
+    }
+    format!(
+        "the hosts that reported it are ordered nothing of it{there}, and no host{there} is ordered \
+         a version it was reported at, until an operator clears the halt"
+    )
+}
+
 /// Who raised `halt`: an operator, or the host and the check that reported it, with what the
 /// host said of it (the report's `detail`, which the reader cut to `MAX_DETAIL_BYTES`) when it
 /// said anything.
@@ -348,9 +362,10 @@ fn halts(ops: &OpsState, services: &Services) -> Vec<Alert> {
                     ..Subject::of(Kind::Halt)
                 },
                 message: format!(
-                    "{} is halted at {} by {by}: nothing is ordered for it until an operator \
-                     clears the halt",
-                    def.name, halt.target
+                    "{} is halted at {} by {by}: {}",
+                    def.name,
+                    halt.target,
+                    halt_holds(halt, "")
                 ),
                 said: Said::default(),
             })
@@ -673,6 +688,7 @@ fn alert_proto(observed: Observed) -> proto::Alert {
         detail: alert.said.detail,
         tries: alert.said.tries,
         since_unix: alert.said.since_unix,
+        ..proto::Alert::default()
     }
 }
 

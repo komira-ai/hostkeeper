@@ -2,8 +2,9 @@
 //! section 1.4): the order of the group's list.
 //!
 //! A host is offered the install of a package only when every package listed before it is
-//! installed on the host, at any version, or cannot be: the question of that package is one of
-//! the four that say it is no word for this host to act on, [`Skip::NoDesired`],
+//! installed on the host, at any version (an excluded host's beat counts: an exclusion holds a
+//! package back only where the host does not run it), or cannot be: the question of that package
+//! is one of the four that say it is no word for this host to act on, [`Skip::NoDesired`],
 //! [`Skip::NoTarget`], [`Skip::NoPackageForPlatform`] and [`Skip::NoBuildForHost`]. Until then the
 //! later package waits, told [`crate::decide::Gate::InstallOrder`], and takes no place of its plan: the check is
 //! made before the plan's gate, so a config package never reaches a host before the service it
@@ -11,7 +12,12 @@
 //!
 //! A package that is not installed and is in any other state holds the later ones back: a halt, a
 //! hold, a version marked bad, the quiet start, a gate of its plan or an install the host is
-//! ordered next. A coordinator without host groups orders nothing by the list.
+//! ordered next. But for one: a package whose install of its desired version the host was ordered
+//! and declined (the deferral [`crate::defer`] keeps) holds nothing back while it waits out its
+//! deferral, is ordered again or waits for another order on the host, since a service that cannot
+//! start without the files of the config package listed after it declines its install until that
+//! package is there. A halt, an exclusion and the other holds above still hold it. A coordinator
+//! without host groups orders nothing by the list.
 //!
 //! Uninstalls go the other way: the intents a `Put` wrote for one host have generations in the
 //! reverse of the old list, and the uninstall of a package waits, told
@@ -24,7 +30,7 @@ use std::time::Duration;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::wire::Health;
 
-use crate::decide::{Decision, Skip, consider, installed_on};
+use crate::decide::{Decision, Gate, Skip, consider, installed_on};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::{ServiceDef, Services};
@@ -87,8 +93,10 @@ pub(crate) fn uninstall_waits(
 }
 
 /// Whether `earlier`, which the host `id` is not past, holds the packages listed after it back:
-/// it is not installed on the host and its own decision is not one of the four that say it
-/// cannot be.
+/// it is not installed on the host, excluded or not ([`installed_on`]), its own decision is not
+/// one of the four that say it cannot be, and the host did not decline its install at the
+/// desired version (an open deferral of that version) while nothing but its wait, its next order
+/// or another order on the host stands in its way.
 fn holds_back(
     earlier: &ServiceDef,
     want: Option<&Desired>,
@@ -100,7 +108,7 @@ fn holds_back(
     if installed_on(fleet, name, id) {
         return false;
     }
-    if fleet.is_halted_in(earlier) {
+    if fleet.halts_host_in(earlier, want.map(|want| &want.version), id) {
         return true;
     }
     let Some(want) = want else {
@@ -110,10 +118,13 @@ fn holds_back(
         return true;
     }
     let considered = consider(earlier, want, fleet.bad_versions(name), fleet, id, now);
-    !matches!(
-        considered.hold,
+    match considered.hold {
         Some(Decision::Skip(
-            Skip::NoTarget | Skip::NoPackageForPlatform | Skip::NoBuildForHost
-        ))
-    )
+            Skip::NoTarget | Skip::NoPackageForPlatform | Skip::NoBuildForHost,
+        )) => false,
+        None | Some(Decision::Skip(Skip::Deferred) | Decision::Gate(Gate::BusyElsewhere)) => fleet
+            .deferred_until(name, id, &want.version, &earlier.defer_backoff)
+            .is_none(),
+        Some(_) => true,
+    }
 }

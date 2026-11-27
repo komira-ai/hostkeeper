@@ -291,6 +291,7 @@ impl<M: Host> Node<M> {
             maintenance,
             bmc: None,
             serial_console: None,
+            health: None,
         };
         self.running = Some(Running {
             heartbeater: links.heartbeater(&daemon),

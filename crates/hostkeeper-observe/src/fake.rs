@@ -69,7 +69,13 @@ impl FakeServiceManager {
             active,
             sub: format!("{active:?}").to_lowercase(),
             main_pid,
+            restarts: None,
         };
+        self.set_state(unit, state);
+    }
+
+    /// `unit` is `state` on every call from now on.
+    pub fn set_state(&self, unit: &str, state: UnitState) {
         lock(&self.0)
             .answers
             .steady
@@ -107,6 +113,7 @@ impl ServiceManager for FakeServiceManager {
             active: ActiveState::NotFound,
             sub: "dead".to_owned(),
             main_pid: None,
+            restarts: None,
         };
         script
             .answers
@@ -210,9 +217,15 @@ pub struct FakeHealthClient(Arc<Mutex<HealthScript>>);
 impl FakeHealthClient {
     /// Every GET of `url` answers `status` from now on.
     pub fn answer(&self, url: &str, status: u16) {
+        self.answer_body(url, status, b"");
+    }
+
+    /// Every GET of `url` answers `status` with the first bytes of its body `body` from now on.
+    pub fn answer_body(&self, url: &str, status: u16, body: &[u8]) {
         let reply = HealthReply {
             status,
-            body_bytes_read: 0,
+            body_bytes_read: body.len(),
+            body: body.to_vec(),
         };
         lock(&self.0)
             .answers

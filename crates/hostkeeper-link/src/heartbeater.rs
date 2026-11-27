@@ -18,7 +18,8 @@
 //!    version, health and running update, the try its step record holds (whether or not its
 //!    verdict is sent, so a coordinator that never heard the verdict numbers past it), its
 //!    newest verdict not yet acknowledged, and its deferral when the last reply advertised
-//!    `deferred-v1`. Step records that name a service
+//!    `deferred-v1`; and the host's hardware health when the last reply advertised
+//!    `host-health-v1` and the host reads it. Step records that name a service
 //!    twice send nothing. A service listed again after it was not takes the verdict its step
 //!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
 //!    deferred verdict with no deferral of its target on record starts one, and any other
@@ -34,7 +35,8 @@
 //!    not listed until its next order ends.
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
-//! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
+//! 6. From the reply: the advertised features replace the last ones; the hardware records it
+//!    names written go to the [`HostHealthSource`], which holds them no longer; a verdict whose service,
 //!    order id and try the reply acknowledges is not sent again, and the step records are told
 //!    ([`ServiceRecords::acknowledged`]), so a record that keeps it to report stops; with
 //!    `halt-v1`, every halt
@@ -105,19 +107,19 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_hook::is_reason_token;
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, LocalHalt, MAINTENANCE,
-    OPERATOR_KEYS, Observed, PREREQUISITES, PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal,
-    SSH, ServiceFacts, fit,
+    Feature, Features, Health, Heartbeat, Liveness, LocalHalt, Observed, Platform, Renewal,
+    ServiceFacts, fit,
 };
-use crate::deferral::{Book, Deferral};
+use crate::deferral::{Book, deferral_of};
 use crate::host_facts::PushedFacts;
+use crate::host_health::HostHealthSource;
 use crate::host_ssh::PushedSsh;
-use crate::names::Reason;
 use crate::order::{
-    Acknowledged, MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply, Verb,
+    Acknowledged, MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply, Verb, answered,
 };
 use crate::ports::{
     BmcSource, CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError,
@@ -125,6 +127,9 @@ use crate::ports::{
     RecordedService, RemoteLoginProbeSource, RenewalSource, RepositorySink, SerialConsoleSource,
     ServiceObserver, ServiceRecords, Sleeper, SshSink, Tick, TrustedRootSource, UnixClock,
 };
+
+#[path = "heartbeater_features.rs"]
+mod features;
 
 /// The period when the daemon is given none: 15 seconds.
 pub const DEFAULT_HEARTBEAT_SECS: NonZeroU64 = NonZeroU64::MIN.saturating_add(14);
@@ -210,6 +215,9 @@ pub struct Ports {
     /// The daemon's runner of `maintain` orders; none on a host that runs none, which then
     /// announces no `maintenance-v1`.
     pub maintain: Option<Arc<dyn MaintainSink>>,
+    /// The host's hardware health; none on a host whose daemon reads none, which then announces
+    /// no `host-health-v1` and sends none.
+    pub health: Option<Arc<dyn HostHealthSource>>,
 }
 
 /// What one heartbeat came to.
@@ -509,6 +517,10 @@ impl Heartbeater {
                 self.recover(&name, result, now);
             }
             let observation = self.ports.observer.observe(&name);
+            let health_reason = observation
+                .health_detail
+                .clone()
+                .filter(|detail| is_reason_token(detail));
             let running = self
                 .running
                 .as_ref()
@@ -541,6 +553,9 @@ impl Heartbeater {
                     .halts
                     .holding(&name)
                     .map(|held| LocalHalt::at(held, now)),
+                health_reason,
+                health_body: observation.health_body,
+                restarts: observation.restarts,
                 name,
             });
         }
@@ -600,52 +615,8 @@ impl Heartbeater {
                 .as_ref()
                 .filter(|_| self.maintains())
                 .map(|source| source.report()),
+            health: self.health(),
         })
-    }
-
-    /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
-    /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
-    /// `private-repository-v1` when it has a repository configuration or is told it reads
-    /// private repositories, `operator-keys-v1` when it keeps operator keys, and
-    /// `prerequisites-v1` when it keeps host prerequisites, and `ssh-v1` when it sets sshd up and
-    /// the coordinator's last reply advertised `ssh-v1`, and `maintenance-v1` when it reads the
-    /// host's maintenance and the last reply advertised `maintenance-v1`: a coordinator of a
-    /// release before `ssh-v1` reads at most 16 names and drops a longer list whole, and a daemon
-    /// with every port names 17 to it (18 to one that advertises `maintenance-v1`). A daemon that
-    /// reads the host's maintenance but has no runner of `maintain` orders announces no
-    /// `maintenance-v1`.
-    fn announced(&self) -> Vec<Feature> {
-        let mut features = ANNOUNCED.to_vec();
-        if self.ports.repositories.is_some() {
-            features.push(REPOSITORIES);
-        }
-        if self.ports.facts.is_some() {
-            features.push(FACTS);
-        }
-        if self.ports.repositories.is_some() || self.config.private_repository {
-            features.push(PRIVATE_REPOSITORY);
-        }
-        if self.ports.operator_keys.is_some() {
-            features.push(OPERATOR_KEYS);
-        }
-        if self.ports.prerequisites.is_some() {
-            features.push(PREREQUISITES);
-        }
-        if self.ports.ssh.is_some() && self.advertised.has(Feature::SshV1) {
-            features.push(SSH);
-        }
-        if self.maintains() {
-            features.push(MAINTENANCE);
-        }
-        features
-    }
-
-    /// Whether the heartbeat announces `maintenance-v1` and sends the maintenance report: the
-    /// host reads its maintenance and runs `maintain` orders, and the last reply advertised it.
-    fn maintains(&self) -> bool {
-        self.ports.maintenance.is_some()
-            && self.ports.maintain.is_some()
-            && self.advertised.has(Feature::MaintenanceV1)
     }
 
     /// The verdict of `name` the heartbeat carries: of those not yet acknowledged, the oldest to
@@ -695,6 +666,9 @@ impl Heartbeater {
             installer: None,
             drift: None,
             local_halt: None,
+            health_reason: None,
+            health_body: None,
+            restarts: None,
             name,
         }
     }
@@ -712,8 +686,10 @@ impl Heartbeater {
             ssh,
             prerequisites,
             maintain,
+            health_written,
         } = reply;
         self.advertised = Features::of(&features);
+        self.health_written(&health_written);
         let facts_held = self.write_facts(facts);
         self.set_ssh_up(ssh);
         if let Some(set) = repositories
@@ -972,26 +948,4 @@ impl Heartbeater {
             log.line(&format!("{named} answered {}", answered(&answer)));
         }));
     }
-}
-
-/// An answer as the log says it: the outcome, then the reason and the detail when it has them.
-fn answered(result: &OrderResult) -> String {
-    let mut text = result.outcome.as_str().to_owned();
-    if let Some(reason) = &result.reason {
-        text.push_str(": ");
-        text.push_str(reason.as_str());
-    }
-    if let Some(detail) = &result.detail {
-        text.push_str(" (");
-        text.push_str(detail);
-        text.push(')');
-    }
-    text
-}
-
-/// The deferral a deferred verdict starts at `now`, under the verdict's reason, or `deferred`
-/// when it gave none.
-fn deferral_of(result: &OrderResult, now: u64, retry_after_secs: u64) -> Deferral {
-    let reason = result.reason.clone().unwrap_or_else(Reason::deferred);
-    Deferral::starting(result.target.clone(), reason, now, retry_after_secs)
 }

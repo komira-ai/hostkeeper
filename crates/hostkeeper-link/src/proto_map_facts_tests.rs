@@ -27,6 +27,7 @@ fn beat(platform: Platform) -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 

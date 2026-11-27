@@ -63,6 +63,8 @@ impl Kind {
             MaintenanceKind::Linux => Some(Kind::Linux),
             MaintenanceKind::Reboot => Some(Kind::Reboot),
             MaintenanceKind::Probe => Some(Kind::Probe),
+            // The coordinator's repair cordon, which no daemon of this release takes.
+            MaintenanceKind::Repair => None,
         }
     }
 

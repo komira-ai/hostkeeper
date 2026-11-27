@@ -82,6 +82,8 @@ prost-reflect = { workspace = true, features = ["serde"] }
 rustix = { workspace = true, features = ["fs", "process"] }
 # The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
 rustls-pki-types.workspace = true
+# The health state file (`health_state`), as JSON through its derived shape.
+serde.workspace = true
 # `target.json` and the built-in steps' last lines, as JSON.
 serde_json.workspace = true
 sha2.workspace = true
@@ -89,7 +91,8 @@ thiserror.workspace = true
 # A manifest's `[params]` table is handed to the hook's params file as TOML text.
 toml.workspace = true
 # `sync` for the notice that ends serving when the daemon exits for its own update.
-tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+# `macros` and `signal` for the SIGTERM the daemon serves until (`terminate`, `start::serve_until`).
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 
 [dev-dependencies]
 # tests/hello.rs: the example service's real hook, run in process by a step launcher of the test.

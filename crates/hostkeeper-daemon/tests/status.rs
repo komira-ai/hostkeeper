@@ -127,6 +127,8 @@ fn status_reports_running_version_last_result_and_held_halt() {
             version: VersionView::NotLive,
             health: HealthView::NotProbed,
             recorded: Some("2.1.0".to_owned()),
+            health_body: None,
+            restarts: Vec::new(),
         })
     );
     for unobserved in [idle, broken, newer] {

@@ -653,6 +653,35 @@ start. A certificate of another CA than the daemon's pinned `ca_sha256`, or one 
 `clientAuth`, cannot authenticate `Renew`: the daemon returns with its key as an expired host does
 (`renewal_of`, below), and that request waits for an operator's approval.
 
+### Renew a certificate now
+
+To have a host renew its certificate now rather than at half its life (for example once the CA's
+issuance profile changed and a service that reads the host identity copy, below, needs the new
+certificate), run on the host as root:
+
+```
+hostkeeper renew
+```
+
+It writes the file `RENEW` in the pki directory (`/etc/updater/pki`, or `--pki-dir`), says
+`renewal asked: the daemon renews generation <n> of /etc/updater/pki at its next enrollment step`
+and exits 0. The daemon need not be stopped. Its next enrollment step (within 5 seconds; at its
+start when it is not running) renews exactly as at half life: `Renew` over mutual TLS with the
+certificate it holds, for the same key, so there is no new key, no request and no approval. The
+node logs `renewed the certificate of host:<id> (generation <n+1>)`, and the host identity copy
+takes the new certificate at the same step. The daemon removes `RENEW` once the new generation is
+stored, or when the coordinator refuses the renewal (`renewal refused: <token>`, as at half
+life). Any other failed step (the coordinator out of reach, its CA not the pinned one, an issued
+certificate refused) keeps `RENEW`, and the next step asks again. A host whose certificate expired,
+or cannot authenticate `Renew`, returns with `renewal_of` as above and keeps `RENEW` until that
+returned generation is stored. An ask made while a renewal is already in flight is answered by that
+renewal, whose certificate is issued within the same step.
+
+`hostkeeper renew` exits 1 and writes nothing on a host with no certificate (`hostkeeper renew:
+refused: not_enrolled: ...`: its enrollment gives it its first), and on a pki directory it cannot
+use (`refused: store_failed: ...`: missing, not root's own directory, or of a newer schema). A
+daemon of an earlier release ignores `RENEW`, and renews at half life as before.
+
 Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
 step failed (until a step succeeds), and the host's own clock. `hk hosts get
 --node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and

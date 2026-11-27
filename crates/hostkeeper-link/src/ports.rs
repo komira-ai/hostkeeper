@@ -233,10 +233,17 @@ pub struct Observation {
     /// The version the observer confirmed running; none when it could not tell.
     pub version: Option<Version>,
     pub health: Health,
-    /// Why the health is what it is.
+    /// Why the health is what it is. A token of `[a-z0-9_]`, 1 to 64 bytes, is also sent as the
+    /// service's `health_reason` over gRPC; any other detail is not.
     pub health_detail: Option<String>,
     /// The drift the service's installer found at this observation, if it found any.
     pub drift: Option<Drift>,
+    /// The first bytes of the body of the health URL's answer that was not 2xx, at most 160 bytes
+    /// (`ServiceBeat.health_body`); none when there is none.
+    pub health_body: Option<String>,
+    /// How the service's units have restarted (`ServiceBeat.restarts`); none where the service
+    /// manager keeps no count.
+    pub restarts: Option<pb::ServiceRestarts>,
 }
 
 /// A native package found at a version the daemon did not set, as the installer reports it. Each

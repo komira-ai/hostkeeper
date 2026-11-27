@@ -32,7 +32,8 @@
 //!    ([`crate::defer`]; a deferral is not a failure, holds no slot, and a new desired
 //!    version lifts it);
 //! 6. in a host group, an install waits while a package listed before it is not installed on the
-//!    host and can be (`install_order`, [`crate::install_order`]), so the host takes no place in
+//!    host, can be, and was not declined by the host at its desired version (`install_order`,
+//!    [`crate::install_order`]), so the host takes no place in
 //!    the plan; then the service's update plan lets the host go now ([`crate::stages::gate`]):
 //!    its rollout is live, or fewer other services' rollouts are than the coordinator's `--live-rollouts`
 //!    (`rollout_elsewhere`); the plan is not paused (`paused`); and the host holds a free place
@@ -144,7 +145,9 @@ pub fn decide_in(
 #[serde(rename_all = "snake_case")]
 pub enum Gate {
     /// The service is halted: a host reported a failure no version can repair and an operator
-    /// has not cleared it. Checked before every other rule ([`crate::halt::decide`]).
+    /// has not cleared it, and the halt holds this host (every host while the desired version is
+    /// one the halt was raised for, else the hosts that reported it: [`crate::halt::HaltScope`]).
+    /// Checked before every other rule ([`crate::halt::decide`]).
     Halted,
     /// The host holds a halt of the service of its own (its beat's `local_halt`) that no halt of
     /// this coordinator stands for, under a generation this coordinator has issued: it refuses
@@ -194,8 +197,8 @@ pub enum Gate {
     /// `--live-rollouts` lets be.
     RolloutElsewhere,
     /// In a host group ([`crate::group_scope`]): a package listed before this one is not installed
-    /// on the host yet, and can be ([`crate::install_order`]). The install waits, and takes no
-    /// place of its plan.
+    /// on the host yet, can be, and was not declined by the host at its desired version
+    /// ([`crate::install_order`]). The install waits, and takes no place of its plan.
     InstallOrder,
     /// In a host group: a package whose uninstall goes before this one's, because the group listed
     /// it after this one, is still on the host ([`crate::install_order::uninstall_waits`]). The
@@ -420,9 +423,19 @@ pub(crate) fn heard<'a>(fleet: &'a Fleet, service: &str, id: &HostId) -> Option<
     })
 }
 
-/// Whether the host `id` runs `service`, at any version.
+/// Whether the host `id` runs `service`, at any version, whether or not the service counts the
+/// host: the beat of a service an operator excluded the host from, or whose selector no longer
+/// takes it, is kept apart from the service's hosts ([`Fleet::occupant`]) and counts too. False
+/// for a service the host's last heartbeat no longer lists, as [`heard`] has no word of it.
 pub(crate) fn installed_on(fleet: &Fleet, service: &str, id: &HostId) -> bool {
-    heard(fleet, service, id).is_some_and(|h| h.beat.health != Health::Absent)
+    fleet
+        .occupant(service, id)
+        .filter(|_| {
+            fleet
+                .node(id)
+                .is_none_or(|node| node.announced.contains_key(service))
+        })
+        .is_some_and(|h| h.beat.health != Health::Absent)
 }
 
 /// The rules of the decision that come before the plan, for the host `id`, the assigned `def`

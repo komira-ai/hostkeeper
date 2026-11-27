@@ -160,7 +160,7 @@ service Releases {
   // Mark a version bad by hand: it is never ordered again until it is unmarked. A held pair is
   // not reached.
   rpc MarkBad(MarkBadRequest) returns (MarkBadResponse);
-  // Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
+  // Halt a service by hand: no host of it is ordered, whatever version is desired, until the halt
   // is cleared.
   rpc Halt(HaltRequest) returns (HaltResponse);
   // Hold the call until a service's hosts have converged on a version, or the wait ends another
@@ -1496,14 +1496,34 @@ message Alert {
   // reports; 0 when it reports none, and for every other kind. `first_observed_unix` is when this
   // coordinator first saw the alert.
   uint64 since_unix = 14;
+  // When the condition was last seen, unix seconds: for an alert of a host that went silent, the
+  // time its alert stands "as of". 0 from a coordinator that does not fill it.
+  uint64 last_seen_unix = 15;
+  // Whether an operator acknowledged the alert, with notes (docs/design/host-health-alerts.md
+  // section 5.2): it is still derived, and leaves the console's banner until a new boot or a worse
+  // severity. False from a coordinator that does not fill it.
+  bool acknowledged = 16;
+  // For `ALERT_KIND_SERVICE_UNHEALTHY`, `ALERT_KIND_SERVICE_CRASH_LOOP` and
+  // `ALERT_KIND_FAILED_UPDATE`: the open hardware alert of the same host and boot that is its
+  // likely cause, in plain words; for a hardware alert, the alerts it is the likely cause of. Empty
+  // when there is none, and for every other kind.
+  string likely_cause = 17;
+  // The `event_id`s of the records of the host's hardware event log the alert is derived from, and
+  // of its own raising; empty for a kind derived from no record.
+  repeated string events = 18;
+  // For the kinds derived from the hardware event log: the records' `code` and `subject`
+  // (`memory_uncorrectable/DIMM D1`), and for `ALERT_KIND_UNEXPECTED_REBOOT` the boot id, so that
+  // two faults are two alerts and one fault's hundredth record is the same alert. Empty for every
+  // other kind.
+  string finding = 19;
 }
 
 // What an `Alert` is about. These spellings are public; the `alert=` field of the coordinator's
 // log line of each is its log token, named per value.
 enum AlertKind {
   ALERT_KIND_UNSPECIFIED = 0;
-  // A service is halted: nothing is ordered for it until an operator clears the halt. Its host is
-  // the one that reported it (none for an operator's halt). Log token `halt`.
+  // A service is halted until an operator clears the halt (whom it holds: host-updates design 3.8).
+  // Its host is the one that reported it (none for an operator's halt). Log token `halt`.
   ALERT_KIND_HALT = 1;
   // A host asked to enroll and waits for an operator's approval (`Enrollment.Approve`). Log token
   // `waiting_for_operator`.
@@ -1635,6 +1655,39 @@ enum AlertKind {
   // row it declined it for that reason. It clears when the host updates, gives another reason,
   // or another version is wanted. Log token `repeated_deferral`.
   ALERT_KIND_REPEATED_DEFERRAL = 24;
+  // The kinds that follow (25 to 32) are host health's (docs/design/host-health-alerts.md section
+  // 5.1). Every one but the two service kinds is derived from the host's hardware event log, and
+  // names its records in `events` and its fault in `finding`.
+  // A record of the last 7 days that happened, or a condition asserted and not yet deasserted, of
+  // the host's memory, CPU, PCIe, thermal, power or board, at warning or above. The alert's
+  // severity is the record's. A critical one cordons the host for repair. Log token
+  // `hardware_fault`.
+  ALERT_KIND_HARDWARE_FAULT = 25;
+  // The host's capacity is short of its baseline or of its inventory record: memory, CPUs, disks or
+  // network interfaces (a `capacity_short` record asserted and not deasserted). Warning. Memory,
+  // CPUs or disks short cordon the host for repair. Log token `capacity_regressed`.
+  ALERT_KIND_CAPACITY_REGRESSED = 26;
+  // A disk of the host is failing, has media or I/O errors, a filesystem error or a read-only
+  // remount, or a filesystem is nearly full (90% warning, 97% critical). The severity is the
+  // record's. A critical disk record cordons the host for repair. Log token `storage_failing`.
+  ALERT_KIND_STORAGE_FAILING = 27;
+  // The host rebooted with no clean shutdown in the last 24 hours, outside a maintenance run.
+  // Warning. One alert for each boot, with the boot id in `finding`. Log token `unexpected_reboot`.
+  ALERT_KIND_UNEXPECTED_REBOOT = 28;
+  // A managed service of the host has been unhealthy for the coordinator's
+  // `--alert-unhealthy-secs` (600 by default); not during a maintenance turn of the host, a repair
+  // cordon or the bake of a rollout of the service. Warning; critical after 30 minutes. Log token
+  // `service_unhealthy`.
+  ALERT_KIND_SERVICE_UNHEALTHY = 29;
+  // A managed service of the host restarted more than the coordinator's `--alert-restarts` (5 by
+  // default) times in 10 minutes. Critical. Log token `service_crash_loop`.
+  ALERT_KIND_SERVICE_CRASH_LOOP = 30;
+  // A source of hardware events the host is expected to have is unsupported or unreadable on it,
+  // so its hardware faults are not seen. Warning. Log token `host_not_monitored`.
+  ALERT_KIND_HOST_NOT_MONITORED = 31;
+  // A Linux host's BMC is absent or does not answer: its event log, which outlives a crash, cannot
+  // be read. Warning. Log token `bmc_missing`.
+  ALERT_KIND_BMC_MISSING = 32;
 }
 
 // How soon an `Alert` needs a person.

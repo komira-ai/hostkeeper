@@ -722,7 +722,7 @@ be.
 
 | flag | value | meaning |
 |---|---|---|
-| `--kinds` | VALUE | The kinds to apply, each at most once; empty: every kind that is due on each host. `probe` is never due and never taken by an empty list: it is named alone, with `host_ids`, and a run of it holds each host named whose daemon lists `probe` on demand (`MaintenanceReport.on_demand`); `invalid_request` with another kind or with `host_group`. One of: macos, xcode, linux, reboot, probe. Repeat the flag for more. |
+| `--kinds` | VALUE | The kinds to apply, each at most once; empty: every kind that is due on each host. `probe` is never due and never taken by an empty list: it is named alone, with `host_ids`, and a run of it holds each host named whose daemon lists `probe` on demand (`MaintenanceReport.on_demand`); `invalid_request` with another kind or with `host_group`. One of: macos, xcode, linux, reboot, probe, repair. Repeat the flag for more. |
 | `--host-ids` | STRING | The hosts, 1 to 32, by node id: one host, or a selection. Empty when `host_group` is set. Repeat the flag for more. |
 | `--host-group` | STRING | Every host of this host group. Empty when `host_ids` is set. |
 | `--window-start-unix` | UINT64 | When the window opens; 0: now. |
@@ -1119,7 +1119,7 @@ not reached.
 
 `/hostkeeper.operator.v1.Releases/Halt`
 
-Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
+Halt a service by hand: no host of it is ordered, whatever version is desired, until the halt
 is cleared.
 
 | flag | value | meaning |

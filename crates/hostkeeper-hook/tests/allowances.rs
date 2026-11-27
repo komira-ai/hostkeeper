@@ -318,6 +318,30 @@ fn a_first_install_rollback_that_fails_for_no_previous_release_passes_only_when_
     check_all("c3-declared", &hook, first_install_rollback()).expect("declared: accepted");
 }
 
+/// Catches the unknown-key check, which runs `rollback` after `cutover` with the probe key,
+/// taking a declined first-install rollback for a refusal of the key when the hook declared it,
+/// or letting it pass when the hook did not.
+#[test]
+fn a_declined_first_install_rollback_with_the_probe_key_passes_only_when_declared() {
+    let hook = behaving(false, &["first-install-no-rollback"]);
+    let probe = |name: &str, allow: Allowances| {
+        let scratch = Scratch::new(name);
+        let mut fake = ExampleFake::default();
+        Conformance::new(&hook, &mut fake, scratch.path())
+            .with_first_install()
+            .with_allowances(allow)
+            .tolerates_unknown_updater_keys()
+    };
+    probe("c3-probe-declared", first_install_rollback()).expect("declared: accepted");
+    match probe("c3-probe-strict", Allowances::default()) {
+        Err(Violation::RefusedUpdaterKey {
+            step: Step::Rollback,
+            outcome: Outcome::Failure,
+        }) => {}
+        other => panic!("{other:?}"),
+    }
+}
+
 /// Catches an allowance that reaches an update: a rollback that fails with
 /// `no_previous_release` while the params name a previous release is refused, declared or not.
 #[test]

@@ -64,6 +64,7 @@
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, SystemTime};
@@ -474,9 +475,13 @@ impl Hook {
             report.detail = Some("no previous release: a first install".to_owned());
             return Ok((Outcome::Failure, report));
         }
-        if self.defect("refuses-unknown-updater-key")
-            && params.get("updater.conformance_probe").is_some()
-        {
+        let refuses_probe = match self.defect.as_str() {
+            "refuses-unknown-updater-key" => true,
+            "refuses-unknown-updater-key-in-verify" => step == Step::Verify,
+            "refuses-unknown-updater-key-in-rollback" => step == Step::Rollback,
+            _ => false,
+        };
+        if refuses_probe && params.get("updater.conformance_probe").is_some() {
             report.detail = Some("unknown updater.* key".to_owned());
             return Ok((Outcome::Failure, report));
         }
@@ -534,6 +539,17 @@ impl Hook {
                 self.rec_set("prepared", "1")?;
                 if self.defect("writes-outside") {
                     fs::write(self.outside.join("state.json"), "{}")?;
+                }
+                // A change of mode alone, the bytes left as they were: of the params file, or of
+                // the directory `outside/`.
+                let chmod = match self.defect.as_str() {
+                    "chmods-params" => Some(self.params_file.clone()),
+                    "chmods-outside" => Some(self.outside.clone()),
+                    _ => None,
+                };
+                if let Some(path) = chmod {
+                    let mode = fs::metadata(&path)?.permissions().mode();
+                    fs::set_permissions(&path, fs::Permissions::from_mode(mode ^ 0o010))?;
                 }
             }
             Step::Cutover => {
@@ -738,6 +754,10 @@ fn main() -> ExitCode {
             }
             "bad-line" => {
                 println!("{{\"class\":");
+                return outcome.into();
+            }
+            "array-line" => {
+                println!("[null,null,null,null,null,null]");
                 return outcome.into();
             }
             _ => {}

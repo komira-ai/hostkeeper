@@ -13,7 +13,8 @@
 //!    writes the JSON last line (strictly read); `75` carries `retry_after_secs`.
 //! 2. **Run twice.** Each step of a successful update, and `rollback`, run twice in a row: the
 //!    second run ends the same way and leaves the world as the first left it.
-//! 3. **Nothing outside the record.** No run changes the staged release or `outside/`.
+//! 3. **Nothing outside the record.** No run changes the staged release or `outside/`, the
+//!    permissions of an entry there included.
 //! 4. **Rollback tells the truth.** After `cutover`, a `rollback` that says it was reversible
 //!    (the default) leaves the world as it was before `prepare`, with nothing of the update left
 //!    behind; `cleanup` after a rollback changes nothing.
@@ -25,7 +26,8 @@
 //!    service injects: the hook ends each step as injected, and a deferral leaves the world as
 //!    it was.
 //! 7. **Unknown reserved keys.** A params file with an `updater.*` key the hook does not know
-//!    is no reason to refuse (a hook may refuse an unknown key of its own `[params]`).
+//!    is no reason for any step of an update to refuse (a hook may refuse an unknown key of its
+//!    own `[params]`).
 //! 8. **One at a time.** With an exclusive lock held on the record directory, every step
 //!    refuses (exit `1`) and changes nothing.
 //! 9. **Drain and resume**, for a hook that has them ([`Conformance::with_drain`]; see
@@ -457,7 +459,7 @@ impl<'a> Conformance<'a> {
         };
         let before = sandbox.guarded()?;
         let run = run_step(self.hook, self.fake.env(sandbox), sandbox, &inv, kill_at)?;
-        let moved = changes(&before, &sandbox.guarded()?);
+        let moved = sandbox::changed(&before, &sandbox.guarded()?);
         if !moved.is_empty() {
             return Err(Violation::WroteOutside {
                 step,
@@ -870,16 +872,24 @@ impl<'a> Conformance<'a> {
     }
 
     /// A params file with one more `updater.*` key than the hook knows is no reason to refuse:
-    /// the updater may add reserved keys without breaking an older hook.
+    /// the updater may add reserved keys without breaking an older hook. Every step of an update
+    /// reads that one file, so each runs with the key: the successful update, and `rollback`
+    /// after `cutover` (a rollback that declines a first install, as allowed, is no refusal).
     pub fn tolerates_unknown_updater_keys(&mut self) -> Result<(), Violation> {
-        let sandbox = self.fresh()?;
-        self.write_params(&sandbox, true)?;
-        let done = self.exec(&sandbox, Step::Prepare)?;
-        if done.outcome != Outcome::Success {
-            return Err(Violation::RefusedUpdaterKey {
-                step: Step::Prepare,
-                outcome: done.outcome,
-            });
+        const ROLLED_BACK: [Step; 3] = [Step::Prepare, Step::Cutover, Step::Rollback];
+        for path in [&SUCCESS_PATH[..], &ROLLED_BACK[..]] {
+            let sandbox = self.fresh()?;
+            self.write_params(&sandbox, true)?;
+            for &step in path {
+                let done = self.exec(&sandbox, step)?;
+                let declined = step == Step::Rollback && self.declined(&done);
+                if done.outcome != Outcome::Success && !declined {
+                    return Err(Violation::RefusedUpdaterKey {
+                        step,
+                        outcome: done.outcome,
+                    });
+                }
+            }
         }
         Ok(())
     }

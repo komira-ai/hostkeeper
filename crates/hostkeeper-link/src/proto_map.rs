@@ -120,6 +120,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
                 detail: report.detail.clone(),
             }),
         maintenance: beat.maintenance.clone(),
+        health: beat.health.clone(),
     })
 }
 
@@ -283,6 +284,9 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         installer: facts.installer.clone(),
         drift: facts.drift.as_ref().and_then(drift),
         local_halt: facts.local_halt.as_ref().map(local_halt),
+        health_reason: facts.health_reason.clone(),
+        health_body: facts.health_body.clone(),
+        restarts: facts.restarts.clone(),
         ..pb::ServiceBeat::default()
     })
 }
@@ -415,6 +419,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         operator_keys,
         ssh,
         prerequisites,
+        health_written,
     } = response;
     let features = features
         .iter()
@@ -489,6 +494,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 names: set.names,
             }),
             maintain,
+            health_written,
         },
         dropped,
     }
@@ -644,3 +650,7 @@ mod serial_console_tests;
 #[cfg(test)]
 #[path = "proto_map_maintenance_tests.rs"]
 mod maintenance_tests;
+
+#[cfg(test)]
+#[path = "proto_map_health_tests.rs"]
+mod health_tests;

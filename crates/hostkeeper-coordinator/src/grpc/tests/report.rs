@@ -913,6 +913,9 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
             }),
             pinned: None,
             record_try: Some(2),
+            health_reason: None,
+            health_body: None,
+            restarts: None,
         })
     );
     assert_eq!(

@@ -516,6 +516,9 @@ fn installed_version(beat: &Heartbeat) -> Option<String> {
 /// already the service's own entry.
 fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
     agent::ServiceBeat {
+        health_reason: None,
+        health_body: None,
+        restarts: None,
         local_halt: beat.local_halt.as_ref().map(|halt| agent::LocalHalt {
             reason: halt
                 .reason

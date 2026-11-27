@@ -190,8 +190,9 @@ fn a_packages_directory_that_cannot_be_listed_is_an_error() {
 
 /// Catches a service the daemon cannot observe reported as absent or stopped: one with no
 /// `current`, and one whose manifest does not load, are `unobserved`, unhealthy, with the detail
-/// `not_observed`. A service that runs no unit is `unmonitored`, and its health, which nothing
-/// probes, is unhealthy.
+/// `not_observed`. A service that runs no unit and names no health URL (a configuration package)
+/// is `unmonitored` and healthy: nothing of it can fail to serve, so its host still counts as
+/// serving and as baking.
 #[test]
 fn a_service_is_observed_through_the_daemons_observer() {
     let rig = Rig::new("observer-adapter");
@@ -206,6 +207,8 @@ fn a_service_is_observed_through_the_daemons_observer() {
         health: Health::Unhealthy,
         health_detail: Some(NOT_OBSERVED.to_owned()),
         drift: None,
+        health_body: None,
+        restarts: None,
     };
     assert_eq!(observer.observe(&name("db")), unobserved);
     assert_eq!(observer.observe(&name("api")), unobserved);
@@ -214,9 +217,11 @@ fn a_service_is_observed_through_the_daemons_observer() {
         Observation {
             liveness: Liveness::Unmonitored,
             version: None,
-            health: Health::Unhealthy,
+            health: Health::Healthy,
             health_detail: Some("unmonitored".to_owned()),
             drift: None,
+            health_body: None,
+            restarts: None,
         }
     );
 }
@@ -232,6 +237,8 @@ fn seen(
         version,
         health,
         recorded: Some("1.0.0".to_owned()),
+        health_body: None,
+        restarts: Vec::new(),
     }
 }
 
@@ -247,13 +254,16 @@ fn reported(
         health,
         health_detail: detail.map(str::to_owned),
         drift: None,
+        health_body: None,
+        restarts: None,
     }
 }
 
 /// Catches an observation reported in other words than `Daemon::status`'s: every state of the
 /// observer is its liveness (live is running); the version is reported only when the running
 /// executable confirmed it; the health is the heartbeat's (a mismatch or a failed probe is
-/// unhealthy, an absent service absent, a health nobody probed unhealthy); the detail is the
+/// unhealthy, an absent service absent, a stopped or unobserved one unhealthy, an unmonitored one
+/// with no health URL healthy and one whose health URL fails unhealthy); the detail is the
 /// observer's token for what is not plainly live, healthy and confirmed.
 #[test]
 fn every_observation_maps_to_the_loops_words() {
@@ -380,8 +390,23 @@ fn every_observation_maps_to_the_loops_words() {
             reported(
                 Liveness::Unmonitored,
                 None,
-                Health::Unhealthy,
+                Health::Healthy,
                 Some("unmonitored"),
+            ),
+        ),
+        (
+            seen(
+                ServiceState::Unmonitored,
+                VersionView::NotLive,
+                HealthView::Unhealthy {
+                    reason: UnhealthyReason::Unreachable,
+                },
+            ),
+            reported(
+                Liveness::Unmonitored,
+                None,
+                Health::Unhealthy,
+                Some("unreachable"),
             ),
         ),
     ];

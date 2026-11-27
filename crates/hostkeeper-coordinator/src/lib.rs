@@ -168,6 +168,7 @@ pub(crate) mod health;
 pub mod holds;
 pub(crate) mod host_group_proto;
 pub(crate) mod host_groups;
+pub mod host_health;
 pub mod host_move;
 pub mod hosts;
 pub mod http;
@@ -378,6 +379,8 @@ mod group_decision_tests;
 mod group_first_install_tests;
 #[cfg(test)]
 mod group_force_tests;
+#[cfg(test)]
+mod group_halt_scope_tests;
 #[cfg(test)]
 mod group_incident_tests;
 #[cfg(test)]

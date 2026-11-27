@@ -27,6 +27,9 @@
 //! Modules mirror the proto packages, because generated code names other packages by relative
 //! paths (`super::super::...`).
 //!
+//! The agent package's files are `agent.proto`, `maintenance.proto` (the maintenance report and
+//! the `maintain` order) and `host_health.proto` (the host's hardware health); one package.
+//!
 //! The protos change additively only. `proto/compat/baseline.binpb` is the descriptor set of
 //! the last release, and a test of this crate fails when the current descriptors remove,
 //! renumber, rename or retype anything in it (`compat`).
@@ -84,6 +87,10 @@ pub mod ctl;
 
 /// The bounds of a heartbeat's maintenance report, and the check of them.
 pub mod maintenance;
+
+/// The bounds of a heartbeat's host health and of a service's health facts, and the checks of
+/// them.
+pub mod health;
 
 #[cfg(test)]
 mod compat;

@@ -420,6 +420,7 @@ impl CoordinatorLink for GrpcInProcess {
             ssh: None,
             prerequisites: None,
             maintain: None,
+            health_written: Vec::new(),
         })
     }
 }

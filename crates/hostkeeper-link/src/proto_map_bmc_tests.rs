@@ -27,6 +27,7 @@ fn beat(bmc: Option<BmcReport>) -> Heartbeat {
         bmc,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 

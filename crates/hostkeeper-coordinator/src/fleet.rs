@@ -302,10 +302,10 @@ impl Fleet {
         self.marks.rollouts.get(service)
     }
 
-    /// Whether `service` is halted, or `version` of it is marked bad: its plan orders no one.
+    /// Whether a halt of `service` holds every host at `version`, or `version` is marked bad.
     #[must_use]
     pub fn is_stopped(&self, service: &str, version: &Version) -> bool {
-        self.marks.halted.contains(service)
+        self.halt_holds(None, service, Some(version), None)
             || self
                 .marks
                 .bad

@@ -350,6 +350,7 @@ impl CoordinatorLink for InProcess {
             ssh: None,
             prerequisites: None,
             maintain: None,
+            health_written: Vec::new(),
         })
     }
 }
@@ -412,6 +413,7 @@ impl Host {
             maintenance: None,
             bmc: None,
             serial_console: None,
+            health: None,
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

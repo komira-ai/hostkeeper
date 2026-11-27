@@ -124,6 +124,8 @@ fn observation(state: ServiceState, version: VersionView, health: HealthView) ->
         version,
         health,
         recorded: Some("1.5.0".to_owned()),
+        health_body: None,
+        restarts: Vec::new(),
     }
 }
 

@@ -275,6 +275,7 @@ fn bare_beat() -> Heartbeat {
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 
@@ -497,6 +498,8 @@ fn a_host_not_enrolled_makes_no_link_and_dials_nothing() {
     let ca = Ca::new("hostkeeper test ca");
     let listening = Listening::new("not-enrolled-coordinator", &ca);
     let rig = Rig::new("not-enrolled-daemon");
+    // The state directory the daemon's start makes, where the host's links keep its health.
+    std::fs::create_dir_all(&rig.state).expect("the state directory");
     let (daemon, alerts) = alerting(Daemon::new(
         listening.config(&ca),
         rig.dirs(),

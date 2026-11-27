@@ -675,10 +675,20 @@ release still waiting, if any.
 **Then install it.** Once the store holds it, `xcode` is due on each Mac of a group whose
 `xcode_keep` is at least 1 and that lacks it: the Mac counts toward its group's `updates_due`, and
 its host page lists it. **Update** the group, or **Schedule** it in a window with only "Xcode"
-ticked (`--kinds xcode`); a Mac that is also due macOS installs that first. While the store's
-directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits. `hk xcode add`
-ends with this list for the release it stored, and the `hk maintenance schedule` line that stores
-the run for each group no run takes yet ([xcode-releases.md](xcode-releases.md)).
+ticked (`--kinds xcode`). Update takes every kind due, so a Mac that is also due macOS installs
+that first; a run of `--kinds xcode` installs the Xcode alone and leaves macOS as it is. While the
+store's directory cannot be read, no Mac is shown due an Xcode and a turn with `xcode` waits.
+`hk xcode add` ends with this list for the release it stored, and the `hk maintenance schedule`
+line that stores the run for each group no run takes yet ([xcode-releases.md](xcode-releases.md)).
+To take the farm Macs one at a time, each in a run of its own that is followed to its end, the
+owner runs the held script [held/xcode-install.sh](held/xcode-install.sh) ([held/](held/README.md)).
+While builds do not name their Xcode ([Not built yet](#not-built-yet)), a group that keeps Xcode
+without moving its builds sets `xcode_default` to a version the store keeps no release of (`0`,
+[held/xcode-keep.sh](held/xcode-keep.sh)): each turn then installs `Xcode-<version>.app` and leaves
+`xcode-select`, and so the toolchain of every build that names no Xcode, as it is (the first launch
+still installs the packages every Xcode shares). Such a group cannot yet remove an
+older release: a turn that would is refused in its apply (`xcode_order_invalid`), so the held script
+refuses it first.
 
 ### The private store, `xcode_keep` and `xcode_default`
 

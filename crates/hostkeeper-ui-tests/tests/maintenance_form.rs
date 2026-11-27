@@ -213,7 +213,7 @@ fn a_window_field_updates_the_converted_times_in_place_and_does_not_draw_the_pag
     // 2027-01-16 03:00:00 UTC; end 2027-01-16 07:30:00 UTC" for 22:00 to 02:30 in the fake
     // zone UTC-05:00, into the tree and into the element of the page found from the field's
     // nearest fieldset by `[name=window-utc]`, and draws the page no further time (a drawn page
-    // would take the focus from the field the operator moves to).
+    // makes new elements, so it would replace the field the operator moves to).
     let mut ui = page_ui(vec![host("m-1", "mac-build", vec![macos_due()])]);
     group_known(&ui);
     let out = ui.run(&page_driver(

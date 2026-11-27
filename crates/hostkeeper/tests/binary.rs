@@ -319,3 +319,61 @@ fn a_hand_over_execs_next_with_the_same_arguments_until_its_count_is_spent() {
         "nothing is switched"
     );
 }
+
+/// Proves: the real binary runs `hostkeeper renew` as its own process: against a pki directory
+/// whose `current` is generation 1 it exits 0, says it asked for generation 1 on stdout alone,
+/// and leaves the ask, `RENEW`, an empty file of mode 0600 beside `current`; against one with no
+/// `current` it exits 1, says `not_enrolled` on stderr alone, and writes nothing.
+///
+/// Catches: a `renew` verb the binary does not reach, or whose output or status is not the
+/// library's.
+#[test]
+fn renew_asks_the_daemon_from_its_own_process() {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt, symlink};
+    let scratch =
+        hostkeeper_testkit::Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "bin-renew")
+            .expect("a scratch dir");
+    let pki = scratch.path().join("pki");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&pki)
+        .expect("the pki directory");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_hostkeeper"))
+            .args(["renew", "--pki-dir"])
+            .arg(&pki)
+            .output()
+            .expect("run hostkeeper")
+    };
+
+    let out = run();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        format!(
+            "hostkeeper renew: refused: not_enrolled: {} holds no certificate; the host's enrollment gives it its first\n",
+            pki.display()
+        )
+    );
+    assert!(!pki.join("RENEW").exists());
+
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(pki.join("gen-1"))
+        .expect("generation 1");
+    symlink("gen-1", pki.join("current")).expect("current");
+    let out = run();
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "renewal asked: the daemon renews generation 1 of {} at its next enrollment step\n",
+            pki.display()
+        )
+    );
+    let meta = std::fs::symlink_metadata(pki.join("RENEW")).expect("the ask");
+    assert!(meta.is_file() && meta.len() == 0, "{meta:?}");
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+}
