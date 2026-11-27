@@ -24,7 +24,7 @@ fn feature_names() -> Vec<String> {
 }
 
 /// Proves the features `agent.proto` names are exactly these, `operator-keys-v1` and `ssh-v1` among them.
-/// Proves the features `agent.proto` names are exactly these, `operator-keys-v1`, `prerequisites-v1` and `maintenance-v1` among them.
+/// Proves the features `agent.proto` names are exactly these, `operator-keys-v1`, `prerequisites-v1`, `maintenance-v1` and `host-health-v1` among them.
 /// Catches: a feature renamed, or named by the file without this test changing with it.
 #[test]
 fn feature_names_are_pinned() {
@@ -38,6 +38,7 @@ fn feature_names_are_pinned() {
             "forced-v1",
             "halt-v1",
             "heartbeat-v2",
+            "host-health-v1",
             "install-v1",
             "maintenance-v1",
             "operator-keys-v1",

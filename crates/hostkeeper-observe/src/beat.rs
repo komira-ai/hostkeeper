@@ -17,6 +17,10 @@
 //! `HEALTH_UNHEALTHY` reads "does not, or the daemon cannot tell"; the reason apart
 //! (`stopped`, `version_mismatch`, `unobserved`, ...) is [`Observation::reason_token`], for the
 //! daemon's status.
+//!
+//! `HEALTH_UNSPECIFIED` never reaches the wire: the daemon's heartbeat sends an `Unmonitored`
+//! service with no `[health]` (a configuration package) as `HEALTH_HEALTHY`
+//! (docs/service-observation.md, "The heartbeat").
 
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 

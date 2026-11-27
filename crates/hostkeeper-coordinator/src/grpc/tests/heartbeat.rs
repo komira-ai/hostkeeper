@@ -481,6 +481,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 

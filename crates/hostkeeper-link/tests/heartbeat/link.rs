@@ -38,6 +38,7 @@ fn beat() -> Heartbeat {
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 
@@ -460,6 +461,7 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         ssh: None,
         prerequisites: None,
         maintain: None,
+        health_written: Vec::new(),
     };
     let line = |whom: &str, to: &str, why: &str| {
         format!("error: the coordinator's update of {whom} to {to} is not run: {why}")

@@ -42,6 +42,11 @@ export namespace hostkeeper_operator_v1 {
     detail?: string;
     tries?: string;
     sinceUnix?: string;
+    lastSeenUnix?: string;
+    acknowledged?: boolean;
+    likelyCause?: string;
+    events?: string[];
+    finding?: string;
   }
   export type AlertKind =
     | "ALERT_KIND_UNSPECIFIED"
@@ -68,7 +73,15 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_HOST_HALT"
     | "ALERT_KIND_MAINTENANCE_HALTED"
     | "ALERT_KIND_MAINTENANCE_NOT_BACK"
-    | "ALERT_KIND_REPEATED_DEFERRAL";
+    | "ALERT_KIND_REPEATED_DEFERRAL"
+    | "ALERT_KIND_HARDWARE_FAULT"
+    | "ALERT_KIND_CAPACITY_REGRESSED"
+    | "ALERT_KIND_STORAGE_FAILING"
+    | "ALERT_KIND_UNEXPECTED_REBOOT"
+    | "ALERT_KIND_SERVICE_UNHEALTHY"
+    | "ALERT_KIND_SERVICE_CRASH_LOOP"
+    | "ALERT_KIND_HOST_NOT_MONITORED"
+    | "ALERT_KIND_BMC_MISSING";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -339,6 +352,8 @@ export namespace hostkeeper_operator_v1 {
     platform?: hostkeeper_agent_v1.Platform;
     hostGroup?: string;
     enrolledHostId?: string;
+    installedMemoryBytes?: string;
+    memoryModules?: number;
   }
   export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; sled?: string; slot?: number; address?: string; }
   export interface LayoutRack { id?: string; row?: string; heightU?: number; number?: number; }

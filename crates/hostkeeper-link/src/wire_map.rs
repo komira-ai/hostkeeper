@@ -286,6 +286,7 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             ssh: None,
             prerequisites: None,
             maintain: None,
+            health_written: Vec::new(),
         },
         update,
     }

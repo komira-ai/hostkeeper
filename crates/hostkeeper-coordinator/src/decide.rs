@@ -32,7 +32,8 @@
 //!    ([`crate::defer`]; a deferral is not a failure, holds no slot, and a new desired
 //!    version lifts it);
 //! 6. in a host group, an install waits while a package listed before it is not installed on the
-//!    host and can be (`install_order`, [`crate::install_order`]), so the host takes no place in
+//!    host, can be, and was not declined by the host at its desired version (`install_order`,
+//!    [`crate::install_order`]), so the host takes no place in
 //!    the plan; then the service's update plan lets the host go now ([`crate::stages::gate`]):
 //!    its rollout is live, or fewer other services' rollouts are than the coordinator's `--live-rollouts`
 //!    (`rollout_elsewhere`); the plan is not paused (`paused`); and the host holds a free place
@@ -196,8 +197,8 @@ pub enum Gate {
     /// `--live-rollouts` lets be.
     RolloutElsewhere,
     /// In a host group ([`crate::group_scope`]): a package listed before this one is not installed
-    /// on the host yet, and can be ([`crate::install_order`]). The install waits, and takes no
-    /// place of its plan.
+    /// on the host yet, can be, and was not declined by the host at its desired version
+    /// ([`crate::install_order`]). The install waits, and takes no place of its plan.
     InstallOrder,
     /// In a host group: a package whose uninstall goes before this one's, because the group listed
     /// it after this one, is still on the host ([`crate::install_order::uninstall_waits`]). The

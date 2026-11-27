@@ -71,6 +71,7 @@ pub(super) fn request(
         bmc: None,
         serial_console: None,
         maintenance: None,
+        health: None,
     }
 }
 
@@ -241,6 +242,9 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
             commit: Some("abc".to_owned()),
         }),
         record_try: Some(2),
+        health_reason: None,
+        health_body: None,
+        restarts: None,
     };
     let want = json!({
         "name": "svc", "version": "3.1", "health": "absent",

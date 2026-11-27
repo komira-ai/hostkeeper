@@ -46,6 +46,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         facts: None,
         operator_keys: None,
         prerequisites: None,
+        health_written: Vec::new(),
     }
 }
 
