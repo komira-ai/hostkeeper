@@ -763,7 +763,8 @@ fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Du
 
 /// Whether `cap` hosts of the role of `id` hold a slot of `def`, the host `id` not counted. A plan
 /// that goes on past its failed hosts counts no host for its failure alone, only one that runs
-/// something or is ordered ([`crate::failed_hosts::continues`]).
+/// something or is ordered ([`crate::failed_hosts::continues`]). A host silent for
+/// [`crate::silent::SILENT_UPDATE_AFTER`] or more runs nothing that counts ([`crate::silent`]).
 fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
     let service = def.name.as_str();
     let continues = crate::failed_hosts::continues(def);
@@ -775,11 +776,9 @@ fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Durat
         .filter(|(o, _)| others(o))
         .filter(|(o, h)| {
             if fleet.is_held(service, o) {
-                h.beat.updating.is_some() || fleet.is_ordered(service, o, now)
+                h.is_updating(now) || fleet.is_ordered(service, o, now)
             } else if continues {
-                h.beat.updating.is_some()
-                    || h.beat.promotion_pending
-                    || fleet.is_ordered(service, o, now)
+                h.is_updating(now) || h.is_promoting(now) || fleet.is_ordered(service, o, now)
             } else {
                 fleet.holds_slot(service, o, h, now)
             }

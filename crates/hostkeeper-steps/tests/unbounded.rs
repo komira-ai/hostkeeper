@@ -1,5 +1,7 @@
-//! An unbounded `prepare` (`prepare = 0`): launched with no bound, never stopped by the dead-man,
-//! and resumed after a crash by stopping its unit first. Every other step keeps its bound.
+//! A `prepare` declared unbounded in its manifest (`prepare = 0`): launched under the updater's
+//! ceiling ([`PREPARE_CEILING_SECS`]), stopped there by the dead-man, and read as a deferral with the
+//! reason `prepare_ceiling`; resumed after a crash by stopping its unit first. Every other step
+//! keeps its bound, and a `prepare` with a bound of its own keeps that one.
 
 mod support;
 
@@ -7,15 +9,25 @@ use std::sync::Arc;
 
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_steps::record::{RECORD_FILE, State};
-use hostkeeper_steps::{Bound, Bounds, DeadMan, LaunchError, Loaded, RunError};
-use support::{Event, Rig, secs};
-
-/// A year, in seconds: far past any bound the rig declares.
-const YEAR: u64 = 365 * 24 * 3600;
+use hostkeeper_steps::{
+    Bound, Bounds, DeadMan, Finished, LaunchError, Loaded, PREPARE_CEILING_SECS,
+    REASON_PREPARE_CEILING, RunError, StepRunner,
+};
+use support::{Event, FAIL, Reply, Rig, secs};
 
 fn succeeded() -> Verdict {
     Verdict::Succeeded {
         promotion_pending: false,
+    }
+}
+
+/// The end of an update whose `prepare` reached the ceiling.
+fn at_ceiling() -> Finished {
+    Finished {
+        verdict: Verdict::Deferred {
+            retry_after_secs: None,
+        },
+        reason: Some(REASON_PREPARE_CEILING.to_owned()),
     }
 }
 
@@ -32,16 +44,46 @@ fn bounds_run(rig: &Rig) -> Vec<(Step, Bound)> {
 }
 
 /// The rig's order with `prepare = 0`.
-fn unbounded_order(rig: &Rig) -> hostkeeper_steps::UpdateOrder {
+fn ceiling_order(rig: &Rig) -> hostkeeper_steps::UpdateOrder {
     let mut order = rig.order();
     order.bounds.prepare_secs = 0;
     order
 }
 
-/// Catches the unbounded form reaching a step other than `prepare`, or a 0 for `prepare` read as
-/// "nothing left": 0 is unbounded for `prepare` alone, a step not started for every other step.
+/// A dead-man over `runner`'s watch, the rig's launcher and its clock.
+fn dead_man(rig: &Rig, runner: &StepRunner) -> Arc<DeadMan> {
+    Arc::new(DeadMan::new(
+        runner.watch(),
+        rig.fake.clone(),
+        rig.clock.clone(),
+    ))
+}
+
+/// Makes the rig's first `prepare` a hook that never returns: while it runs, the clock moves to
+/// one second before the ceiling, where the dead-man stops nothing, and then to the ceiling,
+/// where it stops the step's unit; the step then ends as a stopped unit does, with no code.
+fn never_returns(rig: &Rig, man: &Arc<DeadMan>) {
+    let (clock, seen) = (rig.clock.clone(), man.clone());
+    let first = std::sync::atomic::AtomicBool::new(true);
+    rig.fake.on_run(move |call| {
+        if call.invocation.step == Step::Prepare
+            && first.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            clock.advance(PREPARE_CEILING_SECS - 1);
+            assert!(!seen.tick().unwrap(), "one second before the ceiling");
+            clock.advance(1);
+            assert!(seen.tick().unwrap(), "at the ceiling");
+        }
+    });
+    rig.fake.say(Step::Prepare, &[Reply::Killed]);
+}
+
+/// Catches a ceiling other than the hour the PR states, the unbounded form left for `prepare`, or
+/// a 0 of another step read as the ceiling: 0 is the ceiling for `prepare` alone, a step not
+/// started for every other step, and a bound of its own is kept.
 #[test]
-fn only_prepare_can_be_unbounded() {
+fn only_a_prepare_of_zero_takes_the_ceiling() {
+    assert_eq!(PREPARE_CEILING_SECS, 3600);
     let zero = Bounds {
         prepare_secs: 0,
         cutover_secs: 0,
@@ -50,7 +92,7 @@ fn only_prepare_can_be_unbounded() {
         cleanup_secs: 0,
         ..Rig::bounds()
     };
-    assert_eq!(zero.bound(Step::Prepare), Some(Bound::Unbounded));
+    assert_eq!(zero.bound(Step::Prepare), Some(secs(PREPARE_CEILING_SECS)));
     for step in [Step::Cutover, Step::Verify, Step::Rollback, Step::Cleanup] {
         assert_eq!(zero.bound(step), None, "{step}");
     }
@@ -59,12 +101,13 @@ fn only_prepare_can_be_unbounded() {
     assert_eq!(bounds.bound(Step::Cleanup), Some(secs(1300)));
 }
 
-/// Catches a runner that refuses `prepare = 0` (it ended the step as a failure before): the
-/// update runs, `prepare` is run once and unbounded, recorded `running` with `unbounded` and its
-/// start second as the deadline, and every later step keeps its own bound.
+/// Catches a `prepare = 0` launched with no bound (`RuntimeMaxSec=infinity`, the dead-man not
+/// armed), or recorded as unbounded: it is run once under the ceiling, recorded `running` with
+/// `unbounded` false and its start plus the ceiling as the deadline, and every later step keeps
+/// its own bound.
 #[test]
-fn the_runner_accepts_zero_for_prepare_and_launches_it_unbounded() {
-    let rig = Rig::new("unb-accept");
+fn a_prepare_of_zero_is_launched_and_recorded_under_the_ceiling() {
+    let rig = Rig::new("ceil-launch");
     let record = rig.state.join(RECORD_FILE);
     rig.fake.on_run(move |call| {
         if call.invocation.step != Step::Prepare {
@@ -74,15 +117,20 @@ fn the_runner_accepts_zero_for_prepare_and_launches_it_unbounded() {
             serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
         let state = &rec["state"];
         assert_eq!(state["state"], "running");
-        assert_eq!(state["unbounded"], true);
-        assert_eq!(state["deadline_secs"], state["started"]["mono_secs"]);
+        assert_eq!(
+            state["unbounded"],
+            serde_json::Value::Null,
+            "false is not written"
+        );
+        let started = state["started"]["mono_secs"].as_u64().unwrap();
+        assert_eq!(state["deadline_secs"], started + PREPARE_CEILING_SECS);
     });
-    let got = rig.runner().run(&unbounded_order(&rig)).unwrap();
+    let got = rig.runner().run(&ceiling_order(&rig)).unwrap();
     assert_eq!(got.verdict, succeeded());
     assert_eq!(
         bounds_run(&rig),
         [
-            (Step::Prepare, Bound::Unbounded),
+            (Step::Prepare, secs(PREPARE_CEILING_SECS)),
             (Step::Cutover, secs(300)),
             (Step::Verify, secs(1000)),
             (Step::Cleanup, secs(1300)),
@@ -90,44 +138,69 @@ fn the_runner_accepts_zero_for_prepare_and_launches_it_unbounded() {
     );
 }
 
-/// Catches a dead-man armed for an unbounded step: with the clock moved on by a year, then by a
-/// year again, while `prepare` runs, no tick stops anything; `prepare` then exits `0` and the
-/// update goes on to its end.
+/// Catches a hook whose `prepare = 0` sleeps for ever holding the update for ever, and one stopped
+/// at the ceiling reported as a failure of the release: the dead-man stops it at the ceiling and
+/// not a second before, `rollback` runs to undo what it did, and the update ends `Deferred` with
+/// the reason `prepare_ceiling` and no wait of its own (the coordinator's back-off decides).
+/// Nothing after `rollback` runs.
 #[test]
-fn an_unbounded_prepare_is_never_stopped_by_the_dead_man() {
-    let rig = Rig::new("unb-deadman");
+fn a_prepare_that_never_returns_ends_deferred_at_the_ceiling() {
+    let rig = Rig::new("ceil-forever");
     let runner = rig.runner();
-    let man = Arc::new(DeadMan::new(
-        runner.watch(),
-        rig.fake.clone(),
-        rig.clock.clone(),
-    ));
-    let (clock, seen) = (rig.clock.clone(), man.clone());
-    rig.fake.on_run(move |call| {
-        if call.invocation.step == Step::Prepare {
-            for _ in 0..3 {
-                clock.advance(YEAR);
-                assert!(!seen.tick().unwrap());
-            }
-        }
-    });
-    let got = runner.run(&unbounded_order(&rig)).unwrap();
-    assert_eq!(got.verdict, succeeded());
-    assert_eq!(rig.fake.stops(), Vec::<String>::new());
-    assert_eq!(
-        rig.fake.steps(),
-        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
-    );
+    let man = dead_man(&rig, &runner);
+    never_returns(&rig, &man);
+    let got = runner.run(&ceiling_order(&rig)).unwrap();
+    assert_eq!(got, at_ceiling());
+    assert_eq!(rig.fake.stops(), ["updater-svc-prepare-1"]);
+    assert_eq!(rig.fake.steps(), [Step::Prepare, Step::Rollback]);
 }
 
-/// Catches a resume that reads the stored `deadline_secs` of an unbounded step as a deadline:
-/// the updater dies while an unbounded `prepare` runs, and a year later the next run stops the
-/// unit by name once, runs `prepare` again (its next attempt, under the same unit name, which
-/// `--collect` frees) still unbounded and unstopped by the dead-man, and the update succeeds.
+/// Catches the ceiling's reading leaking to a `prepare` that ended by itself, or to one with a
+/// bound of its own: a `prepare = 0` that fails (exit 1) before the ceiling is a failure; one that
+/// is killed before it (no code, a second early) is a failure too; a `prepare` of 600 s stopped at
+/// its own bound is a failure as before, not a deferral.
 #[test]
-fn a_crashed_unbounded_prepare_is_resumed_by_stopping_its_unit_first() {
-    let rig = Rig::new("unb-resume");
-    let order = unbounded_order(&rig);
+fn only_a_prepare_of_zero_stopped_at_the_ceiling_reads_as_deferred() {
+    let failure = Verdict::Failed {
+        phase: hostkeeper_hook::Phase::BeforeCommit,
+        class: hostkeeper_hook::Class::Release,
+    };
+    let rig = Rig::new("ceil-fails");
+    rig.fake.say(Step::Prepare, &[FAIL]);
+    let got = rig.runner().run(&ceiling_order(&rig)).unwrap();
+    assert_eq!((got.verdict, got.reason), (failure.clone(), None));
+
+    let rig = Rig::new("ceil-early-kill");
+    let clock = rig.clock.clone();
+    rig.fake.on_run(move |call| {
+        if call.invocation.step == Step::Prepare {
+            clock.advance(PREPARE_CEILING_SECS - 1);
+        }
+    });
+    rig.fake.say(Step::Prepare, &[Reply::Killed]);
+    let got = rig.runner().run(&ceiling_order(&rig)).unwrap();
+    assert_eq!((got.verdict, got.reason), (failure.clone(), None));
+
+    let rig = Rig::new("ceil-own-bound");
+    let clock = rig.clock.clone();
+    rig.fake.on_run(move |call| {
+        if call.invocation.step == Step::Prepare {
+            clock.advance(600);
+        }
+    });
+    rig.fake.say(Step::Prepare, &[Reply::Killed]);
+    let got = rig.runner().run(&rig.order()).unwrap();
+    assert_eq!((got.verdict, got.reason), (failure, None));
+}
+
+/// Catches a crash under the ceiling that loses it: the updater dies while a `prepare = 0` runs,
+/// and the next run stops the unit by name once, runs `prepare` again (its next attempt, under the
+/// same unit name, which `--collect` frees) under the ceiling again, and, when that one never
+/// returns either, ends deferred at the ceiling.
+#[test]
+fn a_crashed_prepare_is_resumed_under_the_ceiling() {
+    let rig = Rig::new("ceil-resume");
+    let order = ceiling_order(&rig);
     rig.fake
         .lose_run
         .store(1, std::sync::atomic::Ordering::SeqCst);
@@ -147,37 +220,28 @@ fn a_crashed_unbounded_prepare_is_resumed_by_stopping_its_unit_first() {
     else {
         panic!("the step is left running: {:?}", rec.state)
     };
-    assert!(*unbounded);
-    assert_eq!(*deadline_secs, started.mono_secs);
+    assert!(!*unbounded);
+    assert_eq!(*deadline_secs, started.mono_secs + PREPARE_CEILING_SECS);
     assert_eq!((rec.step, rec.attempt), (Step::Prepare, 1));
 
-    rig.clock.advance(YEAR);
     rig.fake.clear();
     let runner = rig.runner();
-    let man = Arc::new(DeadMan::new(
-        runner.watch(),
-        rig.fake.clone(),
-        rig.clock.clone(),
-    ));
-    let (clock, seen) = (rig.clock.clone(), man.clone());
-    rig.fake.on_run(move |call| {
-        if call.invocation.step == Step::Prepare {
-            clock.advance(YEAR);
-            assert!(!seen.tick().unwrap());
-        }
-    });
-    let got = runner.run(&order).unwrap();
-    assert_eq!(got.verdict, succeeded());
-    assert_eq!(rig.fake.stops(), ["updater-svc-prepare-1"]);
+    let man = dead_man(&rig, &runner);
+    never_returns(&rig, &man);
+    assert_eq!(runner.run(&order).unwrap(), at_ceiling());
     let events = rig.fake.events();
     assert_eq!(events[0], Event::Stop("updater-svc-prepare-1".to_owned()));
     assert!(
         matches!(
             &events[1],
-            Event::Run { step: Step::Prepare, unit, bound: Bound::Unbounded, .. }
-                if unit == "updater-svc-prepare-1"
+            Event::Run { step: Step::Prepare, unit, bound, .. }
+                if unit == "updater-svc-prepare-1" && *bound == secs(PREPARE_CEILING_SECS)
         ),
         "{:?}",
         events[1]
+    );
+    assert_eq!(
+        rig.fake.stops(),
+        ["updater-svc-prepare-1", "updater-svc-prepare-1"]
     );
 }

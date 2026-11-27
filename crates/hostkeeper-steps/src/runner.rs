@@ -77,7 +77,7 @@ pub const REASON_NO_PREVIOUS_RELEASE: &str = "no_previous_release";
 /// no other key of it).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Bounds {
-    /// `0` is no bound ([`Bound::Unbounded`]); `0` for any other step is a step not started.
+    /// `0` is the updater's ceiling ([`crate::PREPARE_CEILING_SECS`]); for any other step, not run.
     pub prepare_secs: u64,
     pub cutover_secs: u64,
     pub verify_secs: u64,
@@ -105,13 +105,13 @@ impl Bounds {
         }
     }
 
-    /// The bound of one step as it runs: [`Bound::Unbounded`] for a `prepare` of 0, the seconds
-    /// otherwise, and `None` for 0 of any other step (a step with nothing left of its bound is
-    /// not started).
+    /// The bound of one step as it runs: the ceiling for a `prepare` of 0 ([`crate::ceiling`]),
+    /// the seconds otherwise, and `None` for 0 of any other step (a step with nothing left of its
+    /// bound is not started). Never [`Bound::Unbounded`].
     pub fn bound(&self, step: Step) -> Option<Bound> {
         match (step, NonZeroU64::new(self.timeout(step))) {
             (_, Some(secs)) => Some(Bound::Secs(secs)),
-            (Step::Prepare, None) => Some(Bound::Unbounded),
+            (Step::Prepare, None) => Some(Bound::Secs(crate::ceiling::PREPARE_CEILING)),
             (_, None) => None,
         }
     }
@@ -166,7 +166,7 @@ pub struct UpdateOrder {
 pub struct Finished {
     pub verdict: Verdict,
     /// The hook's `reason` token, or the updater's own ([`REASON_ARTIFACT_CHANGED`],
-    /// [`REASON_UPDATER_OLD`]).
+    /// [`REASON_UPDATER_OLD`], [`crate::REASON_PREPARE_CEILING`]).
     pub reason: Option<String>,
 }
 
@@ -699,24 +699,21 @@ impl StepRunner {
         }
         let started = Stamp::now(&*self.clock);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
-        // and never as unbounded, which only a `prepare` whose manifest timeout is 0
-        // is. It ends as a failure.
-        let Some(bound) = self.bound(order, rec) else {
+        // and ends as a failure. No step is launched unbounded ([`Bounds::bound`]).
+        let Some(Bound::Secs(secs)) = self.bound(order, rec) else {
             return Ok(Some(Ran::Exit(StepExit {
                 code: None,
                 last_line: None,
             })));
         };
-        let (deadline_secs, unbounded) = match bound {
-            Bound::Secs(secs) => (started.mono_secs.saturating_add(secs.get()), false),
-            Bound::Unbounded => (started.mono_secs, true),
-        };
-        // Recorded `running` before the launch either way, so that a crash is resumed by
-        // stopping the unit by name.
+        let bound = Bound::Secs(secs);
+        let deadline_secs = started.mono_secs.saturating_add(secs.get());
+        // Recorded `running` before the launch, so that a crash is resumed by stopping the unit by
+        // name.
         rec.state = State::Running {
             started,
             deadline_secs,
-            unbounded,
+            unbounded: false,
         };
         self.write(rec)?;
         // A force flagged the update, or an abort asked to end it: the write closed it.
@@ -725,10 +722,7 @@ impl StepRunner {
         }
         let unit = rec.unit(rec.step);
         let artifact = (rec.step == Step::Prepare).then(|| order.staged.dir().to_path_buf());
-        // An unbounded step has no second to be stopped at: the dead-man is not armed for it.
-        if !unbounded {
-            self.watch.arm(&unit, deadline_secs);
-        }
+        self.watch.arm(&unit, deadline_secs);
         let result = match order.builtin_steps {
             true => Ok(match &self.builtin {
                 Some(builtin) => builtin(rec.step, order, bound),
@@ -761,8 +755,11 @@ impl StepRunner {
         if let Some(error) = stop_error {
             return Err(RunError::Unstopped { unit, error });
         }
+        let reached = self.clock.mono_secs() >= deadline_secs;
         match result {
-            Ok(exit) => Ok(Some(Ran::Exit(exit))),
+            Ok(exit) => Ok(Some(Ran::Exit(crate::ceiling::read(
+                order, rec.step, exit, reached,
+            )))),
             Err(LaunchError::NoStart(_)) => Ok(Some(Ran::NoStart)),
             Err(e) => Err(e.into()),
         }

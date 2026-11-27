@@ -5,7 +5,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use super::Kind;
 
 /// Every kind, in the order `Alerts.List` answers them.
-const ALL: [Kind; 20] = [
+const ALL: [Kind; 21] = [
     Kind::Halt,
     Kind::WaitingForOperator,
     Kind::Duplicate,
@@ -26,6 +26,7 @@ const ALL: [Kind; 20] = [
     Kind::MaintenanceHalted,
     Kind::MaintenanceNotBack,
     Kind::RepeatedDeferral,
+    Kind::SilentWhileUpdating,
 ];
 
 /// Where `kind` is in [`ALL`]. The match has no wildcard, so a kind added to [`Kind`] does not
@@ -52,6 +53,7 @@ const fn listed(kind: Kind) -> usize {
         Kind::MaintenanceHalted => 17,
         Kind::MaintenanceNotBack => 18,
         Kind::RepeatedDeferral => 19,
+        Kind::SilentWhileUpdating => 20,
     }
 }
 
@@ -153,14 +155,20 @@ fn every_kind_keeps_its_token_severity_and_wire_value() {
                 24,
                 "ALERT_KIND_REPEATED_DEFERRAL"
             ),
+            (
+                "silent_while_updating",
+                Critical,
+                33,
+                "ALERT_KIND_SILENT_WHILE_UPDATING"
+            ),
         ]
     );
 }
 
 /// Catches a kind missing from the list or listed twice, the list out of the order `Alerts.List`
 /// answers in (the order of [`Kind`]), and two kinds sharing a log token or a wire value: each
-/// kind is at its own place in the list, the list is strictly ascending, and the 20 tokens and
-/// the 20 wire values are distinct, none of them `ALERT_KIND_UNSPECIFIED`.
+/// kind is at its own place in the list, the list is strictly ascending, and the 21 tokens and
+/// the 21 wire values are distinct, none of them `ALERT_KIND_UNSPECIFIED`.
 #[test]
 fn the_list_holds_every_kind_once_in_answer_order_with_distinct_tokens_and_values() {
     for (place, kind) in ALL.into_iter().enumerate() {

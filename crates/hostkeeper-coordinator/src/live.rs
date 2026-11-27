@@ -5,7 +5,7 @@
 //! being a package name, and a group's `live_rollouts` can only lower it.
 //!
 //! Only a service that is moving takes a place: one of its hosts runs an update (updating, or its
-//! promotion pending), an order the coordinator sent it is outstanding, one of its plan's hosts
+//! promotion pending, and silent for less than [`crate::silent::SILENT_UPDATE_AFTER`]), an order the coordinator sent it is outstanding, one of its plan's hosts
 //! bakes the desired version after an update the coordinator saw, or its plan is under way and
 //! nothing stops it, and it has a host left that the decision can order now ([`crate::orderable`]:
 //! not one held by its own halt, by the order of installs, or by a move). A failed host does not
@@ -44,9 +44,10 @@ use crate::stages::current;
 /// What makes a service's rollout live: the first of these found, in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Why {
-    /// A host's last word is an update of the service running.
+    /// A host's last word is an update of the service running ([`Host::is_updating`]).
     Updating,
-    /// A host's last word is that it waits for the promotion of its update.
+    /// A host's last word is that it waits for the promotion of its update
+    /// ([`Host::is_promoting`]).
     PromotionPending,
     /// An order the coordinator sent a host is outstanding (it ages out after
     /// [`crate::fleet::ORDER_AGE`]).
@@ -89,7 +90,8 @@ pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Dur
 /// Why the rollout of `def` is live, for its desired state `want`, at `now`; none when it is not.
 /// In order, the first host by node id within each: a host whose last word is an update running
 /// or its promotion pending (a host taken off the service, or silent, mid-update included: the
-/// update may still run), a host with an order outstanding (one the fleet has no word of, or one
+/// update may still run; but not one silent for [`crate::silent::SILENT_UPDATE_AFTER`] or more,
+/// which holds nothing by that word), a host with an order outstanding (one the fleet has no word of, or one
 /// it has; an order ages out after [`crate::fleet::ORDER_AGE`]), a host of the plan that bakes
 /// `want`'s version after an update the coordinator saw ([`is_baking`]), and a plan under way
 /// ([`crate::stages::View::under_way`]) that is neither halted nor at a version marked bad, nor
@@ -105,10 +107,10 @@ pub(crate) fn why_live(
     let service = def.name.as_str();
     let counted = |id: &HostId| !fleet.is_forced_in(def, id);
     let occupants = || fleet.occupants_in(def).filter(|(id, _)| counted(id));
-    if let Some((id, _)) = occupants().find(|(_, h)| h.beat.updating.is_some()) {
+    if let Some((id, _)) = occupants().find(|(_, h)| h.is_updating(now)) {
         return Some(Live::of(Why::Updating, id));
     }
-    let pending = |id: &HostId, h: &Host| h.beat.promotion_pending && !fleet.is_held(service, id);
+    let pending = |id: &HostId, h: &Host| h.is_promoting(now) && !fleet.is_held(service, id);
     if let Some((id, _)) = occupants().find(|(id, h)| pending(id, h)) {
         return Some(Live::of(Why::PromotionPending, id));
     }
