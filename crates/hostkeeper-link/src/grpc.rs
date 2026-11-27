@@ -281,7 +281,6 @@ fn refusal(status: &tonic::Status) -> LinkError {
 #[cfg(test)]
 mod tests {
     use std::io;
-    use std::net::SocketAddr;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -289,6 +288,7 @@ mod tests {
     use tonic::{Code, Status};
 
     use super::{Dialing, Dropped, GrpcDial, GrpcMtlsLink, refusal};
+    use crate::dial::SocketAddr;
     use crate::names::Reason;
     use crate::ports::{LinkError, Log, ReplyFault};
     use crate::reach::{Lookup, Reach};

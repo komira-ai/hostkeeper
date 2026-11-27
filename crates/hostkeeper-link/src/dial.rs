@@ -16,7 +16,10 @@
 //! [`BackgroundLookup`] over [`SystemLookup`] that waits [`LOOKUP_SECS`].
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+// The address types, which the reach and its fakes name through this module: it is the one
+// source of the crate that names the standard library's network module.
+pub(crate) use std::net::{IpAddr, SocketAddr};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;

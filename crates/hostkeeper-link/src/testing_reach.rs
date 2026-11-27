@@ -1,9 +1,9 @@
 //! The lookup's fake ([`FakeLookup`]), beside the other fakes of [`crate::testing`].
 
 use std::io;
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 
+use crate::dial::{IpAddr, SocketAddr};
 use crate::reach::Lookup;
 
 /// The words of the error of a lookup the fake fails.

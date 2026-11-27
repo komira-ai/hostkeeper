@@ -27,11 +27,11 @@
 //! the coordinator could not be reached.
 
 use std::io;
-use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::daemon::DaemonConfig;
 
+use crate::dial::{IpAddr, SocketAddr};
 use crate::mtls::{Endpoint, EndpointError};
 use crate::ports::Log;
 
