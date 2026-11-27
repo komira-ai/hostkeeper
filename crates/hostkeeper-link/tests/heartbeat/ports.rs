@@ -141,7 +141,9 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "grpc.rs",
         "health.rs",
         "heartbeater.rs",
+        "heartbeater_features.rs",
         "host_facts.rs",
+        "host_health.rs",
         "host_ssh.rs",
         "lib.rs",
         "maintenance.rs",
@@ -167,6 +169,8 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "repositories.rs",
         "serial_console.rs",
         "testing.rs",
+        "testing_health.rs",
+        "testing_maintenance.rs",
         "testing_serial_console.rs",
         "wire_map.rs",
     ];
