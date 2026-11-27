@@ -10,6 +10,7 @@ mod support;
 use std::fs;
 use std::sync::Arc;
 
+use hostkeeper_daemon::hardware_sources::poll;
 use hostkeeper_daemon::health_state::{
     self, FOLDED_CODE, HEALTH_FILE, HEALTH_FILE_ASIDE, HealthFile, MAX_HELD, Marker, Queue, Read,
     Refused,
@@ -17,11 +18,15 @@ use hostkeeper_daemon::health_state::{
 use hostkeeper_daemon::host_health::{
     BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT, PreviousBoot,
 };
+use hostkeeper_daemon::kernel_log::KmsgRecord;
+use hostkeeper_daemon::kernel_sources::{
+    Journal, JournalError, KernelBoot, KernelLog, Kmsg, PreviousBoot,
+};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::HostHealthSource;
-use hostkeeper_link::testing::RecordingLog;
+use hostkeeper_link::testing::{FakeClock as LinkClock, RecordingLog};
 use hostkeeper_proto::health::{MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SUBJECT, check_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use support::Scratch;
@@ -815,4 +820,80 @@ fn the_capacity_is_sent_in_every_heartbeat() {
     assert_eq!(check_health(&health), Ok(()));
     keeper.set_capacity(None);
     assert_eq!(keeper.health().baseline, None);
+}
+
+/// Proves the keeper gives the boot id and the boot time it was opened with, and no boot id when
+/// the start could not read one.
+#[test]
+fn the_keeper_gives_the_boot_id_and_boot_time_it_started_with() {
+    let dir = Scratch::new("health-boot-facts");
+    let (keeper, _) = start(&dir, boot("boot-7"), yes());
+    assert_eq!(keeper.boot_id().as_deref(), Some("boot-7"));
+    assert_eq!(keeper.boot_unix(), 1_795_000_000);
+    drop(keeper);
+    let unread = BootFacts {
+        boot_id: None,
+        boot_unix: 1_795_000_123,
+        machine_id: "m-1".to_owned(),
+    };
+    let (second, _) = start(&dir, unread, yes());
+    assert_eq!(second.boot_id(), None);
+    assert_eq!(second.boot_unix(), 1_795_000_123);
+}
+
+/// A `/dev/kmsg` that hands out the same records at every read, as a restarted reader would.
+struct SameRecords(Vec<KmsgRecord>);
+
+impl Kmsg for SameRecords {
+    fn read(&mut self, _max: usize) -> std::io::Result<Vec<KmsgRecord>> {
+        Ok(self.0.clone())
+    }
+}
+
+/// A host that keeps no persistent journal.
+struct NoJournal;
+
+impl Journal for NoJournal {
+    fn previous_boot(&self) -> Result<PreviousBoot, JournalError> {
+        Ok(PreviousBoot::NoJournal)
+    }
+}
+
+/// With no boot id, the kernel's log names the boot by when it began, so a second read in the
+/// same boot passes over the records the first held and the coordinator wrote, instead of reading
+/// every poll as a new boot and holding them again.
+#[test]
+fn a_boot_with_no_id_is_followed_by_its_start_time() {
+    let dir = Scratch::new("kernel-no-boot-id");
+    let facts = BootFacts {
+        boot_id: None,
+        ..boot("unused")
+    };
+    let (keeper, _) = start(&dir, facts, yes());
+    let boot = KernelBoot::of(&keeper);
+    assert_eq!(boot.id, format!("{:016x}", 1_795_000_000_u64));
+    let mce = KmsgRecord {
+        seq: 0,
+        usec: 9_000_000,
+        text: "mce: [Hardware Error]: CPU 1: Machine Check Exception: 5 Bank 4: be00000000800400"
+            .to_owned(),
+    };
+    let mut log = KernelLog::new(Box::new(SameRecords(vec![mce])), Box::new(NoJournal), boot);
+    let clock = LinkClock::new(NOW, 0);
+    poll(&mut log, &keeper, &clock);
+    let first = keeper.health();
+    let codes: Vec<&str> = first.events.iter().map(|e| e.code.as_str()).collect();
+    assert_eq!(codes, ["cpu_machine_check"]);
+    keeper.written(&ids(&first));
+    clock.advance(60);
+    poll(&mut log, &keeper, &clock);
+    assert_eq!(
+        ids(&keeper.health()),
+        Vec::<String>::new(),
+        "the second read of the same boot holds nothing again"
+    );
+    let mark: serde_json::Value =
+        serde_json::from_str(&keeper.mark("journal").expect("a mark")).expect("a JSON mark");
+    assert_eq!(mark["boot"], format!("{:016x}", 1_795_000_000_u64));
+    assert_eq!(mark["next_seq"], 1);
 }

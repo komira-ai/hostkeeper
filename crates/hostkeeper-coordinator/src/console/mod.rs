@@ -105,6 +105,8 @@ mod route_tests;
 #[cfg(test)]
 mod sessions_tests;
 #[cfg(test)]
+mod stop_tests;
+#[cfg(test)]
 pub(crate) mod stream_tests;
 #[cfg(test)]
 pub(crate) mod support;
