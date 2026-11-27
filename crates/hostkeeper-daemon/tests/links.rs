@@ -104,6 +104,7 @@ fn links_with(
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

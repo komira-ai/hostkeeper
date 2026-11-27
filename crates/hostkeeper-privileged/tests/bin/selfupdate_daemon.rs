@@ -462,6 +462,7 @@ fn file_links(
         stop,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

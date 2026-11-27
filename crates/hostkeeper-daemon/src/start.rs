@@ -56,6 +56,7 @@ use crate::mac_files::MacFilesError;
 use crate::maintenance_run::Driven;
 use crate::notify::{NoNotifier, ReadyNotifier};
 use crate::own_package::{self, OwnActivate};
+use crate::terminate::Terminated;
 
 /// The lock file in the state directory.
 pub const LOCK_FILE: &str = "lock";
@@ -470,9 +471,25 @@ fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNoti
 /// readiness notice was sent by [`startup_notifying`], so neither loop starts before the boot
 /// work is over (design section 6.5).
 pub async fn serve(started: Started, links: Links) {
+    serve_until(started, links, Box::pin(std::future::pending())).await;
+}
+
+/// [`serve`], which also returns at `terminated` (the daemon's SIGTERM,
+/// [`crate::terminate::sigterm`]): then, before the loops are told to stop, the clean-shutdown
+/// marker is judged ([`crate::host_health::HealthKeeper::stopping`], when the links hold a
+/// keeper), and the binary exits with status 0 as at its own update.
+pub async fn serve_until(started: Started, links: Links, terminated: Terminated) {
     let stop = links.stop.clone();
+    let health = links.health.clone();
     links.start(&started.daemon);
     // `started._lock` stays held until this returns.
-    started.daemon.ctx().restart().wait().await;
+    tokio::select! {
+        () = started.daemon.ctx().restart().wait() => {}
+        () = terminated => {
+            if let Some(health) = &health {
+                health.stopping();
+            }
+        }
+    }
     stop.stop();
 }

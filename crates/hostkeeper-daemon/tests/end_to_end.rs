@@ -255,6 +255,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

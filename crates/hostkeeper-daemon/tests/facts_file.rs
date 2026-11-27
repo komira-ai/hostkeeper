@@ -83,6 +83,7 @@ fn host_probing(
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     };
     (links.heartbeater(&daemon), link, dispatch)
 }
