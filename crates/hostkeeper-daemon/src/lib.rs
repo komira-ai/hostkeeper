@@ -52,6 +52,9 @@
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
 //!   device every ten minutes.
+//! - [`kernel_sources`]: the kernel's evidence of hardware faults on a Linux host, its log
+//!   ([`kernel_log`]) and its files ([`kernel_files`]), read every minute into the hardware records
+//!   its heartbeats report ([`host_health`]).
 //! - [`serial_baseline`]: the serial console baseline (the GRUB file, the getty's drop-in and the
 //!   getty) a Linux host whose config names a `serial_console` keeps, looked at every ten minutes
 //!   and reported in its heartbeats as `applied`, `reboot_pending`, `failed` or `unsupported`.
@@ -185,6 +188,9 @@ pub mod installed;
 pub mod installers;
 pub mod ipmi;
 pub mod keep_awake;
+pub mod kernel_files;
+pub mod kernel_log;
+pub mod kernel_sources;
 #[cfg(test)]
 mod key_fixture_tests;
 mod launchd_plist;
