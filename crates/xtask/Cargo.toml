@@ -138,8 +138,8 @@ name = "xtask-apt-fixture"
 path = "tests/bin/apt_fixture.rs"
 required-features = ["test-support"]
 
-# The `buck2` the farm-build tests (tests/farm_build_cli.rs) hand `farm-build`: it answers from
-# files beside it and records its calls. A program of the tests, not shipped.
+# The `buck2` the farm-check tests (tests/farm_build_cli.rs) hand `farm-workers` and `farm-table`:
+# it answers from files beside it and records its calls. A program of the tests, not shipped.
 [[bin]]
 name = "xtask-buck2-fixture"
 path = "tests/bin/buck2_fixture.rs"

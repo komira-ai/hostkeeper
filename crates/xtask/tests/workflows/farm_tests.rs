@@ -1,13 +1,18 @@
 //! The rules of `farm.yml` ([`super::farm`]), the farm lane: the one job that holds
-//! `id-token: write` on a pull request, and only under its exact `if:`; farm-connect pinned by
-//! commit in that file alone, with exactly the variables it is given; the triggers, the runner,
-//! the rights, the build through `cargo xtask farm-build` after farm-connect, and the upload of a
-//! stale table's patch after a failed build. Each rule is shown to refuse its defect
-//! by putting it into the committed workflow and reading the exact problems the lint reports.
+//! `id-token: write` on a pull request, and only under its exact `if:`; farm-connect and
+//! buck2-farm pinned by commit in that file alone, one komira commit for both and for the tool's
+//! sources; farm-connect with exactly the variables it is given; the triggers, the runner, the
+//! rights; every buck2 build on the farm through buck2-farm, and no other buck2 command but the
+//! three that build nothing on it; the checks and builds in their order after farm-connect; the
+//! tool built from komira's sources before the builds; the daemon's stop after the build; and the
+//! upload of a stale table's patch after a failure. Each rule is shown to refuse its defect by
+//! putting it into the committed workflow and reading the exact problems the lint reports.
 
 use super::farm::{
-    BUILD_RUN, CONNECT_INPUTS, FARM_CONNECT, FILE, JOB_IF, ON_PROBLEM, PATCH_ARTIFACT, RUNNER,
-    UPLOAD_IF, patch_file, upload_inputs,
+    BUCK2_FARM, CI_ARGS, COMPILE_RUN, CONNECT_INPUTS, FARM_CONNECT, FILE, JOB_IF, KILL_IF,
+    ON_PROBLEM, ORDER_PROBLEM, PATCH_ARTIFACT, PINS_PROBLEM, RUNNER, TABLE_RUN, TOOL_ARGS,
+    UPLOAD_IF, WORKERS_RUN, farm_steps_problem, kill_problem, names_buck2, outside_problem,
+    patch_file, tool_problem, upload_inputs,
 };
 use super::lint::lint;
 use super::{with_in, workflows};
@@ -93,14 +98,18 @@ fn the_token_in_another_job_of_the_file_is_refused() {
 fn the_same_job_in_another_pull_request_workflow_is_refused() {
     // Catches: the exception keyed on the job's name alone, so that a job `build` of ci.yml (or
     // any other workflow that runs for a pull request) could hold the token and pin farm-connect
-    // with no version comment.
+    // or buck2-farm with no version comment.
     let found = lint("ci.yml", &committed());
     let connect = line_of(FARM_CONNECT);
+    let farm = line_of(BUCK2_FARM);
     for want in [
         "job build: `id-token: write` is not allowed in ci.yml".to_owned(),
         "job build: privileged on pull_request (`id-token: write`)".to_owned(),
         format!(
-            "line {connect}: `uses: {FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609` has no version comment (`# v1.2.3`) on its line"
+            "line {connect}: `uses: {FARM_CONNECT}@b2080fe989248adf9b47d4bd14c0ecefa0802f79` has no version comment (`# v1.2.3`) on its line"
+        ),
+        format!(
+            "line {farm}: `uses: {BUCK2_FARM}@b2080fe989248adf9b47d4bd14c0ecefa0802f79` has no version comment (`# v1.2.3`) on its line"
         ),
     ] {
         assert!(found.contains(&want), "{want} is not in {found:#?}");
@@ -141,10 +150,14 @@ fn no_other_write_scope_is_allowed_in_the_job() {
 #[test]
 fn only_farm_connect_goes_without_a_version_comment_and_only_pinned() {
     // Catches: the exception to the version comment widened to every action of farm.yml, or to
-    // farm-connect at a branch instead of a commit.
+    // farm-connect at a branch instead of a commit (which is then also not the commit of
+    // buck2-farm and of the tool's sources).
     let checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
     assert_eq!(
-        problems_with(&format!("{checkout} # v7.0.1"), checkout),
+        problems_with(
+            &format!("- uses: {checkout} # v7.0.1"),
+            &format!("- uses: {checkout}")
+        ),
         [format!(
             "line {}: `uses: {checkout}` has no version comment (`# v1.2.3`) on its line",
             line_of(checkout)
@@ -153,13 +166,16 @@ fn only_farm_connect_goes_without_a_version_comment_and_only_pinned() {
     let unpinned = format!("{FARM_CONNECT}@main");
     assert_eq!(
         problems_with(
-            &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
+            &format!("{FARM_CONNECT}@b2080fe989248adf9b47d4bd14c0ecefa0802f79"),
             &unpinned
         ),
-        [format!(
-            "line {}: `uses: {unpinned}` is not pinned to a 40-digit lowercase commit SHA",
-            line_of(FARM_CONNECT)
-        )]
+        [
+            format!(
+                "line {}: `uses: {unpinned}` is not pinned to a 40-digit lowercase commit SHA",
+                line_of(FARM_CONNECT)
+            ),
+            PINS_PROBLEM.to_owned(),
+        ]
     );
 }
 
@@ -188,20 +204,20 @@ fn exactly_one_step_uses_farm_connect() {
     // rule above would then not see.
     assert_eq!(
         problems_with(
-            &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
+            &format!("{FARM_CONNECT}@b2080fe989248adf9b47d4bd14c0ecefa0802f79"),
             "example/join@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # v1.0.0"
         ),
         [
             format!("job build: exactly one step must use {FARM_CONNECT}"),
-            BUILD_ORDER.to_owned(),
+            ORDER_PROBLEM.to_owned(),
         ]
     );
     // A name that only starts with farm-connect's is another action: it needs a version comment,
     // and the step is no farm-connect step.
-    let lookalike = format!("{FARM_CONNECT}-fork@a26616d62db17ee8aff67ee9c12d411c2fad7609");
+    let lookalike = format!("{FARM_CONNECT}-fork@b2080fe989248adf9b47d4bd14c0ecefa0802f79");
     assert_eq!(
         problems_with(
-            &format!("{FARM_CONNECT}@a26616d62db17ee8aff67ee9c12d411c2fad7609"),
+            &format!("{FARM_CONNECT}@b2080fe989248adf9b47d4bd14c0ecefa0802f79"),
             &lookalike
         ),
         [
@@ -210,36 +226,276 @@ fn exactly_one_step_uses_farm_connect() {
                 line_of(FARM_CONNECT)
             ),
             format!("job build: exactly one step must use {FARM_CONNECT}"),
-            BUILD_ORDER.to_owned(),
+            ORDER_PROBLEM.to_owned(),
         ]
     );
 }
 
-/// The problem of a build step that is missing from after farm-connect's.
-const BUILD_ORDER: &str = "job build: the build does not come after the farm-connect step";
+/// The step of the committed file that builds `//:ci`.
+const CI_STEP: &str = "      - name: buck2 build //:ci on the farm, local 0
+        timeout-minutes: 150
+        uses: komira-ai/komira/.github/actions/buck2-farm@b2080fe989248adf9b47d4bd14c0ecefa0802f79
+        with:
+          buck2: ${{ runner.temp }}/bin/buck2
+          assert-remote: ${{ runner.temp }}/bin/assert_remote
+          args: build //:ci
+";
+
+/// The step of the committed file that checks the worker property set.
+const WORKERS_STEP: &str = "      - name: buck2 has the farm's workers
+        timeout-minutes: 10
+        run: cargo xtask farm-workers --buck2 \"$RUNNER_TEMP/bin/buck2\"
+";
+
+/// The step of the committed file that builds the tool.
+const COMPILE_STEP: &str = "      - name: Build assert_remote, the buck2-farm action's tool
+        timeout-minutes: 15
+";
+
+/// The step of the committed file that stops buck2's daemon.
+const KILL_STEP: &str = "      - name: Stop buck2's daemon
+        if: ${{ always() && steps.buck2-check.outcome == 'success' }}
+        timeout-minutes: 5
+        run: '\"$RUNNER_TEMP/bin/buck2\" kill'
+";
+
+/// The committed file with the step text `step` taken out and put back before the line
+/// `before`.
+fn moved(step: &str, before: &str) -> String {
+    with_in(&committed(), step, "").replacen(before, &format!("{step}{before}"), 1)
+}
 
 #[test]
-fn the_job_runs_farm_build_of_ci_after_farm_connect() {
-    // Catches: a build of something other than `//:ci`, a build not run through `farm-build`
-    // (whose checks refuse no workers and `local` above 0), or one run before the farm is
-    // connected, which would build on the runner.
-    assert_eq!(
-        problems_with(BUILD_RUN, &BUILD_RUN.replace("//:ci", "//...")),
-        [format!("job build: no step runs `{BUILD_RUN}`")]
-    );
-    assert_eq!(
-        problems_with(BUILD_RUN, "buck2 build //:ci"),
-        [format!("job build: no step runs `{BUILD_RUN}`")]
-    );
+fn the_committed_steps_are_the_ones_the_rules_name() {
+    // Catches: tests below that change a step the rules do not read, because the committed text
+    // and the rules' constants drifted apart.
     let text = committed();
-    let step =
-        format!("      - name: buck2 build //:ci on the farm, local 0\n        run: {BUILD_RUN}\n");
-    let early = with_in(&text, &step, "").replacen(
-        "      - name: Connect to the farm\n",
-        &format!("{step}      - name: Connect to the farm\n"),
-        1,
+    for (step, want) in [
+        (CI_STEP, CI_ARGS),
+        (WORKERS_STEP, WORKERS_RUN),
+        (KILL_STEP, KILL_IF),
+    ] {
+        assert!(text.contains(step), "{step}");
+        assert!(step.contains(want), "{want}");
+    }
+    assert!(text.contains(&format!("{COMPILE_STEP}        run: '{COMPILE_RUN}'\n")));
+    assert!(text.contains(&format!("          args: {TOOL_ARGS}\n")));
+    assert!(text.contains(&format!("        run: {TABLE_RUN}\n")));
+}
+
+#[test]
+fn the_builds_go_through_buck2_farm_with_exactly_their_inputs() {
+    // Catches: a build of something other than `//:ci` or the buildrules command line through the
+    // action, one without the pinned buck2 or the built tool (the action would run `./buck2`,
+    // which this repository has not, or no assert_remote), and a third buck2-farm step the rules
+    // would not read.
+    let farm = farm_steps_problem();
+    let twice = CI_STEP.repeat(2);
+    for (from, to) in [
+        (
+            "          args: build //:ci\n",
+            "          args: build //...\n",
+        ),
+        (
+            "--out ${{ runner.temp }}/buildrules-cli\n",
+            "--out ${{ runner.temp }}/elsewhere\n",
+        ),
+        (
+            "          assert-remote: ${{ runner.temp }}/bin/assert_remote\n          args: build //:ci\n",
+            "          args: build //:ci\n",
+        ),
+        (CI_STEP, twice.as_str()),
+    ] {
+        assert_eq!(problems_with(from, to), [farm.as_str()], "{to:?}");
+    }
+}
+
+#[test]
+fn a_buck2_command_outside_the_action_is_refused() {
+    // Catches: the farm build run by buck2 itself in a `run:`, where no watchdog ends a run hung
+    // on a dead connection, whether it replaces the action's step or sits beside it, after other
+    // words of its command, or as the buck2 a verb is handed; and a check whose `run:` changed,
+    // which the rules no longer know to build nothing on the farm.
+    let plain = "\"$RUNNER_TEMP/bin/buck2\" build //:ci";
+    let replaced = format!(
+        "      - name: buck2 build //:ci on the farm, local 0\n        timeout-minutes: 150\n        run: '{plain}'\n"
     );
-    assert_eq!(lint(FILE, &early), [BUILD_ORDER]);
+    assert_eq!(
+        problems_with(CI_STEP, &replaced),
+        [farm_steps_problem(), outside_problem(plain)]
+    );
+    for run in [
+        "env BUCK_CONSOLE=simple buck2 build //:ci",
+        "cd \"$GITHUB_WORKSPACE\" && buck2 build //:ci",
+        "true; \"$RUNNER_TEMP/bin/buck2\" test //:ci",
+    ] {
+        let beside = format!("{CI_STEP}      - timeout-minutes: 150\n        run: '{run}'\n");
+        assert_eq!(
+            problems_with(CI_STEP, &beside),
+            [outside_problem(run)],
+            "{run}"
+        );
+    }
+    let table = TABLE_RUN.replace("--repo \"$GITHUB_REPOSITORY\"", "--repo someone/else");
+    assert_eq!(
+        problems_with(TABLE_RUN, &table),
+        [ORDER_PROBLEM.to_owned(), outside_problem(&table)]
+    );
+}
+
+#[test]
+fn buck2_is_named_by_its_word_or_path_but_not_as_where_it_is_installed() {
+    // Catches: a reading of a script that misses buck2 behind a path or a variable, or calls the
+    // pinned buck2's install a buck2 command and so refuses the job's own install step.
+    for run in [
+        "buck2 build //:ci",
+        "\"$RUNNER_TEMP/bin/buck2\" kill",
+        "cargo xtask farm-table --buck2 \"$RUNNER_TEMP/bin/buck2\"",
+        "cd x && ./buck2 build //:ci",
+        "env A=1 /usr/local/bin/buck2 bxl //:x",
+    ] {
+        assert!(names_buck2(run), "{run}");
+    }
+    for run in [
+        "cargo xtask install-tool --download \"$RUNNER_TEMP/buck2.zst\" --sha256 \"$BUCK2_SHA256\" --out \"$RUNNER_TEMP/bin/buck2\" --extract zst",
+        "echo \"::error::buck2.zst is not in the actions cache\"",
+        "curl --output \"$RUNNER_TEMP/buck2.zst\" https://example.com/buck2-x86_64.zst",
+        "cargo xtask --help",
+    ] {
+        assert!(!names_buck2(run), "{run}");
+    }
+}
+
+#[test]
+fn the_checks_and_builds_run_in_their_order_after_farm_connect() {
+    // Catches: the worker check after a build (which then builds with no farm workers), or gone;
+    // the table check before the build of its command line, or after the build of `//:ci`; and a
+    // build before farm-connect, which would build on the runner.
+    let order = [ORDER_PROBLEM];
+    assert_eq!(
+        lint(
+            FILE,
+            &moved(
+                WORKERS_STEP,
+                "      - name: The generated build table is fresh\n"
+            )
+        ),
+        order
+    );
+    assert_eq!(problems_with(WORKERS_STEP, ""), order);
+    let table_step = format!(
+        "      - name: The generated build table is fresh\n        timeout-minutes: 30\n        run: {TABLE_RUN}\n"
+    );
+    assert_eq!(
+        lint(
+            FILE,
+            &moved(
+                &table_step,
+                "      - name: Build the buildrules command line on the farm, local 0\n"
+            )
+        ),
+        order
+    );
+    assert_eq!(
+        lint(
+            FILE,
+            &moved(&table_step, "      - name: Stop buck2's daemon\n")
+        ),
+        order
+    );
+    assert_eq!(
+        lint(FILE, &moved(CI_STEP, "      - name: Connect to the farm\n")),
+        order
+    );
+}
+
+/// What release_ref says of a checkout of another repository, in the job that calls xtask, that
+/// is not the tool's checkout: the committed file's 15th step.
+const CHECKOUT_BESIDE_XTASK: &str = "farm.yml: job build step 15 checks out another repository or into a path, in a job that calls xtask";
+
+#[test]
+fn the_tool_is_built_from_komiras_sources_at_the_actions_commit() {
+    // Catches: the tool's sources from another commit than the action's (the action's command
+    // line and its tool's can differ), or farm-connect at another commit than buck2-farm; a
+    // checkout of more or other files, or one that keeps its credentials; and a tool not built,
+    // built otherwise than komira builds it, or built after the first build that runs it.
+    let other = "0123456789abcdef0123456789abcdef01234567";
+    let pins = [PINS_PROBLEM];
+    assert_eq!(
+        problems_with(
+            "          ref: b2080fe989248adf9b47d4bd14c0ecefa0802f79\n",
+            &format!("          ref: {other}\n")
+        ),
+        pins
+    );
+    assert_eq!(
+        problems_with(
+            &format!("{FARM_CONNECT}@b2080fe989248adf9b47d4bd14c0ecefa0802f79"),
+            &format!("{FARM_CONNECT}@{other}")
+        ),
+        pins
+    );
+    let tool = tool_problem();
+    for (from, to) in [
+        (
+            "          sparse-checkout: /tools/build/ci/assert_remote/*.zig\n",
+            "          sparse-checkout: /tools\n",
+        ),
+        (
+            "          filter: blob:none\n          persist-credentials: false\n",
+            "          filter: blob:none\n          persist-credentials: true\n",
+        ),
+        (
+            "          path: buck-out/komira\n",
+            "          path: komira\n",
+        ),
+    ] {
+        // A checkout of another shape is no longer the one release_ref lets stand in a job that
+        // calls xtask, so that rule refuses it too.
+        assert_eq!(
+            problems_with(from, to),
+            [tool.as_str(), CHECKOUT_BESIDE_XTASK],
+            "{to:?}"
+        );
+    }
+    assert_eq!(
+        problems_with(" -OReleaseSafe ", " -ODebug "),
+        [tool.as_str()]
+    );
+    let compile = format!("{COMPILE_STEP}        run: '{COMPILE_RUN}'\n");
+    assert_eq!(problems_with(&compile, ""), [tool.as_str()]);
+    assert_eq!(
+        lint(
+            FILE,
+            &moved(&compile, "      - name: Stop buck2's daemon\n")
+        ),
+        [tool.as_str()]
+    );
+}
+
+#[test]
+fn the_daemon_is_stopped_after_the_build_however_the_job_went() {
+    // Catches: buck2's daemon left running when a step failed or the job was cancelled, its stop
+    // gone, or run before the build it is to stop.
+    let kill = [kill_problem()];
+    assert_eq!(
+        problems_with(
+            &format!("        if: {KILL_IF}\n"),
+            "        if: ${{ success() }}\n"
+        ),
+        kill
+    );
+    assert_eq!(problems_with(KILL_STEP, ""), kill);
+    assert_eq!(
+        lint(
+            FILE,
+            &moved(
+                KILL_STEP,
+                "      - name: buck2 build //:ci on the farm, local 0\n"
+            )
+        ),
+        kill
+    );
 }
 
 #[test]
@@ -290,7 +546,7 @@ fn a_second_job_is_refused() {
     assert_eq!(
         problems_with(
             "jobs:\n",
-            "jobs:\n  other:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: echo other\n"
+            "jobs:\n  other:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    permissions:\n      contents: read\n    steps:\n      - run: echo other\n        timeout-minutes: 1\n"
         ),
         ["job other is not a job of farm.yml"]
     );
@@ -299,6 +555,7 @@ fn a_second_job_is_refused() {
 /// The upload step of the committed file.
 const UPLOAD_STEP: &str = "      - name: Upload the regenerated build table as a patch
         if: ${{ failure() }}
+        timeout-minutes: 10
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: buildrules-sync
@@ -309,9 +566,12 @@ const UPLOAD_STEP: &str = "      - name: Upload the regenerated build table as a
 
 #[test]
 fn the_build_writes_the_patch_the_upload_takes() {
-    // Catches: the build step writing the patch to one file and the upload taking another, so a
-    // stale table's summary names an artifact that holds nothing.
-    assert!(BUILD_RUN.contains(&format!("--patch \"{}\"", patch_file(true))));
+    // Catches: the table check writing the patch to one file and the upload taking another, so a
+    // stale table's summary names an artifact that holds nothing; and the check reading another
+    // command line than the one the build before it wrote.
+    assert!(TABLE_RUN.contains(&format!("--patch \"{}\"", patch_file(true))));
+    assert!(TOOL_ARGS.ends_with(" --out ${{ runner.temp }}/buildrules-cli"));
+    assert!(TABLE_RUN.contains(" --buildrules \"$RUNNER_TEMP/buildrules-cli\" "));
     assert_eq!(
         upload_inputs().get("path").map(String::as_str),
         Some(patch_file(false).as_str())

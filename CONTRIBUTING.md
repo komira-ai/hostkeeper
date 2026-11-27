@@ -101,8 +101,11 @@ this repository. It is advisory, never required: `ci.yml` stays the gate. Its jo
 `id-token: write` so that komira's farm-connect action can join the farm's private network with
 the job's OIDC token, under the exact `if:` the workflow lint gives it (a fork's pull request and
 Dependabot's are skipped; a fork's gets no OIDC token), and the lint holds that action's inputs to the organisation's variables
-of their names. What it builds, what it leaves to `ci.yml` and why, and how to run it yourself:
-[docs/farm.md](docs/farm.md).
+of their names. Its builds run through komira's buck2-farm action: a build whose connection to
+the farm has heard nothing for 5 minutes is ended and run again once the farm answers, as is one
+cut by a lost connection, at most three runs, each told in one line of the log and of the job
+summary. What it builds, what it leaves to `ci.yml` and why, what a run again looks like, and how
+to run it yourself: [docs/farm.md](docs/farm.md).
 
 ## The merge queue
 

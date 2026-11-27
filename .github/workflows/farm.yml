@@ -12,17 +12,31 @@
 # The farm is reached through komira's farm-connect action, pinned by commit (komira tags no
 # release of it). It joins the farm's private network with this job's OIDC token
 # (workload identity federation: the farm trusts a token GitHub issues to this repository, and
-# nothing is stored), refuses to go on unless the farm answers, and writes the farm's buckconfig
-# under ~/.buckconfig.d. Its inputs are the organisation's variables TS_CLIENT_ID and TS_AUDIENCE
-# (the tailnet identity), FARM_ADDRESS, FARM_INSTANCE, FARM_LINUX_X86_64_PROPERTIES and FARM_TLS;
-# this repository holds no endpoint and no worker property set. That is why the one job holds
-# `id-token: write` on a pull request, which the workflow lint allows to this job alone, under its
-# exact `if:` (crates/xtask/tests/workflows/farm.rs): a push to main, or a pull request from a
-# branch of this repository that is not Dependabot's. A fork's pull request gets no OIDC token, and
-# is skipped.
+# nothing is stored), waits (at most 20 minutes, its default) for the farm to answer and refuses
+# to go on unless it does, and writes the farm's buckconfig under ~/.buckconfig.d. Its inputs are
+# the organisation's variables TS_CLIENT_ID and TS_AUDIENCE (the tailnet identity), FARM_ADDRESS,
+# FARM_INSTANCE, FARM_LINUX_X86_64_PROPERTIES and FARM_TLS; this repository holds no endpoint and
+# no worker property set. That is why the one job holds `id-token: write` on a pull request, which
+# the workflow lint allows to this job alone, under its exact `if:`
+# (crates/xtask/tests/workflows/farm.rs): a push to main, or a pull request from a branch of this
+# repository that is not Dependabot's. A fork's pull request gets no OIDC token, and is skipped.
 #
-# buck2 is the release buildrules is tested with (its tools/buck2), restored from the actions
-# cache or downloaded, and installed by `cargo xtask install-tool` only once its SHA-256 matches.
+# Every buck2 command that builds on the farm is a step of komira's buck2-farm action, pinned to
+# the same commit as farm-connect: it runs buck2 with its output in this log, and while it runs, a
+# watchdog reads this runner's TCP connections to the farm from the kernel. A run whose connection
+# has heard nothing from the farm for 5 minutes (a live farm sends something at least every 30 s)
+# is ended, buck2's daemon with it, and run again once the farm answers, as is a run that failed
+# only on a cut connection; at most three runs, each told in one line of this log and of the job
+# summary. The action then fails the step unless buck2 succeeded and its summary says
+# `local: 0`. Its tool, assert_remote, is built here from komira's sources at that same commit
+# (tools/build/ci/assert_remote, Zig's standard library only) with the Zig release komira pins.
+#
+# buck2 is the release buildrules is tested with (its tools/buck2), and Zig the release komira
+# builds the tool with; each is restored from the actions cache or downloaded, and checked by
+# `cargo xtask install-tool` against its SHA-256 before it is used.
+#
+# Every step has its own `timeout-minutes`, under the job's, sized from the longest successful run
+# of that step (docs/farm.md, "Time limits"); the workflow lint holds that (step_bounds.rs).
 name: farm
 
 on:
@@ -41,7 +55,7 @@ jobs:
   build:
     if: ${{ github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       contents: read
       # For farm-connect's tailnet join alone: the OIDC token the farm's network trusts.
@@ -49,13 +63,20 @@ jobs:
     env:
       BUCK2_VERSION: 2026-09-15
       BUCK2_SHA256: 1268fce33fb61273091dd5dd8c60b65de1521a3caa36b88983813e882b7ffd89
+      # komira's pin of Zig for its build tools (`zig_next`, platforms/table.bzl at the commit of
+      # the two komira actions below).
+      ZIG_VERSION: 0.15.2
+      ZIG_SHA256: 02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           persist-credentials: false
       - run: rustup toolchain install
+        timeout-minutes: 10
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cargo-cache
+        timeout-minutes: 10
         with:
           path: |
             ~/.cargo/registry
@@ -65,6 +86,7 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-farm-
       - name: Restore the pinned buck2.zst from the cache
         id: buck2-cache
+        timeout-minutes: 10
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/buck2.zst
@@ -72,21 +94,74 @@ jobs:
       - name: Download buck2 on a cache miss (HTTPS only, redirects included)
         id: buck2-download
         if: ${{ steps.buck2-cache.outputs.cache-hit != 'true' }}
+        timeout-minutes: 15
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/buck2.zst" "https://github.com/facebook/buck2/releases/download/$BUCK2_VERSION/buck2-x86_64-unknown-linux-gnu.zst"
       - name: Say why the job stops when buck2.zst is neither cached nor downloadable
         if: ${{ !cancelled() && steps.buck2-download.outcome == 'failure' }}
+        timeout-minutes: 5
         run: echo "::error::buck2.zst is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install buck2 (pinned checksum)
         id: buck2-check
+        timeout-minutes: 15
         run: cargo xtask install-tool --download "$RUNNER_TEMP/buck2.zst" --sha256 "$BUCK2_SHA256" --out "$RUNNER_TEMP/bin/buck2" --extract zst
       - name: Save the checked buck2.zst to the cache
         if: ${{ !cancelled() && steps.buck2-check.outcome == 'success' && steps.buck2-cache.outputs.cache-hit != 'true' }}
+        timeout-minutes: 10
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/buck2.zst
           key: ${{ steps.buck2-cache.outputs.cache-primary-key }}
+      - name: Restore the pinned zig.tar.xz from the cache
+        id: zig-cache
+        timeout-minutes: 10
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/zig.tar.xz
+          key: pinned-zig-${{ env.ZIG_VERSION }}-${{ env.ZIG_SHA256 }}
+      - name: Download Zig on a cache miss (HTTPS only, redirects included)
+        id: zig-download
+        if: ${{ steps.zig-cache.outputs.cache-hit != 'true' }}
+        timeout-minutes: 15
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
+      - name: Say why the job stops when zig.tar.xz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.zig-download.outcome == 'failure' }}
+        timeout-minutes: 5
+        run: echo "::error::zig.tar.xz is not in the actions cache and its download from ziglang.org failed, so this job cannot go on until ziglang.org serves it again"
+      - name: Check Zig (pinned checksum)
+        id: zig-check
+        timeout-minutes: 10
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/zig.tar.xz" --sha256 "$ZIG_SHA256" --out "$RUNNER_TEMP/zig-checked/zig.tar.xz"
+      - name: Save the checked zig.tar.xz to the cache
+        if: ${{ !cancelled() && steps.zig-check.outcome == 'success' && steps.zig-cache.outputs.cache-hit != 'true' }}
+        timeout-minutes: 10
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/zig.tar.xz
+          key: ${{ steps.zig-cache.outputs.cache-primary-key }}
+      - name: Unpack the checked Zig
+        timeout-minutes: 10
+        run: tar --extract --xz --file "$RUNNER_TEMP/zig-checked/zig.tar.xz" --directory "$RUNNER_TEMP/zig-checked"
+      # assert_remote's sources at the commit of the two komira actions (the workflow lint holds
+      # the three to one commit), the .zig files of its directory alone, into buck-out/, which git
+      # and buck2 both pass over.
+      - name: Check out komira's assert_remote at the actions' commit
+        timeout-minutes: 10
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: komira-ai/komira
+          ref: b2080fe989248adf9b47d4bd14c0ecefa0802f79
+          path: buck-out/komira
+          sparse-checkout: /tools/build/ci/assert_remote/*.zig
+          sparse-checkout-cone-mode: false
+          filter: blob:none
+          persist-credentials: false
+      # As komira's zig_exe builds it: ReleaseSafe, a static musl executable, stripped.
+      - name: Build assert_remote, the buck2-farm action's tool
+        timeout-minutes: 15
+        run: '"$RUNNER_TEMP/zig-checked/zig-x86_64-linux-$ZIG_VERSION/zig" build-exe -OReleaseSafe -target x86_64-linux-musl -fstrip --cache-dir "$RUNNER_TEMP/zig-local-cache" --global-cache-dir "$RUNNER_TEMP/zig-global-cache" -femit-bin="$RUNNER_TEMP/bin/assert_remote" buck-out/komira/tools/build/ci/assert_remote/assert_remote.zig'
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        timeout-minutes: 10
         with:
           path: |
             ~/.cargo/registry
@@ -94,7 +169,8 @@ jobs:
             target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
       - name: Connect to the farm
-        uses: komira-ai/komira/.github/actions/farm-connect@a26616d62db17ee8aff67ee9c12d411c2fad7609
+        timeout-minutes: 30
+        uses: komira-ai/komira/.github/actions/farm-connect@b2080fe989248adf9b47d4bd14c0ecefa0802f79
         with:
           ts-client-id: ${{ vars.TS_CLIENT_ID }}
           ts-audience: ${{ vars.TS_AUDIENCE }}
@@ -102,22 +178,42 @@ jobs:
           farm-instance: ${{ vars.FARM_INSTANCE }}
           farm-properties: ${{ vars.FARM_LINUX_X86_64_PROPERTIES }}
           tls: ${{ vars.FARM_TLS || 'false' }}
-      # One command (crates/xtask/src/farm.rs): it refuses to build unless .buckconfig handed
-      # farm-connect's worker property set to buildrules; builds the pinned `buildrules` command
-      # line on the farm and runs `buildrules check`, and when the generated build table is stale
-      # runs `buildrules sync`, writes what it changed as a patch, puts the stale inputs, the
-      # changed files and the command that applies the patch in this job's summary, and fails
-      # without building (crates/xtask/src/farm/table.rs); builds //:ci with buck2's progress in
-      # this log, and when every failure of that build is a cut connection to the farm
-      # (crates/xtask/src/farm/cuts.rs) runs it once more and says so here and in the job summary
-      # (a second cut fails the job); fails unless the summary line says `local: 0` (every action
-      # ran on the farm or came from its cache); and stops buck2's daemon however the build ended.
+      # `buck2 audit config` of the worker property set that .buckconfig hands to buildrules
+      # (crates/xtask/src/farm.rs): it reads buck2's configuration and builds nothing.
+      - name: buck2 has the farm's workers
+        timeout-minutes: 10
+        run: cargo xtask farm-workers --buck2 "$RUNNER_TEMP/bin/buck2"
+      - name: Build the buildrules command line on the farm, local 0
+        timeout-minutes: 30
+        uses: komira-ai/komira/.github/actions/buck2-farm@b2080fe989248adf9b47d4bd14c0ecefa0802f79
+        with:
+          buck2: ${{ runner.temp }}/bin/buck2
+          assert-remote: ${{ runner.temp }}/bin/assert_remote
+          args: build buildrules//cli:buildrules --out ${{ runner.temp }}/buildrules-cli
+      # `buildrules check` with that command line (crates/xtask/src/farm/table.rs); when the
+      # generated build table is stale it runs `buildrules sync`, writes what it changed as a
+      # patch, puts the stale inputs, the changed files and the command that applies the patch in
+      # this job's summary, and fails without building.
+      - name: The generated build table is fresh
+        timeout-minutes: 30
+        run: cargo xtask farm-table --buck2 "$RUNNER_TEMP/bin/buck2" --buildrules "$RUNNER_TEMP/buildrules-cli" --patch "$RUNNER_TEMP/buildrules-sync/buildrules-sync.patch" --summary "$GITHUB_STEP_SUMMARY" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
       - name: buck2 build //:ci on the farm, local 0
-        run: cargo xtask farm-build --buck2 "$RUNNER_TEMP/bin/buck2" --target //:ci --patch "$RUNNER_TEMP/buildrules-sync/buildrules-sync.patch" --summary "$GITHUB_STEP_SUMMARY" --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID"
+        timeout-minutes: 150
+        uses: komira-ai/komira/.github/actions/buck2-farm@b2080fe989248adf9b47d4bd14c0ecefa0802f79
+        with:
+          buck2: ${{ runner.temp }}/bin/buck2
+          assert-remote: ${{ runner.temp }}/bin/assert_remote
+          args: build //:ci
+      # The daemon outlives the steps that started it: stop it however the job went.
+      - name: Stop buck2's daemon
+        if: ${{ always() && steps.buck2-check.outcome == 'success' }}
+        timeout-minutes: 5
+        run: '"$RUNNER_TEMP/bin/buck2" kill'
       # A stale table's fix, for the contributor to read and `git apply` (docs/farm.md). The file
-      # exists only when the build step wrote it; any other failure uploads nothing.
+      # exists only when the table check wrote it; any other failure uploads nothing.
       - name: Upload the regenerated build table as a patch
         if: ${{ failure() }}
+        timeout-minutes: 10
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: buildrules-sync

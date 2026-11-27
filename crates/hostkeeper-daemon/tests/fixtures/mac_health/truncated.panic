@@ -1,0 +1,2 @@
+{"bug_type":"210","timestamp":"2026-11-26 01:02:03.00 +0000","incident_id":"99999999-8888-7777-6666-555555555555"}
+{ "incident" : "99999999-8888-7777-6666-555555555555", "panicString" : "panic(cpu 5 caller 0xfffffe0078901234): \"SError interrupt, ESR 0xbe000000\" @AppleARMPlatform.cpp:1234\nDebugger message: panic\nMemory ID: 0x

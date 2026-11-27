@@ -226,11 +226,11 @@ needs a person at the Mac and gives its result on the screen only; no daemon can
 
 | Source | What is read | Normalized to | Severity | Poll |
 |---|---|---|---|---|
-| **Panic reports** | `/Library/Logs/DiagnosticReports/*.panic` and the `.ips` reports whose header `bug_type` is `210` (other `.ips` reports are app crashes; `Retired/` not read), each once by its `incident_id` | `board`, `panic_hardware` for SError or AMCC wording; `panic_software` for an SoC or userspace watchdog, a kext or other software (a runaway build can trip a watchdog) | hardware C; software W | at start, then every 5 minutes; on a first install only the last 7 days |
-| **Unexpected-shutdown records** | a new `kern.bootsessionuuid` with no clean-shutdown marker (section 4.4), with the previous shutdown cause of the unified log as `raw` | `host`, `unexpected_reboot`, merged with a panic of the same boot | W | at start |
+| **Panic reports** | `/Library/Logs/DiagnosticReports/*.panic` and the `.ips` reports whose header `bug_type` is `210` (other `.ips` reports are app crashes; `Retired/` not read), each once by its `incident_id` | `board`, `panic_hardware` for SError or AMCC wording; `panic_software` for an SoC or userspace watchdog, a kext or other software (a runaway build can trip a watchdog) | hardware C; software W | at start, 2 minutes later, then every 5 minutes; on a first install those older than 7 days are `info` history (4.5) (Built: the parser and classifier `crates/hostkeeper-daemon/src/mac_panic.rs`, the reader `mac_health.rs`) |
+| **Unexpected-shutdown records** | a new `kern.bootsessionuuid` with no clean-shutdown marker (section 4.4); `raw` the panic line of that boot's panic report, or the boot's id when it has none (the unified log is not read, below) | `host`, `unexpected_reboot`, merged with a panic of the same boot (its class in the message) | W | once a boot, judged 2 minutes after the daemon's start so macOS has written the panic report (Built: `mac_health.rs`) |
 | **`diskutil` SMART status** | `diskutil info -plist disk0`: `SMARTStatus` | `disk`, `disk_failing` asserted at `Failing`, deasserted at `Verified`; `Not Supported` is `unsupported` | C | every 15 minutes |
 | **Thermal pressure** | `pmset -g therm` (no root); `powermetrics --samplers thermal -n 1` only once `pmset` shows a limit, at most every 5 minutes [V: `-n 1`] | `thermal`, asserted after 5 samples at heavy, deasserted after 10 minutes nominal | heavy W; trapping C | 60 s |
-| **`system_profiler` inventory changes** | `system_profiler -json SPHardwareDataType SPMemoryDataType SPStorageDataType`, `sysctl hw.memsize hw.physicalcpu hw.logicalcpu hw.perflevel0.physicalcpu` | the capacity of the boot; the coordinator records a change as `capacity_short` (`baseline`). On a Mac it compares `hw.memsize`, the CPU and GPU core counts and the disk's size, with no DIMM list (Apple silicon has none): a capacity compare, not a memory error watch. A Mac short of its baseline is cordoned for repair as a Linux host is (section 6) | W | at start and 2 minutes later |
+| **`system_profiler` inventory changes** | `system_profiler -json SPHardwareDataType SPNVMeDataType` (the installed memory and processors, and each internal disk by its BSD name, size and serial, which `SPStorageDataType`'s volumes do not give), `sysctl -n hw.memsize hw.physicalcpu hw.logicalcpu`; the source state `system_profiler` (Built: `crates/hostkeeper-daemon/src/mac_capacity.rs`, read by `mac_health.rs`; the GPU cores and `hw.perflevel0` have no `Baseline` field yet and are not read) | the capacity of the boot; the coordinator records a change as `capacity_short` (`baseline`). On a Mac it compares `hw.memsize`, the CPU and GPU core counts and the disk's size, with no DIMM list (Apple silicon has none): a capacity compare, not a memory error watch. A Mac short of its baseline is cordoned for repair as a Linux host is (section 6) | W | at start, 2 minutes later, then daily |
 
 Not used on a Mac: `log show` (slow and heavy on a build host; `SMARTStatus` and the panic classes cover the serious cases), IOKit wear
 data, `smartctl`, MDM and Apple Business. Each parser is written from a capture on a real Mac first [V].
@@ -385,7 +385,11 @@ names, the journal's cursor), the clean-shutdown marker and the events still hel
 writes `clean` with the boot id only if the system is really going down (Linux: `systemctl is-system-running` answers `stopping`, or
 a reboot, poweroff or halt job is queued); a SIGTERM of a daemon restart or of hostkeeper's own self-update must not count, or a later
 crash would read as a clean reboot. On a Mac launchd also sends SIGTERM at a bootout and no shutdown probe is known [V], so the marker
-is advisory there and `unexpected_reboot` needs a panic report, an abnormal previous-shutdown cause or a heartbeat gap to agree. A new
+is advisory there and `unexpected_reboot` needs a panic report, an abnormal previous-shutdown cause or a heartbeat gap to agree. A
+Mac's daemon holds that evidence as its own record (source `shutdown`, 3.2, Built: `crates/hostkeeper-daemon/src/mac_health.rs`
+over `HealthKeeper::unclean_previous_boot`): one per boot id, for a boot whose first start found the file last written in another
+boot with no `clean`; the file keeps that boot before (`previous_boot_id`, `previous_boot_unix`), so a restart of the daemon before
+the judgement still makes it; a first start on a host, or a file moved aside, has no boot before to judge. A new
 boot id with no `clean` is one `unexpected_reboot` record per boot id, merged with the SEL's "power cycle", "OS critical stop" and
 "memory device disabled" entries and the pstore check. A reboot of an unattended update or of an operator raises nothing.
 
@@ -423,7 +427,7 @@ that changes the host, the cordon, is a maintenance run, which runs each service
   the 4 KiB of `HostHealth`, the beat carries fewer records).
 - **Cost.** A few dozen small reads a minute; the SEL is read in full only when its count or add time changes. Programs: `smartctl`
   hourly; on a Mac `launchctl print` and `pmset` every 60 s, `diskutil` every 15 minutes, `powermetrics` at most every 5 minutes and
-  only under a thermal limit, `system_profiler` at start and 2 minutes later.
+  only under a thermal limit, `system_profiler` at start, 2 minutes later, then daily.
 - **History is not news.** The first run on a host with an old SEL, old rasdaemon rows or old panic reports writes those older than 7
   days as `info` records marked history, which raise nothing (Built: `HealthKeeper::record` of
   `crates/hostkeeper-daemon/src/host_health.rs`, for the first read of each source on a host, the message starting `history: `). A cleared SEL (record ids start again, the count falls) resets the marks.

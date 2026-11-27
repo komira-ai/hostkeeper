@@ -1,26 +1,14 @@
-//! The `buck2` the farm-build tests (tests/farm_build_cli.rs) hand `cargo xtask farm-build` with
-//! `--buck2`, and the `buildrules` command line that buck2 names. A program of the tests, not
-//! shipped; it builds nothing and reaches no network. Which of the two it is depends on its file
-//! name: a copy named `buildrules` is the command line, any other is buck2.
+//! The `buck2` the farm-check tests (tests/farm_build_cli.rs) hand `cargo xtask farm-workers` and
+//! `cargo xtask farm-table` with `--buck2`, and the `buildrules` command line `farm-table` is
+//! handed with `--buildrules`. A program of the tests, not shipped; it builds nothing and reaches
+//! no network. Which of the two it is depends on its file name: a copy named `buildrules` is the
+//! command line, any other is buck2.
 //!
 //! As buck2 it appends its arguments, joined by spaces, as one line to `calls` beside its own
-//! file, then answers from files there:
-//!
-//! - `audit ...` prints `audit.stdout` (`{}`, buck2's answer for a key that is not set, when there
-//!   is none) and `audit.stderr` (on standard error), and exits with the number in `audit.status`
-//!   (0 when there is none);
-//! - `build buildrules//cli:buildrules ...` answers the same way from `tool.*`; its standard output
-//!   is, when there is no `tool.stdout`, the line `buildrules//cli:buildrules <dir>/buildrules`,
-//!   naming the copy named `buildrules` beside it;
-//! - any other `build ...`, the n-th of them (from 1), answers from `build.<n>.stdout`,
-//!   `build.<n>.stderr` and `build.<n>.status` when there is such a file, else from `build.*`, so
-//!   a test can say what each run of the build printed;
-//! - `kill` exits 0.
-//!
-//! A `.status` file that says `abort` makes the call end by a signal (SIGABRT) instead of with a
-//! status, after it printed its answer.
-//!
-//! Anything else exits 2.
+//! file, then answers from files there: `audit ...` prints `audit.stdout` (`{}`, buck2's answer
+//! for a key that is not set, when there is none) and `audit.stderr` (on standard error), and
+//! exits with the number in `audit.status` (0 when there is none). Anything else exits 2: neither
+//! check builds.
 //!
 //! As `buildrules` it appends its arguments as one line to `buildrules.calls` beside its own file,
 //! and works on a table of its own in its working directory: `buildrules.lock.bzl`, one line
@@ -40,9 +28,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use sha2::Digest as _;
-
-/// The target of the `buildrules` command line.
-const TOOL: &str = "buildrules//cli:buildrules";
 
 /// This program's own file.
 fn me() -> PathBuf {
@@ -73,10 +58,6 @@ fn answer(dir: &Path, step: &str, stdout_default: &str) -> ExitCode {
     print!("{}", read("stdout", stdout_default));
     eprint!("{}", read("stderr", ""));
     let status = read("status", "0");
-    if status.trim() == "abort" {
-        // Ended by a signal (SIGABRT), not with a status of its own.
-        std::process::abort();
-    }
     ExitCode::from(status.trim().parse::<u8>().expect("a status of 0 to 255"))
 }
 
@@ -85,24 +66,6 @@ fn buck2(dir: &Path, args: &[String]) -> ExitCode {
     record(dir, "calls", &args.join(" "));
     match args.first().map(String::as_str) {
         Some("audit") => answer(dir, "audit", "{}"),
-        Some("build") if args.iter().any(|a| a == TOOL) => {
-            let tool = format!("{TOOL} {}\n", dir.join("buildrules").display());
-            answer(dir, "tool", &tool)
-        }
-        Some("build") => {
-            // This call is the n-th build of a target that is not the tool.
-            let n = file(dir, "calls")
-                .unwrap_or_default()
-                .lines()
-                .filter(|l| l.starts_with("build ") && !l.contains(TOOL))
-                .count();
-            let step = format!("build.{n}");
-            let any = ["stdout", "stderr", "status"]
-                .iter()
-                .any(|s| dir.join(format!("{step}.{s}")).exists());
-            answer(dir, if any { &step } else { "build" }, "")
-        }
-        Some("kill") => ExitCode::SUCCESS,
         _ => ExitCode::from(2),
     }
 }

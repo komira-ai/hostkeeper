@@ -8,6 +8,7 @@ cargo_package(
     path = ".",
     extra_srcs = [
         "tests/fixtures/kernel",
+        "tests/fixtures/mac_health",
         "tests/fixtures/maintenance",
         "tests/fixtures/rasdaemon",
         "tests/fixtures/sdr",
