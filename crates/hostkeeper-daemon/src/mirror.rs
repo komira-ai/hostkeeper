@@ -44,6 +44,7 @@ use hostkeeper_release::registry;
 use hostkeeper_steps::Clock;
 use sha2::{Digest, Sha256};
 
+use crate::coordinator_address::{host_lookup, host_reach};
 use crate::repository_push::{remove_path, swap};
 
 /// The most bytes of an `InRelease`.
@@ -92,19 +93,23 @@ impl Fetch for CoordinatorGet {
 
 /// The coordinator as the host's mirror reads it: [`CoordinatorGet`] over TCP, each connection
 /// bounded by its call's deadline, with the certificate of the pki directory `pki` (its own reading
-/// of it, which logs nothing: the heartbeat's source says what is wrong with the pair). None
-/// when the config's coordinator address is not one that can be dialed; the heartbeat refuses
-/// the same address and says so.
+/// of it, which logs nothing: the heartbeat's source says what is wrong with the pair), dialed
+/// where a reach of its own says ([`host_reach`]: the addresses the name looks up to, the one
+/// last reached, first the one the state directory `state_dir` keeps, and the config's
+/// `coordinator_ip`; it logs nothing either, the heartbeat's reach says how the coordinator is
+/// reached). None when the config's coordinator address is not one that can be dialed; the
+/// heartbeat refuses the same address and says so.
 pub fn over_coordinator(
     config: &DaemonConfig,
     pki: &Path,
+    state_dir: &Path,
     clock: Arc<dyn Clock>,
 ) -> Option<Arc<dyn Fetch>> {
+    let reach = host_reach(config, Some(state_dir), host_lookup(), Arc::new(Quiet)).ok()?;
     let certs = Arc::new(PkiCertSource::new(pki, Arc::new(Quiet)));
     let transport = Arc::new(TcpTransport::new(Arc::clone(&clock)));
-    CoordinatorGet::new(config, pki, certs, transport, clock)
-        .ok()
-        .map(|get| Arc::new(get) as Arc<dyn Fetch>)
+    let get = CoordinatorGet::new(config, pki, certs, Arc::new(reach), transport, clock);
+    Some(Arc::new(get))
 }
 
 /// A log that keeps nothing.

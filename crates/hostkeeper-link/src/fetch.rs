@@ -4,7 +4,7 @@
 //! `coordinator` store.
 //!
 //! - **Who it talks to, who it is.** As [`crate::JsonMtlsLink`]: the coordinator of the daemon
-//!   config, trusted by the certificate of the pki directory's CA bundle that the config pins,
+//!   config, dialed at the addresses of its [`Reach`] until one completes the handshake, trusted by the certificate of the pki directory's CA bundle that the config pins,
 //!   read again at every call; the client certificate is the [`CertSource`]'s, read again at
 //!   every call. A host that is not enrolled makes no call.
 //! - **What it sends.** `GET <path> HTTP/1.1` with `Connection: close`, one request per
@@ -23,8 +23,9 @@
 //!   a 404 is [`Got::NotFound`]. With a `first` of 0 the call is [`CoordinatorGet::get`], and
 //!   a 206 is a [`GetError::Status`].
 //! - **How long it may take.** [`Limit::deadline_secs`] on the injected clock, from the start of
-//!   the call, checked before every read; the connection is made with the same bound
-//!   ([`Transport::connect_within`]), so a read or write that blocks ends at it too.
+//!   the call, checked before every read; each connection is made with the time left of it
+//!   ([`Transport::connect_within`]), so a read or write that blocks ends at it too, and the
+//!   addresses tried before the one that answered share the same bound.
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -32,11 +33,11 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::{DaemonConfig, Sha256Hex};
 use hostkeeper_steps::Clock;
-use rustls::{ClientConnection, StreamOwned};
 
-use crate::mtls::{Endpoint, EndpointError, HEAD_MAX, Transport, client_config, failed};
+use crate::mtls::{HEAD_MAX, Transport, client_config, failed, handshaken};
 use crate::pki::{CA, CURRENT};
 use crate::ports::{CertSource, CertState, LinkError, ReplyFault};
+use crate::reach::Reach;
 
 /// The size of one read of a body: the chunk the sink is given, at most.
 const CHUNK_BYTES: usize = 64 * 1024;
@@ -90,7 +91,7 @@ pub enum GetError {
 
 /// The client of the coordinator's `GET` paths.
 pub struct CoordinatorGet {
-    endpoint: Endpoint,
+    reach: Arc<Reach>,
     pin: Sha256Hex,
     ca_bundle: PathBuf,
     certs: Arc<dyn CertSource>,
@@ -99,27 +100,25 @@ pub struct CoordinatorGet {
 }
 
 impl CoordinatorGet {
-    /// The client of the coordinator of `config`, trusting the CA of the pki directory `pki`
-    /// that `config` pins, presenting the certificate of `certs`, reaching the coordinator
-    /// through `transport` and keeping time by `clock`.
-    ///
-    /// # Errors
-    /// [`EndpointError`]: the config's coordinator address is not one the client dials.
+    /// The client of the coordinator `reach` names, trusting the CA of the pki directory `pki`
+    /// that `config` pins, presenting the certificate of `certs`, dialing through `transport`
+    /// and keeping time by `clock`.
     pub fn new(
         config: &DaemonConfig,
         pki: &std::path::Path,
         certs: Arc<dyn CertSource>,
+        reach: Arc<Reach>,
         transport: Arc<dyn Transport>,
         clock: Arc<dyn Clock>,
-    ) -> Result<CoordinatorGet, EndpointError> {
-        Ok(CoordinatorGet {
-            endpoint: Endpoint::of(&config.coordinator)?,
+    ) -> CoordinatorGet {
+        CoordinatorGet {
+            reach,
             pin: config.ca_sha256.clone(),
             ca_bundle: pki.join(CURRENT).join(CA),
             certs,
             transport,
             clock,
-        })
+        }
     }
 
     /// Reads `path` from the coordinator, giving the body to `sink` in chunks.
@@ -162,19 +161,11 @@ impl CoordinatorGet {
         let deadline = self.clock.mono_secs().saturating_add(limit.deadline_secs);
         let config = client_config(&self.ca_bundle, &self.pin, &identity, b"http/1.1")
             .map_err(GetError::Link)?;
-        let connection = ClientConnection::new(config, self.endpoint.name.clone())
-            .map_err(|_| GetError::Link(LinkError::Transport(io::ErrorKind::Other)))?;
-        let sock = self
-            .transport
-            .connect_within(&self.endpoint.host, self.endpoint.port, limit.deadline_secs)
-            .map_err(|e| GetError::Link(LinkError::Transport(e.kind())))?;
-        let mut tls = StreamOwned::new(connection, sock);
-        // The handshake first: what answered must be the coordinator before anything is said.
-        while tls.conn.is_handshaking() {
-            tls.conn
-                .complete_io(&mut tls.sock)
-                .map_err(|e| GetError::Link(failed(&e)))?;
-        }
+        let mut tls = handshaken(&self.reach, &config, &|host, port| {
+            let left = deadline.saturating_sub(self.clock.mono_secs());
+            self.transport.connect_within(host, port, left)
+        })
+        .map_err(GetError::Link)?;
         let range = if first == 0 {
             String::new()
         } else {
@@ -182,7 +173,7 @@ impl CoordinatorGet {
         };
         let request = format!(
             "GET {path} HTTP/1.1\r\nHost: {}\r\nAccept: */*\r\n{range}Connection: close\r\n\r\n",
-            self.endpoint.authority
+            self.reach.endpoint().authority
         );
         tls.write_all(request.as_bytes())
             .and_then(|()| tls.flush())

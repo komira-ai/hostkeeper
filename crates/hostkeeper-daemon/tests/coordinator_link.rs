@@ -8,6 +8,7 @@
 mod support;
 mod support_apt;
 
+use std::fs;
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::Path;
@@ -22,12 +23,13 @@ use hostkeeper_coordinator::listen::{Listener, MAX_CONNECTIONS, serve};
 use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_daemon::Daemon;
 use hostkeeper_daemon::cli::host_links;
+use hostkeeper_daemon::coordinator_address::ADDRESS_FILE;
 use hostkeeper_daemon::links::{HostLink, coordinator_link};
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, ClientIdentity, CoordinatorLink, Dispatch, Feature, Heartbeat, Job,
-    LinkError, Platform, Renewal, TrustFault,
+    LinkError, Platform, Reach, Renewal, SystemLookup, TrustFault,
 };
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_testkit::Scratch;
@@ -427,9 +429,12 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
     );
 
     let log = Arc::new(RecordingLog::default());
+    let config = listening.config(&ca);
+    let reach = Reach::new(&config, Arc::new(SystemLookup), log.clone()).expect("a reach");
     let negotiated = coordinator_link(
-        &listening.config(&ca),
+        &config,
         &files.pki,
+        &Arc::new(reach),
         rig.clock.clone(),
         log.clone(),
     )
@@ -531,6 +536,58 @@ fn a_host_not_enrolled_makes_no_link_and_dials_nothing() {
     );
 }
 
+/// Catches a daemon that forgets where it reached its coordinator, so that a restart while the
+/// coordinator's name cannot be looked up leaves it silent: the shipped link writes the address
+/// its heartbeat reached to the state directory's file, once, and says nothing; a state directory
+/// the file cannot be written to leaves the heartbeats sent and is said once for that address.
+#[test]
+fn the_host_link_keeps_the_address_it_reached_in_the_state_directory() {
+    let ca = Ca::new("hostkeeper test ca");
+    let listening = Listening::new("kept-address-coordinator", &ca);
+    let rig = Rig::new("kept-address-daemon");
+    let files = files_under(rig.scratch.path());
+    enroll(&files.pki, &ca.host(), &ca);
+    let log = Arc::new(RecordingLog::default());
+    let link = |state_dir: &Path| {
+        HostLink::new(
+            listening.config(&ca),
+            files.pki.clone(),
+            state_dir.to_owned(),
+            Arc::new(SystemLookup),
+            rig.clock.clone(),
+            log.clone(),
+        )
+    };
+    let identity = identity_of(&ca.host());
+    let port = listening.addr.port();
+
+    let state_dir = rig.scratch.path().join("kept");
+    fs::create_dir(&state_dir).expect("a state directory");
+    let kept = link(&state_dir);
+    for _ in 0..2 {
+        assert!(kept.heartbeat(&identity, &bare_beat()).is_ok());
+    }
+    assert_eq!(
+        fs::read_to_string(state_dir.join(ADDRESS_FILE)).expect("the file"),
+        format!(r#"{{"name":"127.0.0.1","address":"127.0.0.1:{port}"}}"#)
+    );
+    assert_eq!(log.lines(), Vec::<String>::new());
+
+    let missing = rig.scratch.path().join("missing");
+    let unkept = link(&missing);
+    for _ in 0..2 {
+        assert!(unkept.heartbeat(&identity, &bare_beat()).is_ok());
+    }
+    assert_eq!(
+        log.lines(),
+        [format!(
+            "error: the coordinator's address 127.0.0.1:{port} is not kept in {}: No such file \
+             or directory (os error 2)",
+            missing.join(ADDRESS_FILE).display()
+        )]
+    );
+}
+
 /// Catches a link that cannot be made taken down with the daemon, or logged at every
 /// heartbeat: a config whose coordinator address has a path, which the links do not dial,
 /// leaves each heartbeat unsent as a transport error, and why is logged once.
@@ -542,6 +599,8 @@ fn a_link_that_cannot_be_made_leaves_the_heartbeat_unsent_and_says_why_once() {
     let link = HostLink::new(
         config("https://coordinator.example/heartbeat", &ca.sha256_hex()),
         rig.scratch.path().join("pki"),
+        rig.scratch.path().to_owned(),
+        Arc::new(SystemLookup),
         rig.clock.clone(),
         log.clone(),
     );

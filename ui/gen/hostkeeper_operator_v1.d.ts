@@ -81,7 +81,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_SERVICE_UNHEALTHY"
     | "ALERT_KIND_SERVICE_CRASH_LOOP"
     | "ALERT_KIND_HOST_NOT_MONITORED"
-    | "ALERT_KIND_BMC_MISSING";
+    | "ALERT_KIND_BMC_MISSING"
+    | "ALERT_KIND_SILENT_WHILE_UPDATING";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; owner?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";

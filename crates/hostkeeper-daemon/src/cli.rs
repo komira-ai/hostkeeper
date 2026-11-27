@@ -519,6 +519,8 @@ pub fn host_links(
     let link = HostLink::new(
         ctx.config.clone(),
         files.pki.clone(),
+        ctx.dirs.state.clone(),
+        crate::coordinator_address::host_lookup(),
         Arc::clone(&ctx.clock),
         log.clone(),
     );
@@ -857,7 +859,8 @@ pub fn host_ports(
         });
     }
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
-    let coordinator = crate::mirror::over_coordinator(config, &files.pki, Arc::clone(&clock));
+    let coordinator =
+        crate::mirror::over_coordinator(config, &files.pki, &settings.state_dir, clock.clone());
     if files.repositories.is_some()
         && let Some(fetch) = &coordinator
     {

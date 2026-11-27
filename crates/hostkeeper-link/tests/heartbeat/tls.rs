@@ -6,14 +6,15 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_link::testing::RecordingLog;
-use hostkeeper_link::{ClientIdentity, Conn, JsonMtlsLink, Transport};
+use hostkeeper_link::testing::{FakeClock, FakeLookup, RecordingLog};
+use hostkeeper_link::{ClientIdentity, Conn, JsonMtlsLink, Reach, Transport};
 use hostkeeper_testkit::Scratch;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
@@ -27,6 +28,10 @@ use sha2::{Digest, Sha256};
 
 /// The coordinator's name in the tests' daemon config, and in its certificate.
 pub const COORDINATOR: &str = "coordinator.test";
+
+/// The address the tests' lookup gives the coordinator's name: a documentation address, dialed
+/// only through the in-process transport.
+pub const COORDINATOR_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
 
 /// The certificate prefixes the coordinator reads by default.
 pub const UPDATER_ROLE_URI: &str = "urn:hostkeeper:role:updater";
@@ -447,6 +452,14 @@ impl Farm {
     }
 }
 
+/// The reach of `config`'s coordinator, whose name looks up to [`COORDINATOR_IP`]; its lines
+/// go to a log of their own, which no test of the link reads.
+pub fn reach(config: &DaemonConfig) -> Arc<Reach> {
+    let lookup = Arc::new(FakeLookup::answering(&[COORDINATOR_IP]));
+    let reach = Reach::new(config, lookup, Arc::new(RecordingLog::default())).expect("a reach");
+    Arc::new(reach)
+}
+
 /// A link of the tests: the config of `farm`'s CA, over `pki`, through `transport`, logging to
 /// `log`.
 pub fn link(
@@ -455,11 +468,13 @@ pub fn link(
     transport: &Arc<PipeTransport>,
     log: &Arc<RecordingLog>,
 ) -> JsonMtlsLink {
+    let config = config(&farm.ca);
     JsonMtlsLink::new(
-        &config(&farm.ca),
+        &config,
         &pki.root(),
+        reach(&config),
         transport.clone(),
+        Arc::new(FakeClock::new(0, 0)),
         log.clone(),
     )
-    .expect("a link")
 }

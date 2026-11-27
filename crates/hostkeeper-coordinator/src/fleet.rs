@@ -107,17 +107,12 @@ impl Host {
     /// Whether the host holds an update slot of its service, counted against its role's
     /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
     /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
-    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live.
+    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live. This
+    /// reads the last word whatever its age (as [`Self::holds_slot_at`] when it was said); the
+    /// decisions read [`Self::holds_slot_at`].
     #[must_use]
     pub fn holds_slot(&self) -> bool {
-        let failed = self
-            .beat
-            .last_update
-            .as_ref()
-            .is_some_and(|r| r.outcome == Outcome::Failed);
-        self.beat.updating.is_some()
-            || self.beat.promotion_pending
-            || (failed && !matches!(self.beat.health, Health::Healthy | Health::Absent))
+        self.holds_slot_at(self.seen)
     }
 }
 
@@ -759,8 +754,9 @@ impl Fleet {
     }
 
     /// Whether the host `id` is busy with a service other than `service`: one of its other
-    /// services is updating, or has an order outstanding for it. A host does one update at a
-    /// time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
+    /// services is updating ([`Host::is_updating`]: not silent past
+    /// [`crate::silent::SILENT_UPDATE_AFTER`]), or has an order outstanding for it. A host does
+    /// one update at a time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
     /// is leaving, which no service counts it for.
     #[must_use]
     pub fn is_busy_besides(&self, service: &str, id: &HostId, now: Duration) -> bool {
@@ -770,15 +766,16 @@ impl Fleet {
             .iter()
             .chain(leaving)
             .filter(|(s, _)| s.as_str() != service)
-            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.beat.updating.is_some()));
+            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.is_updating(now)));
         updating
             || self.orders.iter().any(|((o, s), order)| {
                 o == id && s != service && now.saturating_sub(order.at) < ORDER_AGE
             })
     }
 
-    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot`], or an
-    /// order is outstanding for it. A host an operator excluded from `service` holds one only
+    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot_at`] (a host
+    /// silent for [`crate::silent::SILENT_UPDATE_AFTER`] holds none for an update it last said
+    /// ran), or an order is outstanding for it. A host an operator excluded from `service` holds one only
     /// while it runs an update (updating, or its promotion pending) or has an order outstanding,
     /// so a host excluded mid-update keeps its slot until that update ends; one whose last update
     /// failed and that is not healthy holds none, since the service no longer orders it and
@@ -786,10 +783,10 @@ impl Fleet {
     /// as it stays excluded.
     #[must_use]
     pub fn holds_slot(&self, service: &str, id: &HostId, host: &Host, now: Duration) -> bool {
-        let running = host.beat.updating.is_some() || host.beat.promotion_pending;
+        let running = host.is_updating(now) || host.is_promoting(now);
         let held = match self.is_excluded(service, id) {
             true => running,
-            false => host.holds_slot(),
+            false => host.holds_slot_at(now),
         };
         held || self.is_ordered(service, id, now)
     }

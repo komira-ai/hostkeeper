@@ -58,8 +58,9 @@ pub enum State {
         /// The second it must end by; for an `unbounded` step the second it started, and read by
         /// nothing.
         deadline_secs: u64,
-        /// The step has no bound (a `prepare` whose manifest timeout is 0): the dead-man was not
-        /// armed.
+        /// The step had no bound: an updater from before the ceiling on a `prepare` of 0
+        /// ([`crate::PREPARE_CEILING_SECS`]) wrote it for such a `prepare`, and did not arm the
+        /// dead-man. This updater writes it false, and resumes such a step as any other.
         /// Written only when true, so a bounded step writes the bytes it always did, and a
         /// record without it (every record from before it existed) reads as bounded.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]

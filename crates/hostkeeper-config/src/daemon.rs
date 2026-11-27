@@ -21,6 +21,15 @@
 //! force_start_secs         = 60
 //! ```
 //!
+//! `coordinator_ip` (an IPv4 or IPv6 address, without brackets or port; absent by default) is
+//! the coordinator's address beside its name: the daemon dials it after the addresses the name
+//! of `coordinator` looks up to and the address it last reached the coordinator at, so that a
+//! host whose resolver cannot look the name up still reaches the coordinator there.
+//! The coordinator is still checked by its name: its certificate must be for the name of
+//! `coordinator`, the port is the URL's, and the address is only where that name is dialed.
+//! A daemon of an earlier release refuses a config with the key, as it refuses any key it does not
+//! know.
+//!
 //! `keep_awake` (a boolean, default `true`) is read by a Mac's daemon alone: it sets the host's
 //! power management so that the Mac never sleeps (`pmset`); `false` leaves the host's power
 //! settings as they are.
@@ -31,7 +40,7 @@
 //! nothing of the baseline and reports none.
 //!
 //! Every table refuses a key it does not know, and the error names the key and its table. Every
-//! key is required except `release_channel`, `keep_awake`, `serial_console` and those of `[bounds]`, which default to
+//! key is required except `release_channel`, `coordinator_ip`, `keep_awake`, `serial_console` and those of `[bounds]`, which default to
 //! the values above (`keep_awake` to `true`); `release_channel` may be left out (it is read when present and checked as an `https://`
 //! URL); a missing
 //! `[trusted_signers]` is refused, because there is no unsigned mode. There is no list of
@@ -43,6 +52,7 @@
 //! loading. The generated configs still write the key, since a daemon of the previous release
 //! refuses a config without it; they stop one release after this loader has shipped.
 
+use std::net::IpAddr;
 use std::path::Path;
 
 use crate::serial_console::SerialConsole;
@@ -72,6 +82,7 @@ const BOUNDS: &[(&str, Shape)] = &[
 
 const TOP: &[(&str, Shape)] = &[
     ("coordinator", Shape::Value),
+    ("coordinator_ip", Shape::Value),
     ("ca_sha256", Shape::Value),
     ("release_channel", Shape::Value),
     ("keep_awake", Shape::Value),
@@ -286,6 +297,9 @@ impl Bounds {
 pub struct DaemonConfig {
     /// Where the heartbeat goes.
     pub coordinator: HttpsUrl,
+    /// The coordinator's address beside its name (`coordinator_ip`), dialed when the name cannot be
+    /// looked up; `None` when the config leaves the key out.
+    pub coordinator_ip: Option<IpAddr>,
     /// The SHA-256 of the CA certificate the coordinator's certificate chains to.
     pub ca_sha256: Sha256Hex,
     /// The release channel an earlier daemon fetched packages from; the daemon reads it no more.
@@ -305,6 +319,13 @@ pub struct DaemonConfig {
 fn serial_console(fields: &Fields<'_>) -> Result<SerialConsole, Problem> {
     let key = "serial_console";
     SerialConsole::parse(fields.string(key)?).map_err(|why| fields.invalid(key, why.to_string()))
+}
+
+fn ip(fields: &Fields<'_>, key: &str) -> Result<IpAddr, Problem> {
+    fields
+        .string(key)?
+        .parse()
+        .map_err(|_| fields.invalid(key, "is not an IPv4 or IPv6 address"))
 }
 
 fn https(fields: &Fields<'_>, key: &str) -> Result<HttpsUrl, Problem> {
@@ -391,6 +412,10 @@ fn read(document: &toml::Table) -> Result<DaemonConfig, Problem> {
     let top = Fields::new("", document);
     Ok(DaemonConfig {
         coordinator: https(&top, "coordinator")?,
+        coordinator_ip: top
+            .get("coordinator_ip")
+            .map(|_| ip(&top, "coordinator_ip"))
+            .transpose()?,
         ca_sha256: sha256(&top, "ca_sha256")?,
         release_channel: top
             .get("release_channel")

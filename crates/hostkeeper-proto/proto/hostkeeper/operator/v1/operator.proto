@@ -1688,6 +1688,15 @@ enum AlertKind {
   // A Linux host's BMC is absent or does not answer: its event log, which outlives a crash, cannot
   // be read. Warning. Log token `bmc_missing`.
   ALERT_KIND_BMC_MISSING = 32;
+  // The host's last heartbeat said it was running an update of the service (or waiting for that
+  // update's promotion), and the host has been silent for an hour or more since. From then on, that
+  // heartbeat holds no update slot of the service and no rollout place, so the other services'
+  // rollouts go on. The coordinator stops nothing and orders the host nothing: the update may
+  // still be running on the host. `version` is the update's target (for a promotion, the version
+  // the host runs). One alert for each host and service. It clears when the host heartbeats again;
+  // if that heartbeat still says it updates, the host holds its slot and its rollout place again.
+  // Critical. Log token `silent_while_updating`.
+  ALERT_KIND_SILENT_WHILE_UPDATING = 33;
 }
 
 // How soon an `Alert` needs a person.

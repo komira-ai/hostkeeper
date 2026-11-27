@@ -641,9 +641,12 @@ fn the_enum_values_are_fixed() {
         values(&now, "hostkeeper.agent.v1.MaintenanceKind").last(),
         Some(&("MAINTENANCE_KIND_REPAIR".to_owned(), 6))
     );
-    let kinds = values(&now, "hostkeeper.operator.v1.AlertKind");
+    let kinds: Vec<(String, i32)> = values(&now, "hostkeeper.operator.v1.AlertKind")
+        .into_iter()
+        .filter(|(_, number)| (25..=32).contains(number))
+        .collect();
     assert_eq!(
-        kinds[kinds.len() - 8..],
+        kinds,
         [
             ("ALERT_KIND_HARDWARE_FAULT".to_owned(), 25),
             ("ALERT_KIND_CAPACITY_REGRESSED".to_owned(), 26),

@@ -434,6 +434,7 @@ fn a_host_of_another_group_is_answered_404_for_this_groups_paths() {
         hostkeeper_daemon::mirror::over_coordinator(
             &config,
             &files.pki,
+            &bench.apt.rig.scratch.path().join(name),
             Arc::new(FakeClock::new(0, 0)),
         )
         .expect("a reader")
