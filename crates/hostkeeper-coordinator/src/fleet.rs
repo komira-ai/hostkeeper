@@ -107,17 +107,11 @@ impl Host {
     /// Whether the host holds an update slot of its service, counted against its role's
     /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
     /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
-    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live.
+    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live. This
+    /// reads the last word whatever its age; the decisions read [`Self::holds_slot_at`].
     #[must_use]
     pub fn holds_slot(&self) -> bool {
-        let failed = self
-            .beat
-            .last_update
-            .as_ref()
-            .is_some_and(|r| r.outcome == Outcome::Failed);
-        self.beat.updating.is_some()
-            || self.beat.promotion_pending
-            || (failed && !matches!(self.beat.health, Health::Healthy | Health::Absent))
+        self.beat.updating.is_some() || self.beat.promotion_pending || self.failed_unhealthy()
     }
 }
 
@@ -777,8 +771,9 @@ impl Fleet {
             })
     }
 
-    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot`], or an
-    /// order is outstanding for it. A host an operator excluded from `service` holds one only
+    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot_at`] (a host
+    /// silent for [`crate::silent::SILENT_UPDATE_AFTER`] holds none for an update it last said
+    /// ran), or an order is outstanding for it. A host an operator excluded from `service` holds one only
     /// while it runs an update (updating, or its promotion pending) or has an order outstanding,
     /// so a host excluded mid-update keeps its slot until that update ends; one whose last update
     /// failed and that is not healthy holds none, since the service no longer orders it and
@@ -786,10 +781,10 @@ impl Fleet {
     /// as it stays excluded.
     #[must_use]
     pub fn holds_slot(&self, service: &str, id: &HostId, host: &Host, now: Duration) -> bool {
-        let running = host.beat.updating.is_some() || host.beat.promotion_pending;
+        let running = host.is_updating(now) || host.is_promoting(now);
         let held = match self.is_excluded(service, id) {
             true => running,
-            false => host.holds_slot(),
+            false => host.holds_slot_at(now),
         };
         held || self.is_ordered(service, id, now)
     }

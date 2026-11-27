@@ -44,6 +44,7 @@
 pub mod artifact;
 pub mod bad;
 pub mod capture;
+mod ceiling;
 pub mod clock;
 pub mod deadman;
 pub mod force;
@@ -64,6 +65,7 @@ pub mod systemd;
 pub use artifact::{ArtifactError, EntryKind, Staged, Tree, TreeEntry, read_tree, tree_digest};
 pub use bad::{BAD_VERSIONS_FILE, BadVersions, BadVersionsError, MAX_BAD_VERSIONS};
 pub use capture::{LAST_LINE_MAX, RING_BYTES, Ring};
+pub use ceiling::{PREPARE_CEILING_SECS, REASON_PREPARE_CEILING};
 pub use clock::{
     BootId, BootIdError, BootIdSource, Clock, PROC_BOOT_ID, ProcBootId, Stamp, SystemClock,
 };

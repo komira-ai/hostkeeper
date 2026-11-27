@@ -13,8 +13,10 @@
 //! window, so a `verify` that is still running at `verify_deadline_secs` is stopped here and the
 //! update rolls back.
 //!
-//! A step with no bound (a `prepare` whose manifest timeout is 0, [`crate::Bound::Unbounded`]) is
-//! not armed: the dead-man never stops it, and nothing but the hook's own end ends it.
+//! The runner arms every step it launches: a `prepare` whose manifest timeout is 0 is armed with
+//! the updater's ceiling ([`crate::PREPARE_CEILING_SECS`]), and the runner reads its stop there as
+//! a deferral, not a failure ([`crate::ceiling`]). A run given [`crate::Bound::Unbounded`] by
+//! another caller (a maintenance `drain` with no deadline) is not armed.
 //!
 //! A stop that fails is tried again at every tick, and kept on the arming: when the step ends
 //! before a stop has worked, [`Watch::disarm`] gives the runner the error, and the runner stops

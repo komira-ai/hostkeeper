@@ -18,10 +18,10 @@ params table, the next-step table) are those of `hostkeeper-hook`.
 | `force` | `ForceRecord`: the journal of a hookless `force` (target, digest, the version left, the phase reached, the order's try and halt generation, the verdict), whose phase and verdict strings are fixed |
 | `artifact` | `Staged`, `tree_digest` and `read_tree`: the staged tree and its digest at verification (the public format of docs/tree-digest.md: kind, name, mode, size and bytes of every entry; no owner, no times, no links), made only by `Staged::seal`; checked before every step, resumed ones included |
 | `seal` | `Seal`: the seal file `<version>.seal` of a staged package version (`schema`, `tree_digest`, `package_digest`), read additively |
-| `launcher` | `StepLauncher`, `StepCall` and `Bound`: what the runner needs to run one step and to stop its unit by name, a step's bound (seconds, or `Unbounded` for a `prepare` of 0), and what the launcher must do that the runner cannot check |
+| `launcher` | `StepLauncher`, `StepCall` and `Bound`: what the runner needs to run one step and to stop its unit by name, a step's bound (seconds, or `Unbounded` for a maintenance `drain` with no deadline; the runner launches no step unbounded), and what the launcher must do that the runner cannot check |
 | `systemd` | `SystemdLauncher`: each step as `systemd-run --system --quiet --wait --collect --pipe --unit=updater-<service>-<step>-<generation> --property=RuntimeMaxSec=<secs\|infinity> -- <hook> <args>`, run as root with no other property (no user, capability, sandbox or path property); `stop` is `systemctl stop --system <unit>`, a unit that is not loaded being stopped. The command lines are pure functions (`command`, `stop_command`, `unit_name`); `SystemdRunProcess`, the one place that starts a process, runs the programs with an empty environment and no input and reads both output streams at once |
 | `capture` | `Ring`: the last `RING_BYTES` (1 MiB) of each output stream of a step; the last line of standard output is the report only when it is at most `LAST_LINE_MAX` (64 KiB) and whole, otherwise the report is `{}` and the exit code decides |
-| `deadman` | `Watch` and `DeadMan`: the bound of the running step, enforced on a thread of its own; a stop that did not work is reported to the runner; an unbounded `prepare` is not armed |
+| `deadman` | `Watch` and `DeadMan`: the bound of the running step, enforced on a thread of its own; a stop that did not work is reported to the runner; every step the runner launches is armed |
 | `selfupdate` | the updater's own update: stage beside (never over what `current` or `previous` names), switch the `current` link, restart; the `previous` link. `follow_on` takes the binary from a `Staged` through `Staged::check`. `Layout` is the directory of versions with `current` and `previous`: the updater's binaries (`Layout::new`, `versions/<v>`) or a package's sealed trees (`Layout::package`, `<v>/` with `<v>.seal`, checked by `check_tree`) |
 | `clock` | `Clock`, `Stamp`, `SystemClock`: time and the boot id as inputs |
 
@@ -51,13 +51,16 @@ What the launcher must do (the `StepLauncher` docs): start a unit so that its na
 again once it ended (`SystemdLauncher` uses `--collect`, so no `systemctl reset-failed`), since a
 step that is tried again keeps its unit name; bound its `stop` and escalate to `SIGKILL` (systemd's
 default stop timeout, then the kill of the control group); and set `RuntimeMaxSec=` from the
-step's bound (`infinity` for an unbounded `prepare`), since a killed updater takes the dead-man
-with it.
+step's bound (`infinity` for an unbounded maintenance `drain`), since a killed updater takes the
+dead-man with it.
 
-- **An unbounded `prepare` (`prepare = 0`)** is recorded `running` with `unbounded: true` (written
-  only when true, so a bounded step writes the bytes it always did), is not armed with the
-  dead-man, and runs with `RuntimeMaxSec=infinity`: only the hook's own end ends it. A `0` for any
-  other step, or a `verify` whose window is used up, is a step not started and failed.
+- **A `prepare` of 0 (`prepare = 0`)** runs under the updater's ceiling, `PREPARE_CEILING_SECS`
+  (3600 s): it is armed with the dead-man and its unit gets `RuntimeMaxSec=3600`. One that ends
+  with no exit code at or after the ceiling was stopped by it, and reads as a deferral with the
+  reason `prepare_ceiling`: `rollback` undoes the drain and the update ends `Deferred`
+  (`src/ceiling.rs`). A record an older updater left with `unbounded: true` is resumed as any
+  running step: its unit is stopped by name and the step runs again, under the ceiling. A `0` for
+  any other step, or a `verify` whose window is used up, is a step not started and failed.
 
 What is not here: the heartbeat link to the coordinator (`hostkeeper-link`), and wiring a
 binary (`hostkeeper-daemon`). The registration socket of kbf's step runner was not carried over (MIGRATION.md): the state of a
