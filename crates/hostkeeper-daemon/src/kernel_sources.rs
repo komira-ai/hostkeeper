@@ -167,10 +167,12 @@ pub fn read_records(
             Ok(0) => break,
             Ok(n) => {
                 partial.extend_from_slice(&buffer[..n]);
-                if let Some(end) = partial.iter().rposition(|b| *b == b'\n') {
-                    let whole: Vec<u8> = partial.drain(..=end).collect();
-                    records.extend(kernel_log::parse_kmsg(&whole));
-                }
+                let whole = partial
+                    .iter()
+                    .rposition(|b| *b == b'\n')
+                    .map_or(0, |end| end + 1);
+                let whole: Vec<u8> = partial.drain(..whole).collect();
+                records.extend(kernel_log::parse_kmsg(&whole));
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
             Err(e)
@@ -645,11 +647,10 @@ fn dmesg_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(listed(dir)?
         .into_iter()
         .filter(|path| {
-            path.is_file()
-                && path
-                    .file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("dmesg-"))
+            path.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("dmesg-"))
         })
+        .filter(|path| path.is_file())
         .collect())
 }
 

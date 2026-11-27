@@ -302,21 +302,18 @@ pub fn remount_events(
 ) -> Vec<pb::HardwareEvent> {
     let mut events = Vec::new();
     let current: BTreeSet<&str> = mounts.iter().map(|m| m.point.as_str()).collect();
-    let gone: Vec<String> = mark
-        .read_only
-        .keys()
-        .filter(|point| !current.contains(point.as_str()))
-        .cloned()
-        .collect();
-    for point in gone {
-        if let Some(asserted) = mark.read_only.remove(&point) {
-            events.push(ended(
-                &asserted,
-                now_unix,
-                &format!("{point} is no longer mounted"),
-                "",
-            ));
-        }
+    let (gone, kept): (BTreeMap<String, Asserted>, BTreeMap<String, Asserted>) =
+        std::mem::take(&mut mark.read_only)
+            .into_iter()
+            .partition(|(point, _)| !current.contains(point.as_str()));
+    mark.read_only = kept;
+    for (point, asserted) in gone {
+        events.push(ended(
+            &asserted,
+            now_unix,
+            &format!("{point} is no longer mounted"),
+            "",
+        ));
     }
     mark.writable
         .retain(|point| current.contains(point.as_str()));

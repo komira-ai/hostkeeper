@@ -46,7 +46,8 @@ use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_proto::health::{
-    MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
+    MAX_BOOT_ID, MAX_EVENTS, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON,
+    MAX_SOURCES,
 };
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
@@ -327,7 +328,14 @@ impl HostHealthSource for HealthKeeper {
             clean_previous_shutdown: inner.file.previous_clean,
             sources: inner.sources.values().cloned().collect(),
         };
-        while health.encoded_len() > MAX_HEALTH_BYTES && health.events.pop().is_some() {}
+        // The boot and the sources alone are far within the bound, so leaving out records is
+        // always enough.
+        for _ in 0..MAX_EVENTS {
+            if health.encoded_len() <= MAX_HEALTH_BYTES {
+                break;
+            }
+            health.events.pop();
+        }
         health
     }
 
