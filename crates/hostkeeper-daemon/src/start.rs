@@ -12,7 +12,9 @@
 //! [`before_records`], [`boot_pass`] and
 //! [`delete_archive_versions`]; and [`after_boot`]. [`serve`]
 //! then starts the enrollment and heartbeat loops ([`crate::links`]) and runs them until the
-//! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
+//! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]), or, through
+//! [`serve_until`], until its SIGTERM ([`crate::terminate`]), after which the clean-shutdown marker
+//! is judged ([`crate::host_health`]).
 //!
 //! The daemon serves nothing on the host: it binds no socket and listens on no port. What it
 //! does is seen through the coordinator (`hk hosts get`), and orders reach it only in a

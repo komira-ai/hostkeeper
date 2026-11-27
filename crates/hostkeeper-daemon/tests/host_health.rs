@@ -636,6 +636,27 @@ fn a_file_with_fields_missing_or_unknown_reads() {
     assert!(log.lines().is_empty());
 }
 
+/// Proves a marker this release does not know (a later release's) reads as not clean, and the
+/// records the file holds are kept rather than the file moved aside.
+///
+/// Catches: a file of a later release moved aside whole, its held records lost, for one new
+/// marker value.
+#[test]
+fn an_unknown_marker_reads_as_not_clean_and_keeps_the_records() {
+    let dir = Scratch::new("health-unknown-marker");
+    fs::write(
+        dir.path().join(HEALTH_FILE),
+        br#"{"boot_id":"boot-1","marker":"halted","held":{"records":[{"event_id":"kept","severity":3}],"next_seq":1}}"#,
+    )
+    .expect("write");
+    let (keeper, log) = start(&dir, boot("boot-2"), yes());
+    let health = keeper.health();
+    assert!(!health.clean_previous_shutdown);
+    assert_eq!(ids(&health), ["kept"]);
+    assert!(log.lines().is_empty());
+    assert!(!dir.path().join(HEALTH_FILE_ASIDE).exists());
+}
+
 /// Proves the boot of a Linux or OpenRC host is read from its root: the boot id of the clock,
 /// `btime` of `/proc/stat` and `/etc/machine-id`; with neither file, 0 and no machine id.
 ///

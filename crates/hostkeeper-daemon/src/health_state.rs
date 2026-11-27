@@ -59,6 +59,10 @@ pub enum Marker {
     Running,
     /// The daemon stopped because the system was going down (an orderly shutdown or reboot).
     Clean,
+    /// A marker this release does not know, which a later release wrote: read as not clean, so
+    /// the rest of the file still reads.
+    #[serde(other)]
+    Unknown,
 }
 
 /// What a source last read, so that it reads only what is newer (a SEL's last record id and
