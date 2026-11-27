@@ -498,10 +498,12 @@ fn pstore_event_takes_a_panic_from_the_header_alone() {
     assert_eq!(event.raw, "Panic#2 Part1");
 }
 
-/// An oops that names a machine check is a critical hardware crash whose raw is that line.
+/// An oops that names an uncorrected machine check is a critical hardware crash whose raw is
+/// that line.
 #[test]
 fn pstore_event_calls_an_oops_naming_a_machine_check_a_hardware_crash() {
-    let text = "Oops#1 Part1\n<4>[2.0] mce: machine check in progress\n<4>[2.1] Oops: 0000 [#1]\n";
+    let text =
+        "Oops#1 Part1\n<4>[2.0] Machine Check Exception: 5 Bank 4\n<4>[2.1] Oops: 0000 [#1]\n";
     let d = dump("dmesg-efi-5", 1000, text);
     assert_eq!(
         pstore_event(&d, 2000),
@@ -511,9 +513,21 @@ fn pstore_event_calls_an_oops_naming_a_machine_check_a_hardware_crash() {
             pb::HardwareSeverity::Critical,
             "panic_hardware",
             "Kernel crash, suspected hardware fault (pstore dmesg-efi-5)",
-            "<4>[2.0] mce: machine check in progress",
+            "<4>[2.0] Machine Check Exception: 5 Bank 4",
         )
     );
+}
+
+/// An oops whose log holds only a corrected error's lines is a plain oops, never a hardware
+/// crash: a corrected error does not make a crash a hardware fault.
+#[test]
+fn pstore_event_does_not_call_an_oops_after_a_corrected_error_a_hardware_crash() {
+    let text = "Oops#1 Part1\n<4>[1.0] mce: [Hardware Error]: Machine check events logged\n\
+                <4>[1.1] {1}[Hardware Error]: event severity: corrected\n<4>[2.1] Oops: 0000 [#1]\n";
+    let event = pstore_event(&dump("dmesg-efi-9", 1000, text), 2000);
+    assert_eq!(event.code, "kernel_oops");
+    assert_eq!(event.severity, pb::HardwareSeverity::Warning as i32);
+    assert_eq!(event.raw, "<4>[2.1] Oops: 0000 [#1]");
 }
 
 /// A dump that is neither a panic nor an oops is an info dump whose raw is its first non-empty line.

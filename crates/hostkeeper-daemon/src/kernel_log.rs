@@ -20,9 +20,10 @@
 //!   details and give nothing.
 //! - EDAC: `EDAC ...: <n> UE ... on <label> (...)` is `memory` by the DIMM label, critical
 //!   `memory_uncorrectable`; `<n> CE` is `info` `memory_corrected`, standing for `n` errors.
-//! - AER: `AER: <kind> error received: <device>` is `pcie` by the device: `Corrected` `info`
-//!   `pcie_corrected`, `Uncorrected (Fatal)` critical `pcie_fatal`, `Uncorrected (Non-Fatal)`
-//!   critical `pcie_uncorrected`.
+//! - AER: `AER: <kind> error received: <device>`, and the newer kernels' `AER: <kind> error
+//!   message received from <device>`, is `pcie` by the device (else the reporting port's
+//!   address): `Corrected` or `Correctable` `info` `pcie_corrected`, `Uncorrected (Fatal)` or
+//!   `Uncorrectable (Fatal)` critical `pcie_fatal`, `(Non-Fatal)` critical `pcie_uncorrected`.
 //! - APEI's `[Hardware Error]:` lines, `{<n>}[Hardware Error]: ...` from a GHES source, are read
 //!   as one record per error: it begins at `Hardware error from APEI` or at an `event severity:`
 //!   line, takes its component from `section_type:` (memory, PCIe, processor, else `board`) and
@@ -489,12 +490,13 @@ fn aer(text: &str) -> Option<Finding> {
     use pb::HardwareComponent::Pcie;
     use pb::HardwareSeverity::{Critical, Info};
     let (before, after) = text.split_once("AER: ")?;
-    let (kind, received) = after.split_once(" error received")?;
+    let (kind, received) = after
+        .split_once(" error message received")
+        .or_else(|| after.split_once(" error received"))?;
     let named = received
-        .trim_start_matches(':')
         .split_whitespace()
-        .next()
-        .filter(|device| is_pci_address(device));
+        .map(|word| word.trim_matches(':'))
+        .find(|device| is_pci_address(device));
     let port = before
         .split_whitespace()
         .next_back()
@@ -519,7 +521,7 @@ fn aer(text: &str) -> Option<Finding> {
                 format!("Fatal PCIe error on {subject} (AER)"),
             )
         })
-    } else if kind.contains("Corrected") {
+    } else if kind.contains("Correct") {
         Some(Finding::new(
             Pcie,
             subject,
@@ -547,7 +549,7 @@ pub fn is_pci_address(text: &str) -> bool {
 fn io_error(text: &str) -> Option<Finding> {
     let (_, after) = text.split_once("I/O error, dev ")?;
     let disk = after
-        .split(|c: char| c == ',' || c.is_whitespace())
+        .split(|c: char| c.is_whitespace() | (c == ','))
         .next()
         .filter(|disk| is_physical(disk))?;
     Some(Finding::new(
@@ -731,3 +733,7 @@ fn amd_decoded(key: &str, body: &str) -> Option<Finding> {
 #[cfg(test)]
 #[path = "kernel_log_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "kernel_log_aer_tests.rs"]
+mod aer_tests;

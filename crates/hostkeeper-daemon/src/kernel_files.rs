@@ -19,8 +19,9 @@
 //!   the mount is read-write again, is gone, or its boot ended ([`remounts_ended`]). A filesystem
 //!   mounted read-only from the start is never asserted.
 //! - **pstore** ([`pstore_event`]): a dump of the kernel's log that pstore kept across a reboot;
-//!   `board`, critical `panic_hardware` when it names a machine check or a hardware error, else
-//!   warning `kernel_panic` for a panic and `kernel_oops` for an oops, else `info` `kernel_dump`.
+//!   `board`, critical `panic_hardware` when it is a panic or an oops and names an uncorrected
+//!   hardware error ([`HARDWARE_WORDS`]), else warning `kernel_panic` for a panic and
+//!   `kernel_oops` for an oops, else `info` `kernel_dump`.
 //!   It is `of_previous_boot` when written before this boot began. Its `raw` is the panic's line,
 //!   else the line naming the hardware, else the oops's, else the dump's first line.
 
@@ -37,13 +38,17 @@ pub const SOURCE: &str = "sysfs";
 /// The filesystem types whose read-only remounts are judged.
 pub const REMOUNT_KINDS: [&str; 6] = ["ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs"];
 
-/// The words of a pstore dump that make its panic or oops a suspected hardware fault.
+/// The words of a pstore dump that make its panic or oops a suspected hardware fault: an
+/// uncorrected machine check, an uncorrected memory error, a fatal firmware error record or an
+/// I/O check NMI. A corrected error's line (`Machine check events logged`, `event severity:
+/// corrected`) is not one of them, so an old corrected error in a dump's log never makes a crash
+/// a hardware fault.
 pub const HARDWARE_WORDS: [&str; 6] = [
-    "Machine check",
-    "machine check",
-    "[Hardware Error]",
-    "Hardware error",
+    "Machine Check Exception",
+    "Fatal machine check",
+    "Fatal local machine check",
     "Uncorrected hardware memory error",
+    "event severity: fatal",
     "NMI: IOCK error",
 ];
 

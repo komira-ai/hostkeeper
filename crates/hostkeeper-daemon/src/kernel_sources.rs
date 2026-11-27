@@ -1,6 +1,6 @@
 //! The Linux daemon's reads of the kernel's evidence of hardware faults
 //! (docs/design/host-health-alerts.md sections 3.1, 4.2 and 4.5): the kernel's log and its own
-//! files, read every [`POLL_SECS`] on a worker of their own, judged by the pure functions of
+//! files, read every [`POLL_SECS`] on a worker of its own, judged by the pure functions of
 //! [`crate::kernel_log`] and [`crate::kernel_files`], and held in the state file by
 //! [`HealthKeeper::record`] until the coordinator writes them.
 //!
@@ -25,6 +25,11 @@
 //! read. A file that cannot be read makes the source `unreadable`; a directory that is not there
 //! (no ext4 filesystem, no pstore) is nothing to read. Nothing is ever written, removed or
 //! cleared: a pstore dump stays where it is.
+//!
+//! Both sources are read one after the other on one worker, apart from the heartbeat's. Only
+//! `journalctl` is a program, bounded by [`JOURNAL_DEADLINE`] and its output cap; the other reads
+//! are of the kernel's own files (`/dev/kmsg` without blocking). A pstore dump is listed at every
+//! read and read only when it is new.
 //!
 //! A mark that does not parse is read as none: the source's next read is a first read.
 
@@ -187,13 +192,25 @@ pub enum PreviousBoot {
     Lines(Vec<KernelLine>),
 }
 
+/// Why the journal of the boot before could not be read.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum JournalError {
+    /// The program could not be run, or did not end by its deadline: the port's own words.
+    #[error("{0}")]
+    Run(String),
+    /// The program ended with a failure: how (`status 2`, `a signal`) and the first line of its
+    /// standard error.
+    #[error("journalctl ended with {how}: {first_line}")]
+    Ended { how: String, first_line: String },
+}
+
 /// The persistent journal.
 pub trait Journal: Send + Sync {
     /// The kernel's lines of the boot before this one.
     ///
     /// # Errors
-    /// Why they could not be read, in plain words.
-    fn previous_boot(&self) -> Result<PreviousBoot, String>;
+    /// [`JournalError`]: why they could not be read.
+    fn previous_boot(&self) -> Result<PreviousBoot, JournalError>;
 }
 
 /// [`Journal`] through `journalctl` ([`journal_args`]), a program run with a fixed argument list,
@@ -232,25 +249,24 @@ pub fn journal_args() -> Vec<String> {
 }
 
 impl Journal for Journalctl {
-    fn previous_boot(&self) -> Result<PreviousBoot, String> {
+    fn previous_boot(&self) -> Result<PreviousBoot, JournalError> {
         if !self.root.join(PERSISTENT_JOURNAL).is_dir() {
             return Ok(PreviousBoot::NoJournal);
         }
         let output = self
             .program
             .run(&journal_args())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| JournalError::Run(e.to_string()))?;
         let stderr = output.stderr_text();
         match output.code {
             Some(0) => Ok(PreviousBoot::Lines(kernel_log::parse_journal(
                 &output.stdout,
             ))),
             Some(1) if stderr.contains("boot") => Ok(PreviousBoot::Lines(Vec::new())),
-            code => Err(format!(
-                "journalctl ended with {}: {}",
-                code.map_or_else(|| "a signal".to_owned(), |c| format!("status {c}")),
-                stderr.lines().next().unwrap_or_default()
-            )),
+            code => Err(JournalError::Ended {
+                how: code.map_or_else(|| "a signal".to_owned(), |c| format!("status {c}")),
+                first_line: stderr.lines().next().unwrap_or_default().to_owned(),
+            }),
         }
     }
 }
@@ -380,7 +396,7 @@ impl KernelSources {
                     events.extend(classify(&after, true));
                     boot.clone_into(&mut mark.journal_read_in);
                 }
-                Err(why) => unreadable = Some(why),
+                Err(why) => unreadable = Some(why.to_string()),
             }
         }
         match self.kmsg.read(KMSG_MAX_RECORDS) {
@@ -469,7 +485,7 @@ impl KernelSources {
             Err(why) => problems.push(why),
         }
         match dumps(&self.root) {
-            Ok(dumps) => events.extend(new_dumps(&dumps, &mut mark, boot_unix)),
+            Ok(found) => events.extend(new_dumps(found, &mut mark, boot_unix)),
             Err(e) => problems.push(format!("pstore cannot be read: {e}")),
         }
         keeper.record(kernel_files::SOURCE, &mark_text(&mark), events, now_unix);
@@ -543,20 +559,55 @@ pub fn ext4_errors(dir: &Path) -> io::Result<Vec<Ext4Errors>> {
         .collect())
 }
 
-/// The pstore dumps under `root`: in [`PSTORE_DIR`], the `dmesg-*` files written in one second
-/// are one dump; in [`SYSTEMD_PSTORE_DIR`], each directory is one, of its `dmesg.txt` or else its
-/// `dmesg-*` files. A directory that is not there holds none.
+/// One pstore dump as listed, not yet read: its name, when it was written and its files.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Found {
+    /// The first of its files, or the directory `systemd-pstore` archived it in.
+    pub name: String,
+    /// When it was written, Unix seconds; 0 when not known.
+    pub mtime: u64,
+    /// Its files, sorted.
+    pub paths: Vec<PathBuf>,
+}
+
+impl Found {
+    /// The id of its record, as [`kernel_files::dump_id`] gives it once read.
+    #[must_use]
+    pub fn id(&self) -> String {
+        dump_id(&Dump {
+            name: self.name.clone(),
+            mtime: self.mtime,
+            text: String::new(),
+        })
+    }
+
+    /// The dump, its files read: the last [`PSTORE_FILE_MAX`] bytes of each, joined by a newline;
+    /// a file that cannot be read is left out.
+    #[must_use]
+    pub fn read(&self) -> Dump {
+        let text: Vec<String> = self.paths.iter().filter_map(|p| tail(p).ok()).collect();
+        Dump {
+            name: self.name.clone(),
+            mtime: self.mtime,
+            text: text.join("\n"),
+        }
+    }
+}
+
+/// The pstore dumps under `root`, listed and not read: in [`PSTORE_DIR`], the `dmesg-*` files
+/// written in one second are one dump; in [`SYSTEMD_PSTORE_DIR`], each directory is one, of its
+/// `dmesg.txt` or else its `dmesg-*` files. A directory that is not there holds none.
 ///
 /// # Errors
 /// A directory that is there could not be listed.
-pub fn dumps(root: &Path) -> io::Result<Vec<Dump>> {
-    let mut dumps: Vec<Dump> = Vec::new();
+pub fn dumps(root: &Path) -> io::Result<Vec<Found>> {
+    let mut dumps: Vec<Found> = Vec::new();
     let mut by_second: BTreeMap<u64, Vec<PathBuf>> = BTreeMap::new();
     for path in dmesg_files(&root.join(PSTORE_DIR))? {
         by_second.entry(mtime(&path)).or_default().push(path);
     }
     for (second, paths) in by_second {
-        dumps.push(dump_of(&paths, second, None));
+        dumps.push(found(paths, second, None));
     }
     for dir in listed(&root.join(SYSTEMD_PSTORE_DIR))? {
         if !dir.is_dir() {
@@ -570,7 +621,8 @@ pub fn dumps(root: &Path) -> io::Result<Vec<Dump>> {
         };
         if let Some(first) = paths.first() {
             let name = dir.file_name().map(|n| n.to_string_lossy().into_owned());
-            dumps.push(dump_of(&paths, mtime(first), name));
+            let second = mtime(first);
+            dumps.push(found(paths, second, name));
         }
     }
     Ok(dumps)
@@ -611,9 +663,8 @@ fn mtime(path: &Path) -> u64 {
 }
 
 /// The dump of `paths`, written at `second`, named `name` or else by its first file.
-fn dump_of(paths: &[PathBuf], second: u64, name: Option<String>) -> Dump {
-    let text: Vec<String> = paths.iter().filter_map(|p| tail(p).ok()).collect();
-    Dump {
+fn found(paths: Vec<PathBuf>, second: u64, name: Option<String>) -> Found {
+    Found {
         name: name
             .or_else(|| {
                 paths
@@ -623,7 +674,7 @@ fn dump_of(paths: &[PathBuf], second: u64, name: Option<String>) -> Dump {
             })
             .unwrap_or_default(),
         mtime: second,
-        text: text.join("\n"),
+        paths,
     }
 }
 
@@ -641,16 +692,16 @@ fn tail(path: &Path) -> io::Result<String> {
 
 /// The records of the dumps of `dumps` not read before by `mark`, which it brings up to date:
 /// those written after the newest dumps it read, and those written in the same second that it
-/// did not read.
-fn new_dumps(dumps: &[Dump], mark: &mut FilesMark, boot_unix: u64) -> Vec<pb::HardwareEvent> {
-    let fresh: Vec<&Dump> = dumps
-        .iter()
+/// did not read. Only those are read.
+fn new_dumps(dumps: Vec<Found>, mark: &mut FilesMark, boot_unix: u64) -> Vec<pb::HardwareEvent> {
+    let newest = dumps.iter().map(|dump| dump.mtime).max().unwrap_or(0);
+    let fresh: Vec<Found> = dumps
+        .into_iter()
         .filter(|dump| {
             dump.mtime > mark.pstore_mtime
-                || (dump.mtime == mark.pstore_mtime && !mark.pstore_ids.contains(&dump_id(dump)))
+                || (dump.mtime == mark.pstore_mtime && !mark.pstore_ids.contains(&dump.id()))
         })
         .collect();
-    let newest = dumps.iter().map(|dump| dump.mtime).max().unwrap_or(0);
     if newest > mark.pstore_mtime {
         mark.pstore_mtime = newest;
         mark.pstore_ids.clear();
@@ -659,11 +710,11 @@ fn new_dumps(dumps: &[Dump], mark: &mut FilesMark, boot_unix: u64) -> Vec<pb::Ha
         fresh
             .iter()
             .filter(|dump| dump.mtime == mark.pstore_mtime)
-            .map(|dump| dump_id(dump)),
+            .map(Found::id),
     );
     fresh
-        .into_iter()
-        .map(|dump| pstore_event(dump, boot_unix))
+        .iter()
+        .map(|dump| pstore_event(&dump.read(), boot_unix))
         .collect()
 }
 

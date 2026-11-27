@@ -16,6 +16,12 @@ use super::*;
 use crate::health_state::{self, Held};
 use crate::host_health::BootFacts;
 use crate::shutdown_probe::{GoingDown, ShutdownProbe};
+use hostkeeper_proto::health::MAX_SOURCE_REASON;
+
+/// The pstore dumps under `root`, listed and read.
+fn dumps(root: &Path) -> io::Result<Vec<Dump>> {
+    super::dumps(root).map(|found| found.iter().map(Found::read).collect())
+}
 
 const BOOT_A: &str = "6d3a1c0e-9b2f-4e57-a1c4-2f8e7d6b5a49";
 const KEY_A: &str = "6d3a1c0e9b2f4e57";
@@ -606,12 +612,13 @@ fn a_journalctl_that_fails_makes_the_source_unreadable_and_is_run_again() {
 /// Proves a `journalctl` that cannot start or timed out is unreadable with the error, and rerun.
 #[test]
 fn a_journalctl_that_cannot_start_or_times_out_is_unreadable_and_run_again() {
+    let kept = |reason: String| health_state::cut(&reason, MAX_SOURCE_REASON);
     let args = journal_args().join(" ");
     let reason = format!("cannot run launchctl {args}: the fake has no answer");
-    assert_eq!(failing_journal(None), (reason, 2));
+    assert_eq!(failing_journal(None), (kept(reason), 2));
     let timed_out = LaunchctlError::TimedOut { args: args.clone() };
     let reason = format!("launchctl {args} did not finish within its deadline and was killed");
-    assert_eq!(failing_journal(Some(Err(timed_out))), (reason, 2));
+    assert_eq!(failing_journal(Some(Err(timed_out))), (kept(reason), 2));
 }
 
 /// Proves a boot whose start is not known gives its `/dev/kmsg` records no time.

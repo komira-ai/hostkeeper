@@ -18,7 +18,7 @@ use hostkeeper_daemon::host_health::{
     BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT,
 };
 use hostkeeper_daemon::kernel_log::KmsgRecord;
-use hostkeeper_daemon::kernel_sources::{Journal, KernelSources, Kmsg, PreviousBoot};
+use hostkeeper_daemon::kernel_sources::{Journal, JournalError, KernelSources, Kmsg, PreviousBoot};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_daemon::testing::FakeClock;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput, PlatformKind};
@@ -943,7 +943,7 @@ impl Kmsg for SameRecords {
 struct NoJournal;
 
 impl Journal for NoJournal {
-    fn previous_boot(&self) -> Result<PreviousBoot, String> {
+    fn previous_boot(&self) -> Result<PreviousBoot, JournalError> {
         Ok(PreviousBoot::NoJournal)
     }
 }

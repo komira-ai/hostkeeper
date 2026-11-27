@@ -163,8 +163,9 @@ previous boot (`board`); hwmon temperatures against their driver's own `crit` (`
 ext4 `errors_count` and read-only remounts (`disk`); and a missing or silent BMC (`host`, `bmc_missing`, decision 6). A filesystem
 nearly full is not hardware: it is part of `storage_failing` (5.1) with no hardware record.
 
-**Built (HH10)**: the kernel's log and its own files, in `crates/hostkeeper-daemon/src/kernel_sources.rs` (the reads, every 60 s on a
-worker of their own, from the daemon's start on a Linux or OpenRC host), judged by the pure functions of `kernel_log.rs` and
+**Built (HH10)**: the kernel's log and its own files, in `crates/hostkeeper-daemon/src/kernel_sources.rs` (the reads, every 60 s on one
+worker the two sources share, apart from the heartbeat's, from the daemon's start on a Linux or OpenRC host; `journalctl` runs with a
+30 s deadline and a 64 KiB output cap, and the reads of `/proc`, `/sys` and `/dev/kmsg` are of the kernel's own files and never block), judged by the pure functions of `kernel_log.rs` and
 `kernel_files.rs`, whose module docs give each rule; the fixtures are in `crates/hostkeeper-daemon/tests/fixtures/kernel/`.
 
 - Source `journal`: this boot's lines are followed on `/dev/kmsg` (opened once without blocking; at most 4096 records a read; the
@@ -180,7 +181,8 @@ worker of their own, from the daemon's start on a Linux or OpenRC host), judged 
   warning) each time it grows in a boot; each ext4 filesystem's `errors_count` (`disk`, warning) each time it grows; a filesystem of a
   block device mounted read-write in this boot and read-only now (`disk`, critical, asserted; deasserted when it is writable again,
   unmounted, or its boot ended); and the dumps of `/sys/fs/pstore` and of `/var/lib/systemd/pstore` (`board`: critical
-  `panic_hardware` when the dump names a machine check or a hardware error, a panic or an oops warning, else `info`), each once.
+  `panic_hardware` when a panic or an oops names an uncorrected hardware error, else a panic or an oops warning, else `info`), each
+  read once.
   Nothing is written, removed or cleared.
 - Each read reports its source's state in `HostHealth.sources` (`ok`, `unsupported` or `unreadable` with its reason).
 - Not built: a filesystem nearly full (`statvfs`). No field of `HostHealth` (HH1) carries a filesystem's fullness, and it is not a
