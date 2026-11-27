@@ -133,7 +133,7 @@ impl BootFacts {
 
 /// The boot before the one the daemon runs in, which ended with no clean-shutdown marker.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreviousBoot {
+pub struct UncleanBoot {
     /// Its boot id.
     pub boot_id: String,
     /// When it began, Unix seconds; 0 when not read.
@@ -335,11 +335,11 @@ impl HealthKeeper {
     /// The boot before this one, when it ended with no clean-shutdown marker (the module's doc);
     /// none otherwise, and when this start's boot id was not read.
     #[must_use]
-    pub fn unclean_previous_boot(&self) -> Option<PreviousBoot> {
+    pub fn unclean_previous_boot(&self) -> Option<UncleanBoot> {
         let inner = lock(&self.inner);
         let file = &inner.file;
         (inner.boot_known && !file.previous_clean && !file.previous_boot_id.is_empty()).then(|| {
-            PreviousBoot {
+            UncleanBoot {
                 boot_id: file.previous_boot_id.clone(),
                 boot_unix: file.previous_boot_unix,
             }

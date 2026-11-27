@@ -50,7 +50,7 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 use crate::hardware_sources::{HardwareSource, SourceRead};
 use crate::health_state::cut;
-use crate::host_health::{HealthKeeper, PreviousBoot};
+use crate::host_health::{HealthKeeper, UncleanBoot};
 use crate::mac::TOOL_DEADLINE;
 use crate::mac_capacity::{
     CAPACITY_SYSCTL_ARGS, PROFILER_ARGS, SYSTEM_PROFILER, capacity, parse_profile, parse_sysctls,
@@ -318,7 +318,7 @@ pub fn judge_shutdown(keeper: &HealthKeeper, reports: &[PanicReport], now_unix: 
 
 /// Whether `report` happened in the boot `previous`, which the boot that began at `boot_unix`
 /// followed: at or after `previous` began (when known), and before this one began (when known).
-fn of_boot(report: &PanicReport, previous: &PreviousBoot, boot_unix: u64) -> bool {
+fn of_boot(report: &PanicReport, previous: &UncleanBoot, boot_unix: u64) -> bool {
     report.time_unix >= previous.boot_unix && (boot_unix == 0 || report.time_unix < boot_unix)
 }
 

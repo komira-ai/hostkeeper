@@ -16,7 +16,7 @@ use hostkeeper_daemon::health_state::{
     Refused,
 };
 use hostkeeper_daemon::host_health::{
-    BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT, PreviousBoot,
+    BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper, MACHINE_ID, PROC_STAT, UncleanBoot,
 };
 use hostkeeper_daemon::kernel_log::KmsgRecord;
 use hostkeeper_daemon::kernel_sources::{
@@ -758,7 +758,7 @@ fn the_boot_before_is_unclean_only_after_an_unclean_end() {
     let (keeper, _) = start(&dir, boot("boot-2"), yes());
     assert_eq!(
         keeper.unclean_previous_boot(),
-        Some(PreviousBoot {
+        Some(UncleanBoot {
             boot_id: "boot-1".to_owned(),
             boot_unix: 1_795_000_000,
         })
@@ -767,7 +767,7 @@ fn the_boot_before_is_unclean_only_after_an_unclean_end() {
     let (keeper, _) = start(&dir, boot("boot-2"), yes());
     assert_eq!(
         keeper.unclean_previous_boot(),
-        Some(PreviousBoot {
+        Some(UncleanBoot {
             boot_id: "boot-1".to_owned(),
             boot_unix: 1_795_000_000,
         }),
