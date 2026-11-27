@@ -315,6 +315,19 @@ fn checks_out_komira(step: &Node) -> bool {
         && with_of(step).is_some_and(|w| w.get("repository") == Some(&KOMIRA))
 }
 
+/// Whether `step` of the workflow `file` is the checkout of the tool's sources in [`FILE`]: its
+/// `with:` exactly [`tool_checkout`] at its own `ref:`. It writes into `buck-out/komira` alone,
+/// so the job's `cargo xtask` still runs the xtask of the workspace's own checkout
+/// ([`super::release_ref`] lets it stand in a job that calls xtask).
+pub fn is_tool_checkout(file: &str, step: &Node) -> bool {
+    let with = with_of(step);
+    let commit = with
+        .as_ref()
+        .and_then(|w| w.get("ref").copied())
+        .unwrap_or_default();
+    file == FILE && checks_out_komira(step) && with == Some(borrowed(&tool_checkout(commit)))
+}
+
 /// What is wrong with the job [`JOB`].
 fn job_problems(job: &Node) -> Vec<String> {
     let mut problems = Vec::new();
@@ -378,12 +391,7 @@ fn job_problems(job: &Node) -> Vec<String> {
     let compiles = positions(steps, |s| run_of(s) == Some(COMPILE_RUN));
     let tool_built = match (&checkouts[..], &compiles[..]) {
         ([checkout], [compile]) => {
-            let with = with_of(&steps[*checkout]);
-            let commit = with
-                .as_ref()
-                .and_then(|w| w.get("ref").copied())
-                .unwrap_or_default();
-            with == Some(borrowed(&tool_checkout(commit)))
+            is_tool_checkout(FILE, &steps[*checkout])
                 && checkout < compile
                 && farms.first().is_none_or(|first| compile < first)
         }
