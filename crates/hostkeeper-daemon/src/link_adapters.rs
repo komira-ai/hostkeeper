@@ -44,7 +44,6 @@ use hostkeeper_link::{
 };
 use hostkeeper_observe::{RestartWindow, ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
-use hostkeeper_steps::Clock as _;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 
