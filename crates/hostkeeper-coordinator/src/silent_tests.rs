@@ -292,3 +292,17 @@ fn the_kind_is_critical_with_its_token_and_value() {
         )
     );
 }
+
+/// Behaviour: a host that keeps heartbeating `web` while its last word of `store` is an update
+/// running is busy for `web` until that word is the bound old, and not from then on.
+/// Catches: a stale word of one service that keeps a live host from every other service's update
+/// for good.
+#[test]
+fn a_stale_update_of_another_service_keeps_the_host_busy_only_until_the_bound() {
+    let mut farm = Farm::after(updating(beat("1.0"), "2.0"));
+    let edge = LAST + BOUND;
+    farm.beat("web", "d1", beat("1.0"), edge - 1);
+    assert!(farm.fleet.is_busy_besides("web", &id("d1"), secs(edge - 1)));
+    farm.beat("web", "d1", beat("1.0"), edge);
+    assert!(!farm.fleet.is_busy_besides("web", &id("d1"), secs(edge)));
+}

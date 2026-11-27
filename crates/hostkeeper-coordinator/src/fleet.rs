@@ -753,8 +753,9 @@ impl Fleet {
     }
 
     /// Whether the host `id` is busy with a service other than `service`: one of its other
-    /// services is updating, or has an order outstanding for it. A host does one update at a
-    /// time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
+    /// services is updating ([`Host::is_updating`]: not silent past
+    /// [`crate::silent::SILENT_UPDATE_AFTER`]), or has an order outstanding for it. A host does
+    /// one update at a time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
     /// is leaving, which no service counts it for.
     #[must_use]
     pub fn is_busy_besides(&self, service: &str, id: &HostId, now: Duration) -> bool {
@@ -764,7 +765,7 @@ impl Fleet {
             .iter()
             .chain(leaving)
             .filter(|(s, _)| s.as_str() != service)
-            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.beat.updating.is_some()));
+            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.is_updating(now)));
         updating
             || self.orders.iter().any(|((o, s), order)| {
                 o == id && s != service && now.saturating_sub(order.at) < ORDER_AGE
