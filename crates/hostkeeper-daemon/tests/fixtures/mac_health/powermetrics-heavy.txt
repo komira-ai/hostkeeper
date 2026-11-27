@@ -1,0 +1,14 @@
+Machine model: Mac14,3
+OS version: 25A000
+Boot arguments:
+Boot time: Thu Nov 26 03:00:00 2026
+
+
+
+*** Sampled system activity (Thu Nov 26 03:10:00 2026 +0000) (5002.11ms elapsed) ***
+
+
+**** Thermal pressure ****
+
+Current pressure level: Heavy
+

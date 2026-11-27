@@ -66,21 +66,31 @@ impl RestartWindow {
             recent = recent.saturating_add(push(&mut samples, now_secs, unit.restarts.count));
             kept.insert(unit.unit.clone(), samples);
         }
-        let shown = seen
-            .iter()
-            .find(|unit| !matches!(unit.restarts.result.as_str(), "" | "success"))
-            .or(seen.first())?;
+        let restarts = summarize(seen, recent)?;
         self.services.insert(service.to_owned(), kept);
-        let result = shown.restarts.result.as_str();
-        Some(ServiceRestarts {
-            count: seen
-                .iter()
-                .fold(0u32, |sum, unit| sum.saturating_add(unit.restarts.count)),
-            recent,
-            last_result: result[..result.floor_char_boundary(MAX_LAST_RESULT)].to_owned(),
-            exit_status: shown.restarts.exit_status,
-        })
+        Some(restarts)
     }
+}
+
+/// The restarts of a service whose run units counted `seen`, `recent` of them in the last
+/// [`RECENT_SECS`] seconds as its caller counted them: `count` the units' counts summed, and the
+/// `last_result` and `exit_status` of the first unit whose result is not `success` (nor empty),
+/// else of the first unit (the module's doc); `None` when `seen` is empty. The window of a Mac's
+/// launchd jobs, which the daemon keeps in its state file, gives its counts here too.
+pub fn summarize(seen: &[RunUnitRestarts], recent: u32) -> Option<ServiceRestarts> {
+    let shown = seen
+        .iter()
+        .find(|unit| !matches!(unit.restarts.result.as_str(), "" | "success"))
+        .or(seen.first())?;
+    let result = shown.restarts.result.as_str();
+    Some(ServiceRestarts {
+        count: seen
+            .iter()
+            .fold(0u32, |sum, unit| sum.saturating_add(unit.restarts.count)),
+        recent,
+        last_result: result[..result.floor_char_boundary(MAX_LAST_RESULT)].to_owned(),
+        exit_status: shown.restarts.exit_status,
+    })
 }
 
 /// Adds the observation `count` at `now` to one unit's `samples`, and gives the unit's restarts

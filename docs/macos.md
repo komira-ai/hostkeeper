@@ -445,9 +445,32 @@ reads: it removes no report and runs each program with a fixed argument list.
   memory, the CPUs and each internal disk (BSD name, size, a digest of its serial;
   `crates/hostkeeper-daemon/src/mac_capacity.rs`). A Mac lists no memory modules, and its memory
   errors are not monitored (Apple silicon has no error counters to read).
+- **The internal disk's SMART verdict.** `diskutil info -plist disk0` every 15 minutes
+  (`crates/hostkeeper-daemon/src/mac_disk.rs`): `SMARTStatus` `Failing` is one critical
+  `disk_failing` record, asserted once however long it stays; `Verified` after it ends it with a
+  critical deassertion. `Not Supported` is the source `unsupported`; any other word, or output
+  that is not a property list with a `SMARTStatus`, is `unreadable` with its reason.
+- **Thermal pressure.** `pmset -g therm` every minute (`crates/hostkeeper-daemon/src/mac_thermal.rs`):
+  a thermal or performance warning level above 0, or a CPU speed or scheduler limit under 100,
+  means macOS limits the Mac for heat, and only then `powermetrics --samplers thermal -n 1` is run,
+  at most once in 5 minutes, for the pressure level. Five samples in a row at `heavy` or worse
+  assert one `thermal_pressure` record, a warning, or critical when one of them was `trapping` or
+  `sleeping`; a `trapping` sample while a warning is open escalates it with a critical assertion;
+  10 minutes of `nominal` samples end it.
 
-Each source's state is sent with the records (`panic`, `system_profiler`: read, or unreadable
-with its reason), so a source that could not be read never looks like one that found nothing.
+Each source's state is sent with the records (`panic`, `system_profiler`, `diskutil`, `thermal`:
+read, unsupported, or unreadable with its reason), so a source that could not be read never looks
+like one that found nothing.
+
+**Restarts of the Mac's services.** launchd keeps no restart counter, so the daemon reads each run
+job's `runs` from `launchctl print` (the times launchd spawned it since it was loaded, less the
+first) and keeps the counts at which it changed in its health state file, the `runs` ring
+(`crates/hostkeeper-daemon/src/mac_runs.rs`). Each heartbeat's `restarts` of a service is made
+from it as on Linux (docs/service-observation.md): its count, the restarts of the last 10 minutes,
+and the last result (`signal`, `success` or `exit-code`) with the exit code. Because the ring is in
+the file, a restart of the daemon keeps it, so the daemon's own job in a crash loop is counted. A
+`bootout` and `bootstrap` of a job (a changed plist loaded again) start its count at 0, which is
+not counted; a `kickstart` is counted as a restart.
 
 ### The Remote Login probe
 

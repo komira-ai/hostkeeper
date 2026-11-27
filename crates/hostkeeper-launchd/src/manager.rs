@@ -2,10 +2,17 @@
 //!
 //! A run unit of a manifest is a launchd label here. A label launchd does not hold is
 //! [`ActiveState::NotFound`]; a job that is loaded is read from its `state` and its last exit.
+//! Its restarts ([`UnitRestarts`]) are read from launchd's `runs`, the times launchd spawned the
+//! job since it was loaded, less the first: a job that never ran, or ran once, has restarted 0
+//! times. Its result is `signal` when a signal ended its last run, `success` when that run exited
+//! 0, `exit-code` when it exited otherwise, and empty when it never exited; its exit status is
+//! that run's exit code. A job whose print has no `runs` line has no restarts. Unlike systemd's
+//! `NRestarts`, `runs` counts a `kickstart` by hand too; a `bootout` and `bootstrap` (how a
+//! changed plist is loaded again) start it at 0, so the window of the restarts starts again.
 //! Anything that keeps the answer from being read is an error and never a state, so the observer
 //! discards the round instead of calling a service absent or stopped.
 
-use hostkeeper_observe::{ActiveState, ObserveError, ServiceManager, UnitState};
+use hostkeeper_observe::{ActiveState, ObserveError, ServiceManager, UnitRestarts, UnitState};
 
 use crate::label::Label;
 use crate::launchctl::{JobInfo, JobState, JobStatus, Launchctl, print};
@@ -45,8 +52,22 @@ fn loaded(info: &JobInfo) -> Result<UnitState, String> {
         active,
         sub: info.state.word().to_owned(),
         main_pid,
-        restarts: None,
+        restarts: info.runs.map(|runs| UnitRestarts {
+            count: runs.saturating_sub(1),
+            result: last_result(info).to_owned(),
+            exit_status: info.last_exit_status,
+        }),
     })
+}
+
+/// The last result of a loaded job, in the words of [`UnitRestarts::result`] (the module's doc).
+fn last_result(info: &JobInfo) -> &'static str {
+    match (info.last_terminating_signal, info.last_exit_status) {
+        (Some(_), _) => "signal",
+        (None, Some(0)) => "success",
+        (None, Some(_)) => "exit-code",
+        (None, None) => "",
+    }
 }
 
 impl<L: Launchctl> ServiceManager for LaunchdServiceManager<L> {

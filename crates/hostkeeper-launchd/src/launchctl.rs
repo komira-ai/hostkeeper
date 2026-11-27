@@ -245,6 +245,9 @@ pub struct JobInfo {
     pub last_exit_status: Option<i32>,
     /// The signal that ended the last run, when one did.
     pub last_terminating_signal: Option<i32>,
+    /// How many times launchd has spawned the job since it was loaded (`runs`); `None` when the
+    /// line is not printed. A `bootout` and `bootstrap` start it again at 0; a `kickstart` counts.
+    pub runs: Option<u32>,
 }
 
 /// Why `launchctl print` output could not be read.
@@ -306,7 +309,7 @@ fn number<T: std::str::FromStr>(key: &str, value: &str, digits: &str) -> Result<
 }
 
 /// Reads the output of `launchctl print system/<label>`: the job's state and, when printed, its
-/// process id, last exit code and last terminating signal. Only the lines directly inside the
+/// process id, last exit code, last terminating signal and runs. Only the lines directly inside the
 /// job's braces are read; nested blocks are skipped whole, and lines this function does not know
 /// are ignored.
 pub fn parse_print(stdout: &str) -> Result<JobInfo, ParseError> {
@@ -347,11 +350,15 @@ pub fn parse_print(stdout: &str) -> Result<JobInfo, ParseError> {
     let last_terminating_signal: Option<i32> = once(&found, &["last terminating signal"])?
         .map(|(key, value)| number(key, value, value.rsplit_once(':').map_or(value, |(_, n)| n)))
         .transpose()?;
+    let runs: Option<u32> = once(&found, &["runs"])?
+        .map(|(key, value)| number(key, value, value))
+        .transpose()?;
     Ok(JobInfo {
         state: JobState::from_word(state),
         pid,
         last_exit_status,
         last_terminating_signal,
+        runs,
     })
 }
 

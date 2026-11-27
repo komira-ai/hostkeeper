@@ -204,7 +204,11 @@ fn the_host_sources_are_started_on_the_dispatch_and_read_nothing_before() {
     assert_eq!(dispatch.pending(), 6);
     let mac = ManualDispatch::default();
     at_host(PlatformKind::Macos, &keeper, &clock, &sleeper, &mac);
-    assert_eq!(mac.pending(), 2, "a Mac's panic reports and capacity");
+    assert_eq!(
+        mac.pending(),
+        4,
+        "a Mac's panic reports, capacity, disk and thermal pressure"
+    );
     assert!(keeper.health().sources.is_empty(), "nothing read yet");
 }
 
