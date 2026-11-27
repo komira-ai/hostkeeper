@@ -30,6 +30,12 @@
 //! coordinator through a [`Transport`]; [`TcpTransport`] ([`dial`]) is the production one and
 //! the only code of the crate that opens a socket, with [`TcpDial`], its async counterpart.
 //!
+//! Every link dials the addresses a [`Reach`] ([`reach`]) gives it: those the coordinator's name
+//! looks up to (through a [`Lookup`]; the daemon's is a [`BackgroundLookup`] over
+//! [`SystemLookup`]), then the last address whose handshake completed as the coordinator, then
+//! the daemon config's `coordinator_ip`. The certificate is checked against the name whatever
+//! address answered.
+//!
 //! [`CoordinatorGet`] ([`fetch`]) reads a path of the coordinator's agent listener over the same
 //! mutual TLS and streams the body to the caller's sink, through the same [`Transport`]: the
 //! daemon's mirror of a private repository reads its files with it. `get_from` reads a file from
@@ -43,7 +49,9 @@
 //! the managed block of the login account's `authorized_keys`, only while the coordinator
 //! advertises [`Feature::OperatorKeysV1`]. Its host prerequisites ([`PushedPrerequisites`]) go to
 //! the daemon's [`PrerequisitesSink`], which makes sure of them on the host, only while the
-//! coordinator advertises [`Feature::PrerequisitesV1`].
+//! coordinator advertises [`Feature::PrerequisitesV1`]. The host's hardware health comes from the
+//! daemon's [`HostHealthSource`], asked only while the coordinator advertises
+//! [`Feature::HostHealthV1`], and the records a reply names written go back to it.
 //!
 //! [`GrpcMtlsLink`] ([`grpc`]) is the same call over gRPC (`Coordinator.Heartbeat` of
 //! `hostkeeper.agent.v1`) and HTTP/2 on the same mutual TLS, reaching the coordinator through a
@@ -61,6 +69,7 @@ pub mod grpc;
 mod health;
 pub mod heartbeater;
 pub mod host_facts;
+pub mod host_health;
 pub mod host_ssh;
 mod maintenance;
 pub mod mtls;
@@ -73,6 +82,7 @@ pub mod ports;
 pub mod prerequisites;
 pub mod probe;
 mod proto_map;
+pub mod reach;
 pub mod repositories;
 pub mod serial_console;
 #[cfg(feature = "testing")]
@@ -87,7 +97,7 @@ pub use beat::{
 };
 pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};
-pub use dial::{CALL_SECS, TcpDial, TcpTransport};
+pub use dial::{BackgroundLookup, CALL_SECS, LOOKUP_SECS, SystemLookup, TcpDial, TcpTransport};
 pub use fetch::{CoordinatorGet, GetError, Got, Limit};
 pub use full_disk_access::{FullDiskAccess, FullDiskAccessSource};
 pub use grpc::GRPC_REPLY_MAX;
@@ -96,6 +106,7 @@ pub use heartbeater::{
     ACKED_KEPT, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, LoopFlags, Ports,
 };
 pub use host_facts::PushedFacts;
+pub use host_health::HostHealthSource;
 pub use host_ssh::{PASSWORD_KEEP, PASSWORD_OFF, PushedSsh, SshReport};
 pub use mtls::{Conn, EndpointError, HEAD_MAX, JsonMtlsLink, REPLY_MAX, Transport};
 pub use names::{OrderId, PackageDigest, Reason, WordError};
@@ -119,5 +130,6 @@ pub use prerequisites::{
     PrerequisitesRefusal, PrerequisitesReport, PushedPrerequisites,
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
+pub use reach::{Lookup, Reach};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};
 pub use serial_console::SerialConsoleReport;

@@ -69,9 +69,10 @@ impl Fleet {
     }
 
     /// Whether the host `id` is busy with a service other than `service`: one of its other
-    /// services is updating, or has an order outstanding for it. A host does one update at a
-    /// time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
-    /// is leaving, which no service counts it for.
+    /// services is updating ([`Host::is_updating`]: not silent past
+    /// [`crate::silent::SILENT_UPDATE_AFTER`]), or has an order outstanding for it. A host does
+    /// one update at a time. A host that is moving ([`crate::moving`]) is also busy with an
+    /// update of a package it is leaving, which no service counts it for.
     #[must_use]
     pub fn is_busy_besides(&self, service: &str, id: &HostId, now: Duration) -> bool {
         let leaving = self.outside.iter().filter(|_| self.is_moving(id));
@@ -80,7 +81,7 @@ impl Fleet {
             .iter()
             .chain(leaving)
             .filter(|(s, _)| s.as_str() != service)
-            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.beat.updating.is_some()));
+            .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.is_updating(now)));
         updating
             || self
                 .orders
@@ -88,8 +89,9 @@ impl Fleet {
                 .any(|((o, s), order)| o == id && s != service && self.order_holds(id, order, now))
     }
 
-    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot`], or an
-    /// order is outstanding for it. A host an operator excluded from `service` holds one only
+    /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot_at`] (a host
+    /// silent for [`crate::silent::SILENT_UPDATE_AFTER`] holds none for an update it last said
+    /// ran), or an order is outstanding for it. A host an operator excluded from `service` holds one only
     /// while it runs an update (updating, or its promotion pending) or has an order outstanding,
     /// so a host excluded mid-update keeps its slot until that update ends; one whose last update
     /// failed and that is not healthy holds none, since the service no longer orders it and
@@ -97,10 +99,10 @@ impl Fleet {
     /// as it stays excluded.
     #[must_use]
     pub fn holds_slot(&self, service: &str, id: &HostId, host: &Host, now: Duration) -> bool {
-        let running = host.beat.updating.is_some() || host.beat.promotion_pending;
+        let running = host.is_updating(now) || host.is_promoting(now);
         let held = match self.is_excluded(service, id) {
             true => running,
-            false => host.holds_slot(),
+            false => host.holds_slot_at(now),
         };
         held || self.is_ordered(service, id, now)
     }
@@ -126,8 +128,9 @@ impl Fleet {
     /// Notes that the host `id`, of the role named `role` on `platform`, said when it was last
     /// heard, before the coordinator started, that it was updating `service` from `running` to
     /// `updating`: until a word of it about the service replaces this, it holds the service's
-    /// update slot as a silent updating host does, unhealthy and last heard at no time since the
-    /// start. It is kept as what the host occupies ([`Self::occupants_of`]), never as one of the
+    /// update slot as a silent updating host does, unhealthy and taken as last heard at the
+    /// coordinator's start: the silence the coordinator can count begins there, so the word holds
+    /// for [`crate::silent::SILENT_UPDATE_AFTER`] after the start at most. It is kept as what the host occupies ([`Self::occupants_of`]), never as one of the
     /// service's hosts, so no plan counts it. A host the fleet already holds a word of for the
     /// service is left as it is.
     pub fn hold_restored(
@@ -165,7 +168,7 @@ impl Fleet {
         let host = Host {
             role: role.to_owned(),
             beat,
-            seen: Duration::ZERO,
+            seen: self.started,
         };
         self.outside
             .entry(service.to_owned())

@@ -114,6 +114,8 @@ errno 0.3.14 12002
 event-listener 5.4.2 35131
 event-listener-strategy 0.5.4 16179
 fallible-iterator 0.2.0 18509
+fallible-iterator 0.3.0 19639
+fallible-streaming-iterator 0.1.9 9249
 fast-float2 0.2.4 46532
 fastrand 2.5.0 20782
 ff 0.14.0 23241
@@ -126,7 +128,7 @@ float16 0.1.7 54214
 fnv 1.0.7 11266
 foldhash 0.1.5 21901
 foldhash 0.2.0 23329
-form_urlencoded 1.2.2 9347
+form_urlencoded 1.2.3 9323
 from_variant 3.0.0 2391
 futures 0.3.34 61966
 futures-channel 0.3.34 33165
@@ -202,6 +204,7 @@ kem 0.3.0 9657
 lazy_static 1.5.1 13937
 libc 0.2.190 853678
 libm 0.2.16 164243
+libsqlite3-sys 0.40.0 2759453
 linux-raw-sys 0.12.1 3006116
 litemap 0.8.3 35045
 lock_api 0.4.14 29249
@@ -277,6 +280,7 @@ pin-project-internal 1.1.13 29331
 pin-project-lite 0.2.17 31034
 pkcs5 0.8.1 49232
 pkcs8 0.11.0 34863
+pkg-config 0.3.34 21370
 plist 1.10.3 62640
 poly1305 0.9.1 33625
 polyval 0.7.3 26284
@@ -299,7 +303,7 @@ prost-reflect 0.16.5 116826
 prost-types 0.14.4 51454
 protox 0.10.0 43266
 protox-parse 0.10.0 43394
-pulldown-cmark 0.13.5 157218
+pulldown-cmark 0.13.6 157338
 pulldown-cmark-to-cmark 22.0.3 50906
 quick-xml 0.42.0 233019
 quote 1.0.47 31622
@@ -318,13 +322,14 @@ rfc6979 0.6.0 15702
 ring 0.17.14 1502610
 rpm 0.30.2 440651
 rpm-version 0.5.1 29197
+rusqlite 0.43.0 184812
 russh 0.65.1 272620
 russh-cryptovec 0.62.0 13520
 russh-util 0.52.0 1849
 rustc-hash 2.1.3 14811
 rustc_version 0.4.1 12245
 rusticata-macros 4.1.0 11746
-rustix 1.1.5 425681
+rustix 1.1.6 426484
 rustls 0.23.46 386227
 rustls-native-certs 0.8.5 21110
 rustls-pki-types 1.15.1 39322
@@ -446,13 +451,14 @@ universal-hash 0.6.1 9478
 untrusted 0.9.0 14447
 ureq 3.4.2 158495
 ureq-proto 0.6.5 72775
-url 2.5.8 86512
+url 2.5.9 89968
 urlencoding 2.1.3 6538
 utf16_iter 1.1.0 11267
 utf8-zero 0.8.1 13984
 utf8_iter 1.1.0 14981
 utf8parse 0.2.2 13499
 utf_types 1.0.0 19371
+vcpkg 0.2.15 228735
 version_check 0.9.5 15554
 want 0.3.2 7311
 whoami 2.1.3 28630

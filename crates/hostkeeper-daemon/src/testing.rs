@@ -352,7 +352,7 @@ impl ScriptedLauncher {
     }
 
     /// Holds the next run of `step` for `service` until a stop of its unit works, as a unit
-    /// that runs until it is stopped (an unbounded `prepare`), or the test releases it.
+    /// that runs until it is stopped (a `prepare` that never returns), or the test releases it.
     pub fn hold_until_stopped(&self, service: &str, step: Step) -> Gate {
         let gate = self.hold(service, step);
         let key = (service.to_owned(), step);

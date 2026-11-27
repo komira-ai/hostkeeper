@@ -15,6 +15,12 @@ ca_sha256       = "@@CA_SHA256@@ (64 hex digits)"
 # Where packages are fetched from: an https:// URL.
 release_channel = "@@RELEASE_CHANNEL@@ (an https URL)"
 
+# The coordinator's address beside the name of `coordinator` (an IPv4 or IPv6 address, without
+# brackets or port): the daemon dials it, on the URL's port, when the name cannot be looked up
+# (a name of a public zone, while the site's uplink is down), and checks the coordinator's
+# certificate against the name as always. Leave it out where the name always looks up.
+# coordinator_ip = "192.0.2.10"
+
 # A Linux server's serial console port (ttyS<n> or ttyAMA<n>; ttyS1 on a farm server, whose
 # BMC carries it): the daemon keeps the serial console baseline on it and reports it
 # (docs/operations/console.md). Leave it out on a host with no serial console.

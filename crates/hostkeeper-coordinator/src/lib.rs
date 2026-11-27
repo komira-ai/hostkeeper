@@ -243,6 +243,7 @@ pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;
 pub mod session;
+pub(crate) mod silent;
 pub(crate) mod ssh_access;
 pub(crate) mod ssh_book;
 pub mod ssh_ca;
@@ -379,6 +380,8 @@ mod group_decision_tests;
 mod group_first_install_tests;
 #[cfg(test)]
 mod group_force_tests;
+#[cfg(test)]
+mod group_halt_scope_tests;
 #[cfg(test)]
 mod group_incident_tests;
 #[cfg(test)]
@@ -586,6 +589,8 @@ mod services_tests;
 mod session_tests;
 #[cfg(test)]
 mod silent_health_tests;
+#[cfg(test)]
+mod silent_tests;
 #[cfg(test)]
 mod stages_edge_tests;
 #[cfg(test)]

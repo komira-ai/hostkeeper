@@ -1119,7 +1119,7 @@ not reached.
 
 `/hostkeeper.operator.v1.Releases/Halt`
 
-Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
+Halt a service by hand: no host of it is ordered, whatever version is desired, until the halt
 is cleared.
 
 | flag | value | meaning |

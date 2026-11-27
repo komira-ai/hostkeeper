@@ -1,0 +1,4 @@
+Oops#1 Part1
+<1>[  512.000000] BUG: kernel NULL pointer dereference, address: 0000000000000008
+<4>[  512.000100] Oops: 0000 [#1] PREEMPT SMP NOPTI
+<4>[  512.000200] CPU: 5 PID: 4242 Comm: worker Not tainted 6.8.0 #1

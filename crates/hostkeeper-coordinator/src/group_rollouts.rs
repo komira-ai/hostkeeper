@@ -76,7 +76,8 @@ impl Coordinator {
         let marks = state.marks_in(group, &service);
         let kept_now = state.rollout_in(group, &service);
         let view = View::effective(&one.def, &want, kept_now.as_ref(), &fleet, now);
-        let stopped = marks.halt.is_some() || marks.bad.contains(&want.version);
+        let stopped =
+            crate::halt::stops(&marks, &want.version) || marks.bad.contains(&want.version);
         let waiting = view.wait(&one.def, &want, &fleet, now) == Some(Wait::ManualAdvance);
         let ready = !stopped && !fleet.is_quiet(now) && waiting;
         let view = ready

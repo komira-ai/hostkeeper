@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// What a path holds, for comparing two moments.
@@ -16,26 +17,42 @@ pub enum Entry {
 /// A directory's contents by path relative to it.
 pub type Tree = BTreeMap<PathBuf, Entry>;
 
+/// Each path's entry and its permission bits (`0` for a link, whose own mode means nothing):
+/// what the guarded part of a sandbox is compared by, so a change of mode alone is seen.
+pub(crate) type ModedTree = BTreeMap<PathBuf, (Entry, u32)>;
+
 /// Reads the whole tree under `root`. Links are recorded, not followed.
 pub fn snapshot(root: &Path) -> io::Result<Tree> {
-    let mut tree = Tree::new();
+    Ok(moded(root)?
+        .into_iter()
+        .map(|(path, (entry, _))| (path, entry))
+        .collect())
+}
+
+/// [`snapshot`] with the permission bits of each entry.
+pub(crate) fn moded(root: &Path) -> io::Result<ModedTree> {
+    let mut tree = ModedTree::new();
     walk(root, root, &mut tree)?;
     Ok(tree)
 }
 
-fn walk(base: &Path, dir: &Path, tree: &mut Tree) -> io::Result<()> {
+fn walk(base: &Path, dir: &Path, tree: &mut ModedTree) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let relative = path.strip_prefix(base).unwrap_or(&path).to_path_buf();
         let kind = entry.file_type()?;
         if kind.is_symlink() {
-            tree.insert(relative, Entry::Link(fs::read_link(&path)?));
-        } else if kind.is_dir() {
-            tree.insert(relative, Entry::Dir);
+            tree.insert(relative, (Entry::Link(fs::read_link(&path)?), 0));
+            continue;
+        }
+        // Not followed: the entry is not a link.
+        let mode = entry.metadata()?.permissions().mode() & 0o7777;
+        if kind.is_dir() {
+            tree.insert(relative, (Entry::Dir, mode));
             walk(base, &path, tree)?;
         } else {
-            tree.insert(relative, Entry::File(fs::read(&path)?));
+            tree.insert(relative, (Entry::File(fs::read(&path)?), mode));
         }
     }
     Ok(())
@@ -43,6 +60,14 @@ fn walk(base: &Path, dir: &Path, tree: &mut Tree) -> io::Result<()> {
 
 /// The paths added, removed or changed between two snapshots, one line each.
 pub fn changes(before: &Tree, after: &Tree) -> Vec<String> {
+    changed(before, after)
+}
+
+/// [`changes`] of any two maps of paths, whatever each path holds.
+pub(crate) fn changed<T: PartialEq>(
+    before: &BTreeMap<PathBuf, T>,
+    after: &BTreeMap<PathBuf, T>,
+) -> Vec<String> {
     let mut out = Vec::new();
     for (path, was) in before {
         match after.get(path) {
@@ -119,9 +144,9 @@ impl Sandbox {
 
     /// What no step may change: everything but the record, the world and the harness's own
     /// kill-point count. So the staged and the previous release, `outside/`, the params file and
-    /// the files of the sandbox root.
-    pub(crate) fn guarded(&self) -> io::Result<Tree> {
-        let mut tree = snapshot(&self.root)?;
+    /// the files of the sandbox root, each with its mode.
+    pub(crate) fn guarded(&self) -> io::Result<ModedTree> {
+        let mut tree = moded(&self.root)?;
         tree.retain(|path, _| {
             !path.starts_with("record")
                 && !path.starts_with("world")

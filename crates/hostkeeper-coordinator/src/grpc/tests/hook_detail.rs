@@ -92,8 +92,9 @@ async fn a_halts_detail_reaches_hosts_get_and_the_halt_alert() {
     assert_eq!(
         halts,
         [format!(
-            "kbf is halted at 2.0 by s1, check state_invalid ({SAID:?}): nothing is ordered \
-             for it until an operator clears the halt"
+            "kbf is halted at 2.0 by s1, check state_invalid ({SAID:?}): the hosts that \
+             reported it are ordered nothing of it, and no host is ordered a version it was \
+             reported at, until an operator clears the halt"
         )]
     );
 

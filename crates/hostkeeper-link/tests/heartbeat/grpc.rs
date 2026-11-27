@@ -19,12 +19,12 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_coordinator::http::Surface;
 use hostkeeper_coordinator::listen::connection;
 use hostkeeper_coordinator::service::Coordinator;
-use hostkeeper_link::testing::{FakeLink, RecordingLog, identity};
+use hostkeeper_link::testing::{FakeLink, FakeLookup, RecordingLog, identity};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, AsyncConn, CoordinatorLink, EndpointError, Entry, Feature, GrpcDial,
     GrpcLinkError, GrpcMtlsLink, Health, Heartbeat, LinkError, MAX_HEARTBEAT_BYTES, NegotiatedLink,
-    Order, OrderRef, OrderResult, Outcome, Platform, Reason, Reply, ServiceFacts, Target, TcpDial,
-    TrustFault, Unsendable, Verb,
+    Order, OrderRef, OrderResult, Outcome, Platform, Reach, Reason, Reply, ServiceFacts, Target,
+    TcpDial, TrustFault, Unsendable, Verb,
 };
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::{Alpn, TlsSource};
@@ -37,7 +37,10 @@ use tokio_rustls::TlsAcceptor;
 use crate::coordinator::{
     OPERATOR, PATIENCE, apt_entry, call, coordinator, serve_coordinator, set_web_release,
 };
-use crate::tls::{COORDINATOR, Ca, Farm, Leaf, PipeTransport, Pki, config, config_text, link};
+use crate::tls::{
+    COORDINATOR, COORDINATOR_IP, Ca, Farm, Leaf, PipeTransport, Pki, config, config_text, link,
+    reach,
+};
 use crate::verdict;
 use crate::{digest, order_id, reply, service, version};
 
@@ -55,7 +58,7 @@ impl DuplexDial {
     }
 
     /// The hosts and ports dialed, in order.
-    fn dialed(&self) -> Vec<(String, u16)> {
+    pub(crate) fn dialed(&self) -> Vec<(String, u16)> {
         self.dialed.lock().expect("the dialed").clone()
     }
 }
@@ -142,7 +145,7 @@ impl Server {
 }
 
 /// A scratch directory and the coordinator over it (see [`coordinator`]).
-fn fresh(name: &str) -> (Scratch, Arc<Coordinator>) {
+pub(crate) fn fresh(name: &str) -> (Scratch, Arc<Coordinator>) {
     let dir =
         Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch directory");
     let coordinator = coordinator(dir.path());
@@ -155,7 +158,15 @@ pub(crate) fn grpc_link(
     dial: &Arc<DuplexDial>,
     log: &Arc<RecordingLog>,
 ) -> GrpcMtlsLink {
-    GrpcMtlsLink::new(&config(&farm.ca), &pki.root(), dial.clone(), log.clone()).expect("a link")
+    let config = config(&farm.ca);
+    GrpcMtlsLink::new(
+        &config,
+        &pki.root(),
+        reach(&config),
+        dial.clone(),
+        log.clone(),
+    )
+    .expect("a link")
 }
 
 /// A service at `at`, healthy, with nothing else to say.
@@ -332,7 +343,7 @@ fn the_grpc_link_returns_the_same_reply_as_the_json_link_for_the_same_coordinato
         },
         expected_reply()
     );
-    assert_eq!(dial.dialed(), [(COORDINATOR.to_owned(), 8443)]);
+    assert_eq!(dial.dialed(), [(COORDINATOR_IP.to_string(), 8443)]);
     assert_eq!(log.lines(), Vec::<String>::new());
     assert_eq!(
         hosts_of_web(&grpc_coordinator),
@@ -748,6 +759,7 @@ fn the_grpc_link_reports_a_connection_that_fails_as_a_transport_error() {
     let never = GrpcMtlsLink::new(
         &config(&farm.ca),
         &pki.root(),
+        reach(&config(&farm.ca)),
         Arc::new(PendingDial),
         log.clone(),
     )
@@ -783,20 +795,29 @@ fn the_grpc_link_gives_the_coordinators_refusal_token() {
 }
 
 /// Catches a link made over an address it does not dial, or a runtime failure reported with the
-/// wrong words: an address with a path is `Endpoint(Path)` with the endpoint's own words, and a
-/// runtime that cannot start says so.
+/// wrong words: an address with a path is refused by the reach the link is made from, as
+/// `Endpoint(Path)` with the endpoint's own words, and a runtime that cannot start says so.
 #[test]
 fn a_grpc_link_is_not_made_for_an_address_it_cannot_dial() {
     let farm = Farm::new();
     let address = format!("https://{COORDINATOR}:8443/v1");
     let config = DaemonConfig::parse(&config_text(&address, &farm.ca.sha256_hex()))
         .expect("a daemon config");
-    let made = GrpcMtlsLink::new(
+    let made = Reach::new(
         &config,
-        Path::new("pki"),
-        Arc::new(DuplexDial::default()),
+        Arc::new(FakeLookup::answering(&[COORDINATOR_IP])),
         Arc::new(RecordingLog::default()),
-    );
+    )
+    .map_err(GrpcLinkError::from)
+    .and_then(|reach| {
+        GrpcMtlsLink::new(
+            &config,
+            Path::new("pki"),
+            Arc::new(reach),
+            Arc::new(DuplexDial::default()),
+            Arc::new(RecordingLog::default()),
+        )
+    });
     let error = made.err().expect("an address with a path is refused");
     assert!(matches!(
         &error,

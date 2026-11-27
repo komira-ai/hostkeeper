@@ -54,6 +54,7 @@ fn alert_kind_tokens_are_pinned() {
         "service_crash_loop",
         "host_not_monitored",
         "bmc_missing",
+        "silent_while_updating",
     ]
     .iter()
     .zip(1..)

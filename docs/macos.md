@@ -244,8 +244,9 @@ Hostkeeper's own update asks nothing of the new binary: a release is judged by i
 
 launchd has no counterpart of `RuntimeMaxSec=`, so the launcher enforces the bound itself: a
 step bounded at `n` seconds that is still running at the first read at or after `n` seconds is
-booted out. A `prepare` declared with `prepare = 0` is unbounded: the launcher never boots it
-out, and nothing but the hook's own end ends it. Because the bound is the launcher's, a bounded
+booted out. A `prepare` declared with `prepare = 0` runs under the updater's ceiling of 3600 s
+and is booted out there like any bounded step; a run with no bound at all (a maintenance `drain`
+with no deadline) is never booted out, and nothing but the hook's own end ends it. Because the bound is the launcher's, a bounded
 job outlives a daemon that dies while it runs; the daemon, back, finds the step `running` in its
 record and stops its job by name before it runs the step again.
 

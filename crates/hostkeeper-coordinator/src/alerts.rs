@@ -64,7 +64,11 @@
 //!   `silent_host`;
 //! - `repeated_deferral`: a host that declined a service's desired version
 //!   [`crate::defer::REPEATED_DEFERRALS`] times in a row for one reason ([`failures`]), until it
-//!   updates, gives another reason or another version is wanted.
+//!   updates, gives another reason or another version is wanted;
+//! - `silent_while_updating`: a host whose last word of a service is an update running (or its
+//!   promotion pending) and that has been silent for [`crate::silent::SILENT_UPDATE_AFTER`]: that
+//!   word no longer holds its update slot or its service's rollout place ([`crate::silent`]),
+//!   until the host heartbeats again.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -295,9 +299,24 @@ pub(crate) fn derive_in(
     alerts.extend(failures::of_hosts(fleet, ops, services, groups, wanted, at));
     alerts.extend(maintenance_alerts::halted(ops));
     alerts.extend(maintenance_alerts::not_back(ops));
+    alerts.extend(crate::silent::silent_updates(fleet, &packages, at.now));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
+}
+
+/// What `halt` holds, as its alert says it, `there` naming where (empty, or ` there` for a host
+/// group): an operator's halt holds every host; a halt a host reported holds the hosts that
+/// reported it, and every host while a version it was reported at is desired
+/// ([`crate::halt::HaltScope`]).
+fn halt_holds(halt: &Halt, there: &str) -> String {
+    if halt.origin == HaltOrigin::Operator {
+        return format!("nothing is ordered for it{there} until an operator clears the halt");
+    }
+    format!(
+        "the hosts that reported it are ordered nothing of it{there}, and no host{there} is ordered \
+         a version it was reported at, until an operator clears the halt"
+    )
 }
 
 /// Who raised `halt`: an operator, or the host and the check that reported it, with what the
@@ -348,9 +367,10 @@ fn halts(ops: &OpsState, services: &Services) -> Vec<Alert> {
                     ..Subject::of(Kind::Halt)
                 },
                 message: format!(
-                    "{} is halted at {} by {by}: nothing is ordered for it until an operator \
-                     clears the halt",
-                    def.name, halt.target
+                    "{} is halted at {} by {by}: {}",
+                    def.name,
+                    halt.target,
+                    halt_holds(halt, "")
                 ),
                 said: Said::default(),
             })

@@ -366,7 +366,7 @@ fn forced(service: &ServiceName, reply: Reply) -> Outcome {
 fn bounds(hook: &Hook) -> Bounds {
     let timeouts = &hook.timeout_secs;
     Bounds {
-        // `prepare = 0` is the unbounded `prepare` of the manifest.
+        // `prepare = 0`: the runner bounds it by its ceiling (`PREPARE_CEILING_SECS`).
         prepare_secs: timeouts.prepare.map_or(0, NonZeroU64::get),
         cutover_secs: timeouts.cutover.get(),
         verify_secs: timeouts.verify.get(),

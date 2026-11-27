@@ -251,7 +251,7 @@ fn node(seen: Duration) -> Node {
 /// that keeps the slot after the host beat done.
 #[test]
 fn a_host_updating_when_last_heard_holds_its_slot_until_it_beats() {
-    let now = secs(5000);
+    let now = secs(5100);
     let mut fleet = Fleet::new(secs(4990), QUIET_START);
     let versions = (version("1.0"), version("2.0"));
     fleet.hold_restored(
@@ -273,6 +273,15 @@ fn a_host_updating_when_last_heard_holds_its_slot_until_it_beats() {
     assert_eq!(restored.beat.updating, Some(version("2.0")));
     assert!(fleet.holds_slot("web", &id("s1"), &restored, now));
     assert!(!restored.is_live(now), "never heard since the start");
+    let lost = secs(4990) + crate::silent::SILENT_UPDATE_AFTER;
+    assert!(
+        fleet.holds_slot("web", &id("s1"), &restored, lost - secs(1)),
+        "silent since the start, for less than an hour"
+    );
+    assert!(
+        !fleet.holds_slot("web", &id("s1"), &restored, lost),
+        "silent an hour since the start: its word holds nothing"
+    );
 
     fleet.record_in("web", id("s2"), role("storage"), beat("1.0"), now);
     fleet.hold_restored("web", id("s2"), "storage", Platform::LinuxX86_64, versions);

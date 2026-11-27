@@ -110,17 +110,12 @@ impl Host {
     /// Whether the host holds an update slot of its service, counted against its role's
     /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
     /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
-    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live.
+    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live. This
+    /// reads the last word whatever its age (as [`Self::holds_slot_at`] when it was said); the
+    /// decisions read [`Self::holds_slot_at`].
     #[must_use]
     pub fn holds_slot(&self) -> bool {
-        let failed = self
-            .beat
-            .last_update
-            .as_ref()
-            .is_some_and(|r| r.outcome == Outcome::Failed);
-        self.beat.updating.is_some()
-            || self.beat.promotion_pending
-            || (failed && !matches!(self.beat.health, Health::Healthy | Health::Absent))
+        self.holds_slot_at(self.seen)
     }
 }
 
@@ -307,10 +302,10 @@ impl Fleet {
         self.marks.rollouts.get(service)
     }
 
-    /// Whether `service` is halted, or `version` of it is marked bad: its plan orders no one.
+    /// Whether a halt of `service` holds every host at `version`, or `version` is marked bad.
     #[must_use]
     pub fn is_stopped(&self, service: &str, version: &Version) -> bool {
-        self.marks.halted.contains(service)
+        self.halt_holds(None, service, Some(version), None)
             || self
                 .marks
                 .bad

@@ -1,14 +1,15 @@
 //! The host's hardware health (`host-health-v1`): counted toward the heartbeat's bound as
 //! `health`, with a service's health reason, body and restarts beside its other facts; the two
 //! groups [`fit`] drops first (the memory devices and source states, then the services' health
-//! bodies and restarts) and the records it gives up last; and nothing announced or sent by a
-//! daemon of this release, whatever the coordinator advertises. Its mapping onto the gRPC request
-//! is tested in `proto_map`.
+//! bodies and restarts) and the records it gives up last; a service's reason, body and restarts
+//! taken from the observer; and no `host-health-v1` announced and no `health` sent by a daemon
+//! that reads no health, whatever the coordinator advertises (`host_health_source` tests one that
+//! reads it). Its mapping onto the gRPC request is tested in `proto_map`.
 
 use hostkeeper_link::beat::DROP_ORDER;
 use hostkeeper_link::{
-    ANNOUNCED, BeatOutcome, Feature, Fitted, Health, Heartbeat, MAX_HEARTBEAT_BYTES, OptionalFact,
-    Outcome, Oversize, Platform, Reply, ServiceFacts, fit,
+    ANNOUNCED, BeatOutcome, Feature, Fitted, Health, Heartbeat, Liveness, MAX_HEARTBEAT_BYTES,
+    Observation, OptionalFact, Outcome, Oversize, Platform, Reply, ServiceFacts, fit,
 };
 use hostkeeper_proto::health::{
     MAX_CODE, MAX_EVENT_ID, MAX_HEALTH_BODY, MAX_HEALTH_BYTES, MAX_HEALTH_REASON, MAX_LAST_RESULT,
@@ -18,7 +19,7 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use prost::Message as _;
 use serde_json::json;
 
-use crate::{Rig, reply, service, update, verdict, version};
+use crate::{Rig, recorded, reply, service, update, verdict, version};
 
 /// A service with a failed verdict whose detail is `detail_len` bytes, and no optional fact.
 fn required(name: &str, detail_len: usize) -> ServiceFacts {
@@ -454,10 +455,11 @@ fn a_heartbeat_with_every_health_fact_at_its_bound_fits_whole() {
     );
 }
 
-/// Proves a daemon of this release announces no `host-health-v1` and sends no health, before
-/// any reply and after one that advertises it and names records written, and keeps beating.
+/// Proves a daemon with no health source announces no `host-health-v1` and sends no health,
+/// before any reply and after one that advertises it and names records written, and keeps
+/// beating; a service the observer gives no reason, body or restarts of has none in its facts.
 ///
-/// Catches: the name announced, or health sent, before the daemon reads its host's health.
+/// Catches: the name announced, or health sent, by a daemon that does not read its host's health.
 #[test]
 fn nothing_is_announced_or_sent_whatever_the_coordinator_advertises() {
     let rig = Rig::new("health-none");
@@ -481,4 +483,100 @@ fn nothing_is_announced_or_sent_whatever_the_coordinator_advertises() {
             );
         }
     }
+}
+
+/// Proves a service's facts carry what the observer saw of it: its detail as `health_reason`
+/// when the detail is a reason token, its health body and its restarts; a detail that is not a
+/// token (white space in it) is no reason; and a service the observer gave none of them has
+/// none. Each beat takes them from that beat's observation, with no feature advertised.
+///
+/// Catches: the observer's reason, body or restarts left out of the heartbeat (a restart loop
+/// the coordinator is never told of), carried to another service, or a detail outside the
+/// token grammar sent as a reason the coordinator would refuse.
+#[test]
+fn the_observers_reason_body_and_restarts_are_the_services_facts() {
+    let rig = Rig::new("health-service-facts");
+    rig.install(vec![
+        recorded("looping", "1.0"),
+        recorded("odd", "1.0"),
+        recorded("plain", "1.0"),
+    ]);
+    let looping = Observation {
+        liveness: Liveness::Running,
+        version: Some(version("1.0")),
+        health: Health::Unhealthy,
+        health_detail: Some("status_non_2xx".to_owned()),
+        drift: None,
+        health_body: Some("503 not placeable: memory short".to_owned()),
+        restarts: Some(restarts()),
+    };
+    rig.world.observer.set(&service("looping"), looping.clone());
+    rig.world.observer.set(
+        &service("odd"),
+        Observation {
+            health_detail: Some("probe refused".to_owned()),
+            health_body: None,
+            restarts: None,
+            ..looping.clone()
+        },
+    );
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let first = rig.world.link.beats().remove(0);
+    let [looping_facts, odd, plain] = &first.services[..] else {
+        panic!("three services: {first:?}");
+    };
+    assert_eq!(
+        (looping_facts.name.as_str(), health_of(looping_facts)),
+        (
+            "looping",
+            (
+                Some("status_non_2xx"),
+                Some("503 not placeable: memory short"),
+                Some(&restarts())
+            )
+        )
+    );
+    assert_eq!(
+        (odd.name.as_str(), health_of(odd)),
+        ("odd", (None, None, None))
+    );
+    assert_eq!(
+        (plain.name.as_str(), health_of(plain)),
+        ("plain", (None, None, None))
+    );
+
+    // The loop recovered: the next beat says so, with no body and the restarts as they are now.
+    let recovered = pb::ServiceRestarts {
+        recent: 0,
+        last_result: "success".to_owned(),
+        exit_status: None,
+        ..restarts()
+    };
+    rig.world.observer.set(
+        &service("looping"),
+        Observation {
+            health: Health::Healthy,
+            health_detail: None,
+            health_body: None,
+            restarts: Some(recovered.clone()),
+            ..looping
+        },
+    );
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let second = rig.world.link.beats().remove(1);
+    assert_eq!(second.services[0].name.as_str(), "looping");
+    assert_eq!(
+        health_of(&second.services[0]),
+        (None, None, Some(&recovered))
+    );
+}
+
+/// A service's reason, body and restarts.
+fn health_of(facts: &ServiceFacts) -> (Option<&str>, Option<&str>, Option<&pb::ServiceRestarts>) {
+    (
+        facts.health_reason.as_deref(),
+        facts.health_body.as_deref(),
+        facts.restarts.as_ref(),
+    )
 }

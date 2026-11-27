@@ -226,6 +226,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             maintain: None,
             bmc: None,
             serial_console: None,
+            health: None,
         },
     )
 }
@@ -254,6 +255,7 @@ fn links_over(link: Arc<dyn CoordinatorLink>, dispatch: &Arc<ManualDispatch>) ->
         maintenance: None,
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

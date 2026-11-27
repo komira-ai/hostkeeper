@@ -1,8 +1,8 @@
 //! The command line of the `hostkeeper` binary: `hostkeeper daemon` and its flags, and
 //! `hostkeeper maintenance-hook`, the maintenance hook the daemon runs as a step
 //! ([`crate::maintenance_hook`]), which exits with the hook contract's codes; and the verbs root
-//! runs on the host itself with the coordinator out of reach, `hostkeeper activate`, `pin` and
-//! `unpin` ([`crate::local`], which says their exit statuses).
+//! runs on the host itself, `hostkeeper activate`, `pin`, `unpin` (with the coordinator out of
+//! reach) and `renew` ([`crate::local`], which says their exit statuses).
 //! Configuration comes in as flags only, never from the environment (AGENTS.md S2); every
 //! default is a constant here.
 //!
@@ -158,7 +158,8 @@ pub enum Command {
     /// Run a step of the maintenance hook: the OS work of a maintenance run, which the daemon
     /// runs as it runs a hook's step.
     MaintenanceHook(HookArgs),
-    /// `activate`, `pin` and `unpin`: what root runs on the host itself ([`crate::local`]).
+    /// `activate`, `pin`, `unpin` and `renew`: what root runs on the host itself
+    /// ([`crate::local`]).
     #[command(flatten)]
     Local(crate::local::LocalVerb),
 }
@@ -432,7 +433,18 @@ async fn start_and_serve(
         major,
         watchdog,
     );
-    start::serve(started, links).await;
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
+        platform.kind,
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
+    );
+    let terminated = crate::terminate::sigterm(links.log.as_ref());
+    start::serve_until(started, links, terminated).await;
     Ok(())
 }
 
@@ -507,6 +519,8 @@ pub fn host_links(
     let link = HostLink::new(
         ctx.config.clone(),
         files.pki.clone(),
+        ctx.dirs.state.clone(),
+        crate::coordinator_address::host_lookup(),
         Arc::clone(&ctx.clock),
         log.clone(),
     );
@@ -528,6 +542,8 @@ pub fn host_links(
         Arc::new(ThreadDispatch),
         log.clone(),
     );
+    let health =
+        crate::host_health::at_host(kind, &ctx.dirs.state, ctx.clock.as_ref(), log.clone());
     let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
@@ -560,6 +576,7 @@ pub fn host_links(
         operator_keys: Some(Arc::new(operator_keys)),
         prerequisites: Some(Arc::new(prerequisites)),
         maintenance,
+        health: Some(health),
     }
 }
 
@@ -842,7 +859,8 @@ pub fn host_ports(
         });
     }
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
-    let coordinator = crate::mirror::over_coordinator(config, &files.pki, Arc::clone(&clock));
+    let coordinator =
+        crate::mirror::over_coordinator(config, &files.pki, &settings.state_dir, clock.clone());
     if files.repositories.is_some()
         && let Some(fetch) = &coordinator
     {

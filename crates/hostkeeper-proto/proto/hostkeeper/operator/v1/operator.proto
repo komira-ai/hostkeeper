@@ -160,7 +160,7 @@ service Releases {
   // Mark a version bad by hand: it is never ordered again until it is unmarked. A held pair is
   // not reached.
   rpc MarkBad(MarkBadRequest) returns (MarkBadResponse);
-  // Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
+  // Halt a service by hand: no host of it is ordered, whatever version is desired, until the halt
   // is cleared.
   rpc Halt(HaltRequest) returns (HaltResponse);
   // Hold the call until a service's hosts have converged on a version, or the wait ends another
@@ -1522,8 +1522,8 @@ message Alert {
 // log line of each is its log token, named per value.
 enum AlertKind {
   ALERT_KIND_UNSPECIFIED = 0;
-  // A service is halted: nothing is ordered for it until an operator clears the halt. Its host is
-  // the one that reported it (none for an operator's halt). Log token `halt`.
+  // A service is halted until an operator clears the halt (whom it holds: host-updates design 3.8).
+  // Its host is the one that reported it (none for an operator's halt). Log token `halt`.
   ALERT_KIND_HALT = 1;
   // A host asked to enroll and waits for an operator's approval (`Enrollment.Approve`). Log token
   // `waiting_for_operator`.
@@ -1688,6 +1688,15 @@ enum AlertKind {
   // A Linux host's BMC is absent or does not answer: its event log, which outlives a crash, cannot
   // be read. Warning. Log token `bmc_missing`.
   ALERT_KIND_BMC_MISSING = 32;
+  // The host's last heartbeat said it was running an update of the service (or waiting for that
+  // update's promotion), and the host has been silent for an hour or more since. From then on, that
+  // heartbeat holds no update slot of the service and no rollout place, so the other services'
+  // rollouts go on. The coordinator stops nothing and orders the host nothing: the update may
+  // still be running on the host. `version` is the update's target (for a promotion, the version
+  // the host runs). One alert for each host and service. It clears when the host heartbeats again;
+  // if that heartbeat still says it updates, the host holds its slot and its rollout place again.
+  // Critical. Log token `silent_while_updating`.
+  ALERT_KIND_SILENT_WHILE_UPDATING = 33;
 }
 
 // How soon an `Alert` needs a person.

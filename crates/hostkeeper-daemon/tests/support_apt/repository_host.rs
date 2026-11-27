@@ -237,6 +237,7 @@ pub fn host(
     let fetch = hostkeeper_daemon::mirror::over_coordinator(
         &config,
         &files.pki,
+        apt.rig.scratch.path(),
         Arc::new(FakeClock::new(0, 0)),
     )
     .expect("the mirror's fetch");

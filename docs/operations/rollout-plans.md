@@ -91,7 +91,7 @@ plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `b
 | waits | meaning |
 |---|---|
 | `paused` | an operator paused the plan (by whom, and why, is shown) |
-| `halted` | the package is halted, or the desired version is marked bad |
+| `halted` | a halt holds every host of the package at its desired version (an operator's halt, or a host's halt reported at that version: [holds-and-force.md](holds-and-force.md#marks)), or the desired version is marked bad |
 | `rollout_elsewhere` | another service's rollout is live (see `--live-rollouts` below) |
 | `quiet` | the coordinator was started recently and has not heard the fleet, or (on the database store) the fleet's beats had a gap, or the database's link is lost |
 | `manual_advance` | the next stage is `manual`: it waits for `Rollouts.Advance` |
@@ -377,6 +377,21 @@ them (`waiting_on`) and, for each, why it is live and on which host (`waiting_on
 `promotion_pending`, `ordered`, `baking` with the host, or `plan_under_way`); the web UI shows it as
 `rollout_elsewhere on hello (baking on db-5)`. A service that is live is never held by the others.
 The default keeps one service's rollout at a time in each group.
+
+**A host silent mid-update.** A host whose last heartbeat said it was updating a service (or
+waiting for that update's promotion) keeps its update slot and keeps the service's rollout live
+while it is silent, because the update may still be running. That lasts one hour (3600 s: the
+longest `verify_deadline_secs` among the farm's hooks, 2500 s, plus a margin). After an hour, that
+heartbeat holds no slot and no place, the other services' rollouts go on, and the critical alert
+`silent_while_updating` names the host, the service and the update's version. The coordinator
+stops nothing on the host and sends it nothing. When the host heartbeats again, the alert clears
+and the host is read from that heartbeat: if it still says it updates, it holds its slot and its
+service's rollout place again (a rollout that started meanwhile runs on). A host whose last report
+is a failure keeps its slot as before, and frees it only by an operator's action. An update whose
+`prepare` is declared with no bound (`prepare = 0`) is held to the updater's ceiling of one hour.
+After that hour the step is stopped, its `rollback` runs, and the host reports the update
+deferred with the reason `prepare_ceiling`. The host keeps the version it runs, and the
+coordinator offers the new version again after the group's `defer_backoff`.
 
 ## What a restart keeps
 

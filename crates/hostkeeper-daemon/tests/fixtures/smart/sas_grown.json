@@ -1,0 +1,1 @@
+{"json_format_version":[1,0],"smartctl":{"version":[7,4],"argv":["smartctl","--json=c","--nocheck=standby","--info","--health","--attributes","/dev/sdc"],"exit_status":0},"device":{"name":"/dev/sdc","info_name":"/dev/sdc","type":"scsi","protocol":"SCSI"},"serial_number":"SN-SAS-0001","smart_status":{"passed":true},"scsi_grown_defect_list":3,"power_on_time":{"hours":30000}}

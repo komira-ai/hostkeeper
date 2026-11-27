@@ -76,6 +76,7 @@ pub fn idle_links() -> Links {
         stop: StopFlag::default(),
         bmc: None,
         serial_console: None,
+        health: None,
     }
 }
 

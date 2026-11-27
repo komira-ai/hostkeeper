@@ -2,9 +2,13 @@
 //! [`MAX_REPLY_BYTES`], with no redirect followed.
 //!
 //! The probe writes the request, reads until the header block ends, the cap is reached or the
-//! peer closes, then drops the connection; only the status line is judged. A 3xx is an answer
-//! like any other (and is not healthy): its `Location` is never read. The transport is a port so
-//! the tests drive this code with an in-memory peer; the daemon uses [`TcpConnect`].
+//! peer closes, then drops the connection; only the status line is judged. When the status is not
+//! 2xx it reads on, past the header block, until [`MAX_BODY_BYTES`] of the body are in, the cap is
+//! reached, the peer closes or a read fails, and the reply carries those first bytes of the body
+//! (a job agent's `503 not placeable: <reason>`); a read that fails there leaves the answer as it
+//! is. A 3xx is an answer like any other (and is not healthy): its `Location` is never read. The
+//! transport is a port so the tests drive this code with an in-memory peer; the daemon uses
+//! [`TcpConnect`].
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -15,6 +19,10 @@ use crate::url::HealthUrl;
 
 /// The most bytes of a reply the probe reads.
 pub const MAX_REPLY_BYTES: usize = 4096;
+
+/// The most bytes of the body of a reply that is not 2xx the probe keeps: the bound of the
+/// heartbeat's `health_body`.
+pub const MAX_BODY_BYTES: usize = hostkeeper_proto::health::MAX_HEALTH_BODY;
 
 /// A connection: bytes both ways.
 pub trait Duplex: Read + Write {}
@@ -65,7 +73,7 @@ impl<C: Connect> HealthClient for HttpHealthClient<C> {
         let mut reply = [0u8; MAX_REPLY_BYTES];
         let mut filled = 0;
         let mut stopped = None;
-        while (filled < MAX_REPLY_BYTES) & header_end(&reply[..filled]).is_none() {
+        while (filled < MAX_REPLY_BYTES) & !read_enough(&reply[..filled]) {
             match stream.read(&mut reply[filled..]) {
                 Ok(0) => break,
                 Ok(n) => filled += n,
@@ -89,10 +97,16 @@ impl<C: Connect> HealthClient for HttpHealthClient<C> {
                 why: why.to_string(),
             });
         };
-        let body_bytes_read = header_end(reply).map_or(0, |end| filled - end);
+        let body_at = header_end(reply);
+        let body_bytes_read = body_at.map_or(0, |end| filled - end);
+        let body = match body_at {
+            Some(end) if !is_2xx(status) => reply[end..filled.min(end + MAX_BODY_BYTES)].to_vec(),
+            _ => Vec::new(),
+        };
         Ok(HealthReply {
             status,
             body_bytes_read,
+            body,
         })
     }
 }
@@ -121,6 +135,21 @@ fn classify(url: &HealthUrl, e: &io::Error) -> ObserveError {
     } else {
         ObserveError::Probe { url, why }
     }
+}
+
+/// Whether the probe has read all it reads of `reply`: its header block, and for a status that
+/// is not 2xx [`MAX_BODY_BYTES`] of the body after it.
+fn read_enough(reply: &[u8]) -> bool {
+    match (header_end(reply), status_code(reply)) {
+        (None, _) => false,
+        (Some(end), Some(status)) if !is_2xx(status) => reply.len() - end >= MAX_BODY_BYTES,
+        (Some(_), _) => true,
+    }
+}
+
+/// Whether `status` is 2xx.
+fn is_2xx(status: u16) -> bool {
+    (200..=299).contains(&status)
 }
 
 /// Where the header block ends (after its blank line), if it has.

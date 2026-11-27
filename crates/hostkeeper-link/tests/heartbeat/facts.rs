@@ -42,6 +42,8 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
             health: Health::Unhealthy,
             health_detail: Some("probe refused".to_owned()),
             drift: None,
+            health_body: None,
+            restarts: None,
         },
     );
     let mut heartbeater = rig.heartbeater();
@@ -422,6 +424,8 @@ fn the_drift_the_observer_found_is_in_the_services_facts() {
             health: Health::Healthy,
             health_detail: None,
             drift: Some(found.clone()),
+            health_body: None,
+            restarts: None,
         },
     );
     let mut heartbeater = rig.heartbeater();

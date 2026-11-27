@@ -68,6 +68,54 @@ fn a_gate_that_cannot_count_reports_zero() {
     assert_eq!(gate.count(), 0);
 }
 
+/// Catches a count that could not be kept (`0`) being taken for the target: with no target, or a
+/// target of `0`, a gate whose count file cannot be written never stops (a point would otherwise
+/// park for ever where the harness asked for no stop). With a target, it does not stop either.
+#[test]
+fn a_gate_that_cannot_count_never_stops() {
+    let scratch = Scratch::new("gate-cannot-count");
+    let absent: OsString = scratch.path().join("absent").into();
+    for target in [None, os("0"), os("1")] {
+        let gate = Gate::parse(Some(absent.clone()), target.clone()).unwrap();
+        let stops = Cell::new(0);
+        for _ in 0..3 {
+            gate.reach_then(&|| stops.set(stops.get() + 1));
+        }
+        assert_eq!(stops.get(), 0, "{target:?}");
+    }
+}
+
+/// Catches two callers counting at once getting the same point number (so a kill target is
+/// reached twice, or skipped): eight threads, each with a gate of its own on one directory, as
+/// the processes of a step have, count 1 to 4000 once each between them.
+#[test]
+fn points_counted_at_once_get_distinct_numbers() {
+    const THREADS: u64 = 8;
+    const EACH: u64 = 500;
+    let scratch = Scratch::new("gate-concurrent");
+    let dir: OsString = scratch.path().into();
+    let mut numbers: Vec<u64> = std::thread::scope(|scope| {
+        let counters: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let gate = Gate::parse(Some(dir.clone()), None).unwrap();
+                scope.spawn(move || (0..EACH).map(|_| gate.count()).collect::<Vec<u64>>())
+            })
+            .collect();
+        counters
+            .into_iter()
+            .flat_map(|counter| counter.join().unwrap())
+            .collect()
+    });
+    numbers.sort_unstable();
+    assert_eq!(numbers, (1..=THREADS * EACH).collect::<Vec<u64>>());
+    assert_eq!(
+        fs::metadata(scratch.path().join("gate-count"))
+            .unwrap()
+            .len(),
+        THREADS * EACH
+    );
+}
+
 /// Catches a kill point that does anything outside the harness.
 #[test]
 fn outside_the_harness_a_point_does_nothing() {

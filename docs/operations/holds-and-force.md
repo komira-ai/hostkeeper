@@ -50,7 +50,8 @@ to start on such a file rather than ignore the holds; a file that never held one
 earlier releases read.
 
 A host is also told, as the status shows it, `install_order` (a package listed
-before this one is not installed on the host yet), `uninstall_order` (a package whose uninstall
+before this one is not installed on the host yet; one the host runs counts as installed, even
+where the host is excluded from it), `uninstall_order` (a package whose uninstall
 goes first is still on the host) or `moving` (the host was moved into its group and its plans have
 not admitted it, or its uninstalls are not done); none of them is a failure, and
 [hostgroups.md](hostgroups.md) says when each applies.
@@ -106,8 +107,8 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   the mark. A version marked bad halts the plan (every host is told `bad`). A second mark of the same version is refused with `already_bad`.
   The mark is the package's: a version marked bad is bad in every group, so a
   build that fails in one group is not rolled on to the next.
-- `Releases.Halt` halts a service by hand, as a host's halt report does: no host of it is
-  ordered until `ClearHalt` (or a force). It is an alert (`Alerts.List`, and an `alert=halt`
+- `Releases.Halt` halts a service by hand: no host of it is ordered, whatever version is
+  desired, until `ClearHalt` (or a force). It is an alert (`Alerts.List`, and an `alert=halt`
   line logged once when it appears). A service with
   no desired version has nothing to halt and is refused with `invalid_request`; a service that
   is halted already, with `already_halted`. A halt is a group's: the call names no
@@ -122,6 +123,16 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   and a halt another host also reported stay until `ClearHalt`.
   The alert's message names the group; groups whose halt has the same service, host and version are
   one alert that names them all.
+- A host's halt report (its hook exited 76, or its rollback failed) halts the service in the
+  host's group, as `Releases.Halt` does, while the desired version is the version the halt was
+  reported at: no host is ordered. Setting another desired version does not clear it, but narrows
+  it: the hosts that reported it stay held (`halted`, told nothing of the service), and every other
+  host is ordered the new version. A host that halts at the new version too holds every host again,
+  as does setting the halted version once more. The halt, its `halt` alert and the convergence's
+  `halted` stand until `ClearHalt`, so the service does not converge while a host is held by it.
+  The update plan goes on with the other hosts; it does not finish while a held host is one of
+  its hosts, and once only held hosts are left it takes no place of `--live-rollouts`
+  (`nothing_to_order`).
 - A host can hold a halt of a service of its own: its step record of the service ended in a halt,
   and it refuses every order of the service (`halted`) until it is told a halt generation above the
   one in its `held-halt` file. Its heartbeat reports that halt (`ServiceBeat.local_halt`: the

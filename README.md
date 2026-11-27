@@ -238,13 +238,17 @@ renames it by hand ([docs/admin.md](docs/admin.md)). Neither verb installs, upda
 version, and neither lifts a halt. To switch a version with the coordinator unreachable, root
 stops the daemon and runs `hostkeeper activate` on the host, and `hostkeeper pin` and
 `hostkeeper unpin` hold and release the coordinator's orders for a service
-([docs/admin.md](docs/admin.md#roll-a-service-back-on-the-host)).
+([docs/admin.md](docs/admin.md#roll-a-service-back-on-the-host)). `hostkeeper renew` asks the
+running daemon to renew the host's certificate at its next enrollment step rather than at half its
+life, for the same key and with no approval
+([docs/operations/enrollment.md](docs/operations/enrollment.md#renew-a-certificate-now)).
 
 - `abort <service>` stops the service's running step and ends its update. The daemon asks the
   update's runner to launch nothing more (no `rollback`, no `cleanup`), stops the unit of the
   step that runs by name, trying three times, and the update ends `Halt` with the reason
-  `aborted_by_operator`. It is the only end of a `prepare` declared unbounded (`prepare = 0`)
-  that does not return. When every try to stop the unit fails, the update ends `Halt` with the
+  `aborted_by_operator`. A `prepare` declared `prepare = 0` that does not return is also ended
+  by the updater's ceiling of 3600 s, as a deferral with the reason `prepare_ceiling` (its
+  `rollback` runs, and the coordinator offers the version again later). When every try to stop the unit fails, the update ends `Halt` with the
   reason `unstoppable`, the daemon logs an alert (`alert=unstoppable_unit`) naming the unit, and
   the unit may still be running: stop it by name (`systemctl stop <unit>`). A step the daemon's
   dead-man could not stop at its bound keeps the service locked (the host's status shows the update under

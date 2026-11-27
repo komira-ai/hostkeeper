@@ -26,6 +26,8 @@ use crate::testutil::{LEGACY, beat, id, kbf_services, secs, version};
 
 /// The unix time of the coordinator's clock at 0.
 const UNIX: u64 = 1_800_000_000;
+const HOLDS: &str = "the hosts that reported it are ordered nothing of it, and no host is ordered \
+                     a version it was reported at, until an operator clears the halt";
 
 /// The time `at` seconds after the coordinator's start.
 fn at(seconds: u64) -> At {
@@ -165,9 +167,7 @@ fn a_halted_service_is_a_halt() {
         derived(&fleet, &ops, &quiet_store()),
         vec![Alert {
             subject: subject(Kind::Halt, "kbf", "d1", "2.0"),
-            message: "kbf is halted at 2.0 by d1, check disk_full: nothing is ordered for it \
-                      until an operator clears the halt"
-                .to_owned(),
+            message: format!("kbf is halted at 2.0 by d1, check disk_full: {HOLDS}"),
             said: Said::default(),
         }]
     );
@@ -226,18 +226,16 @@ fn a_halt_says_what_the_hook_said_of_its_check() {
         assert_eq!(alerts.len(), 1, "{alerts:?}");
         alerts[0].message.clone()
     };
+    let at = "kbf is halted at 2.0 by d1, check state_invalid";
     assert_eq!(
         halted(Some("state_root: owned by uid 501")),
-        "kbf is halted at 2.0 by d1, check state_invalid (\"state_root: owned by uid 501\"): \
-         nothing is ordered for it until an operator clears the halt"
+        format!("{at} (\"state_root: owned by uid 501\"): {HOLDS}")
     );
     assert_eq!(
         halted(Some("owner \"js\"\nmode 0755")),
-        "kbf is halted at 2.0 by d1, check state_invalid (\"owner \\\"js\\\"\\nmode 0755\"): \
-         nothing is ordered for it until an operator clears the halt"
+        format!("{at} (\"owner \\\"js\\\"\\nmode 0755\"): {HOLDS}")
     );
-    let plain = "kbf is halted at 2.0 by d1, check state_invalid: nothing is ordered for it \
-                 until an operator clears the halt";
+    let plain = format!("{at}: {HOLDS}");
     assert_eq!(halted(Some("")), plain);
     assert_eq!(halted(None), plain);
 }
