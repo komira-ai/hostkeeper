@@ -117,7 +117,6 @@ fn host(
         bmc: None,
         serial_console: None,
         health: None,
-        health_reads: Vec::new(),
     };
     (links.heartbeater(&daemon), link)
 }

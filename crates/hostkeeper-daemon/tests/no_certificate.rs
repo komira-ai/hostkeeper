@@ -179,8 +179,6 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
             left: Arc::new(AtomicUsize::new(2)),
             ending: serving.clone(),
         }),
-        // The two loops alone: no worker reads the host's rasdaemon database.
-        health_reads: Vec::new(),
         ..host_links(
             &daemon,
             &files,

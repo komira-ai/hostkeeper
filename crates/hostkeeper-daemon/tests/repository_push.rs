@@ -106,7 +106,6 @@ fn host(rig: &Rig, live: Option<&Path>) -> (Arc<Daemon>, Heartbeater, Arc<FakeLi
         bmc: None,
         serial_console: None,
         health: None,
-        health_reads: Vec::new(),
     };
     let heartbeater = links.heartbeater(&daemon);
     (daemon, heartbeater, link)

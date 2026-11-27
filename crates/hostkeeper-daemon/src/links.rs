@@ -63,7 +63,7 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::{
     BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, FullDiskAccessSource,
-    GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, Job, JsonMtlsLink, LinkError, LoopConfig,
+    GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig,
     MaintainSink, MaintenanceSource, NegotiatedLink, OperatorKeysSink, Platform, Ports,
     PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, SerialConsoleSource, Sleeper,
     SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
@@ -176,18 +176,13 @@ pub struct Links {
     /// that advertises `host-health-v1` reports, and whose clean-shutdown marker is judged at
     /// SIGTERM ([`crate::start::serve_until`]); none where a daemon keeps none.
     pub health: Option<Arc<HealthKeeper>>,
-    /// The workers that read the host's hardware sources into [`Links::health`] (a Linux host's
-    /// rasdaemon database, [`crate::rasdaemon`]), each started on a worker of
-    /// [`Links::dispatch`] of its own by [`Links::start`]; none where there is none to read.
-    pub health_reads: Vec<Job>,
 }
 
 impl Links {
-    /// Starts the workers of [`Links::health_reads`], then the enrollment loop, then the heartbeat
-    /// loop, each on a worker of [`Links::dispatch`]. Each loop writes what [`Daemon::status`]
-    /// reports of it into the daemon's [`crate::node::NodeState`]: the enrollment loop the host's
-    /// enrollment after each step, the heartbeat loop its link after each heartbeat, at the second
-    /// of [`Links::clock`].
+    /// Starts the enrollment loop, then the heartbeat loop, each on a worker of
+    /// [`Links::dispatch`]. Each loop writes what [`Daemon::status`] reports of it into the
+    /// daemon's [`crate::node::NodeState`]: the enrollment loop the host's enrollment after each
+    /// step, the heartbeat loop its link after each heartbeat, at the second of [`Links::clock`].
     pub fn start(self, daemon: &Arc<Daemon>) {
         let heartbeater = self.heartbeater(daemon);
         let Links {
@@ -202,12 +197,8 @@ impl Links {
             watchdog,
             mut console,
             mut identity,
-            health_reads,
             ..
         } = self;
-        for read in health_reads {
-            dispatch.start(read);
-        }
         let enrolling = Arc::clone(daemon);
         let beat_log = Arc::clone(&log);
         dispatch.start(Box::new(move || {

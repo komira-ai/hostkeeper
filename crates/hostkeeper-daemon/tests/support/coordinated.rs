@@ -414,7 +414,6 @@ impl Host {
             bmc: None,
             serial_console: None,
             health: None,
-            health_reads: Vec::new(),
         };
         Host {
             heartbeater: links.heartbeater(&daemon),

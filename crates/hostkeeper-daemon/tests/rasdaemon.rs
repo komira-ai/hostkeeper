@@ -4,8 +4,8 @@
 //! errors and failed disk requests counted an hour at a time, new rows only by the mark, a
 //! database made again, the bounds of one poll, the source states (no file, no table, an empty
 //! table, WAL, a write in progress, not SQLite), the history of a first read through the
-//! daemon's `HealthKeeper`, the worker's loop and the host's worker started by the links. No real
-//! `/var/lib`, no real clock.
+//! daemon's `HealthKeeper` and the source's worker (`hostkeeper_daemon::hardware_sources`) over a
+//! scratch host root. No real `/var/lib` or `/proc`, no real clock.
 
 mod support;
 
@@ -13,22 +13,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hostkeeper_daemon::hardware_sources::{HardwareSource, poll, run};
 use hostkeeper_daemon::host_health::{BootFacts, HISTORY_PREFIX, HealthKeeper};
-use hostkeeper_daemon::links::Links;
 use hostkeeper_daemon::rasdaemon::{
-    ABSENT, MAX_PENDING, MAX_ROWS, Mark, NO_TABLES, POLL_SECS, Pending, Rasdaemon, Reading, SOURCE,
-    at_host, parse_time, read,
+    ABSENT, MAX_PENDING, MAX_ROWS, Mark, NO_TABLES, POLL_SECS, Pending, RasdaemonSource, Reading,
+    SOURCE, parse_time, read,
 };
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
-use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::HostHealthSource;
-use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper};
+use hostkeeper_link::testing::{FakeClock, RecordingLog, ScriptedSleeper};
 use hostkeeper_proto::health::check_health;
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use pb::HardwareComponent::{Cpu, Disk, Memory, Pcie};
 use pb::HardwareSeverity::{Critical, Info, Warning};
 use rusqlite::Connection;
-use support::{Rig, Scratch, idle_links};
+use support::Scratch;
 
 /// rasdaemon's tables.
 const SCHEMA: &str = include_str!("fixtures/rasdaemon/schema.sql");
@@ -734,33 +733,50 @@ fn state(status: pb::SourceStatus, reason: &str) -> pb::SourceState {
     }
 }
 
-/// Proves a poll through the daemon's keeper: the first read's records are held, the one older
-/// than the history window as `info` history; the heartbeat lists the source as read, within the
-/// health's bounds; a poll that finds nothing new writes no mark; the source's state follows
-/// the database (a write in progress, then read again, then gone), the log one line at each
-/// change and none for a state that stays.
+/// A host root under `dir` whose rasdaemon database holds `sql`'s rows, and, with `btime`, whose
+/// `proc/stat` says its boot began then.
+fn host_root(dir: &Scratch, sql: &str, btime: Option<u64>) -> PathBuf {
+    let root = dir.path().join("root");
+    let lib = root.join("var/lib/rasdaemon");
+    fs::create_dir_all(&lib).expect("rasdaemon's directory");
+    let conn = Connection::open(lib.join("ras-mc_event.db")).expect("open with SQLite");
+    conn.execute_batch(SCHEMA).expect("rasdaemon's tables");
+    conn.execute_batch(sql).expect("the rows");
+    if let Some(btime) = btime {
+        fs::create_dir_all(root.join("proc")).expect("proc");
+        fs::write(
+            root.join("proc/stat"),
+            format!("cpu  1 2 3\nbtime {btime}\n"),
+        )
+        .expect("stat");
+    }
+    root
+}
+
+/// Proves a poll of the source through the daemon's keeper: the first read's records are held,
+/// the one older than the history window as `info` history, the one before the boot of the
+/// host's `proc/stat` of the previous boot; the heartbeat lists the source as read, within the
+/// health's bounds; a poll that finds nothing new holds nothing and leaves the mark; the
+/// source's state follows the database (a write in progress, read again, then gone).
 ///
 /// Catches: the source's state missing from the heartbeat, an old row raised as news on a
-/// host's first read, or a log line every minute.
+/// host's first read, a mark lost when the database cannot be read.
 #[test]
 fn a_poll_holds_records_and_keeps_the_sources_state() {
     let dir = Scratch::new("ras-keeper");
-    let path = database(
+    let root = host_root(
         &dir,
         &format!(
             "{}{}",
             mc("2026-11-10 04:00:00 +0000", "1", "Uncorrected", "'DIMM_A1'"),
             mc(T1, "1", "Uncorrected", "'DIMM_A1'"),
         ),
+        Some(BOOT),
     );
-    let (keeper, log) = keeper(&dir);
-    let source = Rasdaemon::new(
-        path.clone(),
-        Arc::clone(&keeper),
-        Arc::new(FakeClock::new(NOW, 0)),
-        log.clone(),
-    );
-    assert_eq!(source.poll(), 2);
+    let (keeper, _) = keeper(&dir);
+    let clock = FakeClock::new(NOW, 0);
+    let mut source = RasdaemonSource::new(&root);
+    assert_eq!(poll(&mut source, &keeper, &clock), 2);
     let health = keeper.health();
     check_health(&health).expect("within the health's bounds");
     assert_eq!(health.sources, [state(pb::SourceStatus::Ok, "")]);
@@ -768,29 +784,31 @@ fn a_poll_holds_records_and_keeps_the_sources_state() {
         health
             .events
             .iter()
-            .map(|e| (e.severity, e.message.as_str()))
+            .map(|e| (e.severity, e.message.clone(), e.of_previous_boot))
             .collect::<Vec<_>>(),
         [
             (
-                Critical.into(),
-                "Uncorrectable memory error on DIMM_A1: 1 reported"
+                i32::from(Critical),
+                "Uncorrectable memory error on DIMM_A1: 1 reported".to_owned(),
+                false,
             ),
             (
-                Info.into(),
-                format!("{HISTORY_PREFIX}Uncorrectable memory error on DIMM_A1: 1 reported")
-                    .as_str()
+                i32::from(Info),
+                format!("{HISTORY_PREFIX}Uncorrectable memory error on DIMM_A1: 1 reported"),
+                true,
             ),
         ]
     );
     let mark = keeper.mark(SOURCE);
-    assert_eq!(source.poll(), 0);
+    assert!(mark.is_some());
+    assert_eq!(poll(&mut source, &keeper, &clock), 0);
     assert_eq!(keeper.mark(SOURCE), mark);
-    assert_eq!(log.lines(), ["hardware source rasdaemon: Ok"]);
 
+    let path = root.join("var/lib/rasdaemon/ras-mc_event.db");
     let mut journal = path.as_os_str().to_owned();
     journal.push("-journal");
     fs::write(&journal, [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]).expect("hot");
-    assert_eq!(source.poll(), 0);
+    assert_eq!(poll(&mut source, &keeper, &clock), 0);
     assert_eq!(
         keeper.health().sources,
         [state(
@@ -798,80 +816,40 @@ fn a_poll_holds_records_and_keeps_the_sources_state() {
             "the database was being written"
         )]
     );
+    assert_eq!(keeper.mark(SOURCE), mark);
     fs::remove_file(&journal).expect("the write ended");
-    source.poll();
+    poll(&mut source, &keeper, &clock);
+    assert_eq!(keeper.health().sources, [state(pb::SourceStatus::Ok, "")]);
     fs::remove_file(&path).expect("rasdaemon removed");
-    source.poll();
-    source.poll();
+    poll(&mut source, &keeper, &clock);
     assert_eq!(
         keeper.health().sources,
         [state(pb::SourceStatus::Unsupported, ABSENT)]
     );
-    assert_eq!(
-        log.lines(),
-        [
-            "hardware source rasdaemon: Ok",
-            "hardware source rasdaemon: Unreadable: the database was being written",
-            "hardware source rasdaemon: Ok",
-            "hardware source rasdaemon: Unsupported: no rasdaemon database",
-        ]
-    );
+    assert_eq!(keeper.mark(SOURCE), mark);
 }
 
-/// Proves the worker reads, then waits [`POLL_SECS`], and reads again until its wait says stop;
-/// a Linux host (systemd or OpenRC) has the worker and a Mac none; and the links start the
-/// worker on a worker of their own, before the two loops.
+/// Proves the source's worker reads, then waits [`POLL_SECS`], and reads again until its wait
+/// says stop, under the token `rasdaemon`; and that a host whose `proc/stat` cannot be read marks
+/// no record of the boot before.
 ///
-/// Catches: a worker that reads once and stops, one that never stops, one on a Mac, or one the
-/// links never start.
+/// Catches: a worker that reads once and stops, or a record taken for the previous boot's when
+/// the boot is not known.
 #[test]
-fn the_worker_polls_until_stopped_and_the_links_start_it() {
+fn the_sources_worker_polls_until_stopped() {
     let dir = Scratch::new("ras-worker");
-    let path = database(&dir, &mc(T1, "1", "Uncorrected", "'DIMM_A1'"));
-    let (held, log) = keeper(&dir);
-    let clock = Arc::new(FakeClock::new(NOW, 0));
-    let source = Rasdaemon::new(path.clone(), Arc::clone(&held), clock.clone(), log.clone());
+    let root = host_root(
+        &dir,
+        &mc("2026-11-10 04:00:00 +0000", "1", "Uncorrected", "'DIMM_A1'"),
+        None,
+    );
+    let (keeper, _) = keeper(&dir);
+    let mut source = RasdaemonSource::new(&root);
+    assert_eq!((source.name(), source.every_secs()), (SOURCE, POLL_SECS));
     let sleeper = ScriptedSleeper::new(1);
-    source.run(&sleeper);
+    run(&mut source, &keeper, &FakeClock::new(NOW, 0), &sleeper);
     assert_eq!(sleeper.waits(), [POLL_SECS, POLL_SECS]);
-    assert_eq!(held.health().events.len(), 1);
-
-    let worker = |kind| {
-        at_host(
-            kind,
-            &path,
-            &held,
-            clock.clone(),
-            Box::new(ScriptedSleeper::new(0)),
-            log.clone(),
-        )
-    };
-    assert!(worker(PlatformKind::Macos).is_none());
-    assert!(worker(PlatformKind::Openrc).is_some());
-
-    let other = Scratch::new("ras-worker-links");
-    let (fresh, _) = keeper(&other);
-    let job = at_host(
-        PlatformKind::Linux,
-        &path,
-        &fresh,
-        clock,
-        Box::new(ScriptedSleeper::new(0)),
-        log,
-    )
-    .expect("a Linux host reads rasdaemon");
-    let rig = Rig::new("ras-worker-daemon");
-    let daemon = Arc::new(rig.daemon());
-    let dispatch = Arc::new(ManualDispatch::default());
-    Links {
-        dispatch: dispatch.clone(),
-        health_reads: vec![job],
-        ..idle_links()
-    }
-    .start(&daemon);
-    assert_eq!(dispatch.pending(), 3, "the worker and the two loops");
-    assert!(fresh.health().sources.is_empty());
-    assert!(dispatch.run_next(), "the worker");
-    assert_eq!(fresh.health().sources, [state(pb::SourceStatus::Ok, "")]);
-    assert_eq!(fresh.health().events.len(), 1);
+    let events = keeper.health().events;
+    assert_eq!(events.len(), 1);
+    assert!(!events[0].of_previous_boot);
 }

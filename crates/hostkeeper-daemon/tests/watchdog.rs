@@ -131,7 +131,6 @@ fn links(
         bmc: None,
         serial_console: None,
         health: None,
-        health_reads: Vec::new(),
     };
     (links, jobs)
 }

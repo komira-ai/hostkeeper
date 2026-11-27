@@ -26,11 +26,12 @@
 //! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
-//! **Source states.** Each source says what its last read came to
-//! ([`HealthKeeper::source_state`]: read, unsupported or unreadable, with the reason), which every
-//! heartbeat carries, one entry per source, and the log gets a line when it changes. A source's
-//! state is kept in memory only: until a source's first read after the daemon's start it is not
-//! listed.
+//! **Source states.** Each read of a source ([`HealthKeeper::read`], from the workers of
+//! [`crate::hardware_sources`]) also says whether the source could be read; the last word of each
+//! source is kept in memory, by its token, and every heartbeat lists them in `sources` (at most
+//! twelve, in the order of their tokens), so a source that reports nothing is never taken for one
+//! that found nothing wrong. When the records and the states together would encode to more than
+//! the bound, the heartbeat carries fewer records, the least severe and newest left for the next.
 //!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
@@ -44,11 +45,13 @@ use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_proto::health::{
-    MAX_BOOT_ID, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
+    MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
 };
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
+use prost::Message;
 
+use crate::hardware_sources::SourceRead;
 use crate::health_state::{self, HEALTH_FILE_ASIDE, HealthFile, Marker, Read, SourceMark, cut};
 use crate::mac::TOOL_DEADLINE;
 use crate::maintenance_boot::{BOOTTIME_ARGS, SYSCTL, parse_kern_boottime};
@@ -130,8 +133,8 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
-    /// What each source's last read came to, by the source's token.
-    sources: BTreeMap<String, pb::SourceState>,
+    /// The last state of each source, by its token.
+    states: BTreeMap<String, pb::SourceState>,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -186,7 +189,7 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
-                sources: BTreeMap::new(),
+                states: BTreeMap::new(),
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -256,29 +259,26 @@ impl HealthKeeper {
         held
     }
 
-    /// Keeps what the last read of `source` came to: `status`, and `reason` when it was not
-    /// read, each cut to its bound; the log gets a line when it differs from the one before.
-    pub fn source_state(&self, source: &str, status: pb::SourceStatus, reason: &str) {
-        let state = pb::SourceState {
-            source: cut(source, MAX_SOURCE),
-            status: status.into(),
-            reason: cut(reason, MAX_SOURCE_REASON),
-        };
-        let mut inner = lock(&self.inner);
-        let before = inner.sources.insert(state.source.clone(), state.clone());
-        if before.as_ref() != Some(&state) {
-            let line = format!(
-                "hardware source {}: {status:?}: {}",
-                state.source, state.reason
-            );
-            self.log.line(line.trim_end_matches(": "));
+    /// Takes what one read of `source` at `now_unix` came to: its state, kept for the
+    /// heartbeats, with its reason cut to its bound; and, when it carries a mark or records, its
+    /// records and its mark (none keeps the mark it had), as [`HealthKeeper::record`] holds them.
+    /// How many records it holds now that it did not before. A read with neither a mark nor a
+    /// record leaves the state file as it was, so a source the host lacks has no first read yet.
+    pub fn read(&self, source: &str, read: SourceRead, now_unix: u64) -> usize {
+        let name = cut(source, MAX_SOURCE);
+        lock(&self.inner).states.insert(
+            name.clone(),
+            pb::SourceState {
+                source: name,
+                status: read.status.into(),
+                reason: cut(&read.reason, MAX_SOURCE_REASON),
+            },
+        );
+        if read.mark.is_none() && read.events.is_empty() {
+            return 0;
         }
-    }
-
-    /// When the boot the daemon runs in began, Unix seconds; 0 when it was not read.
-    #[must_use]
-    pub fn boot_unix(&self) -> u64 {
-        lock(&self.inner).file.boot_unix
+        let mark = read.mark.or_else(|| self.mark(source)).unwrap_or_default();
+        self.record(source, &mark, read.events, now_unix)
     }
 
     /// The mark `source` last kept; none before its first read on this host.
@@ -308,7 +308,7 @@ fn is_history(event: &pb::HardwareEvent, now_unix: u64) -> bool {
 impl HostHealthSource for HealthKeeper {
     fn health(&self) -> pb::HostHealth {
         let inner = lock(&self.inner);
-        pb::HostHealth {
+        let mut health = pb::HostHealth {
             events: inner.file.held.to_send(),
             baseline: None,
             boot_id: if inner.boot_known {
@@ -318,8 +318,15 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources: inner.sources.values().take(MAX_SOURCES).cloned().collect(),
+            sources: inner.states.values().take(MAX_SOURCES).cloned().collect(),
+        };
+        for keep in (0..=health.events.len()).rev() {
+            health.events.truncate(keep);
+            if health.encoded_len() <= MAX_HEALTH_BYTES {
+                break;
+            }
         }
+        health
     }
 
     fn written(&self, event_ids: &[String]) {

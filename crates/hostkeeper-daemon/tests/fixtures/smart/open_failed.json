@@ -1,0 +1,1 @@
+{"json_format_version":[1,0],"smartctl":{"version":[7,4],"argv":["smartctl","--json=c","--nocheck=standby","--info","--health","--attributes","/dev/sdb"],"messages":[{"string":"Smartctl open device: /dev/sdb failed: No such device","severity":"error"}],"exit_status":2}}

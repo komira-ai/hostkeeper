@@ -433,6 +433,16 @@ async fn start_and_serve(
         major,
         watchdog,
     );
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
+        platform.kind,
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
+    );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;
     Ok(())
@@ -461,8 +471,6 @@ async fn start_and_serve(
 /// - every host keeps the certificate and key of the pki directory's `current` generation at
 ///   [`IDENTITY_DIR`], after each step of the enrollment loop, for the group `hostkeeper-identity`
 ///   ([`HostIdentity`], [`IdentityGroup::for_host`]);
-/// - a Linux host reads rasdaemon's database every minute into the hardware event records its
-///   heartbeats send ([`crate::rasdaemon::at_host`]), on a thread of its own;
 /// - every host keeps the operator keys the coordinator sends in the managed block of its login
 ///   account's `authorized_keys` ([`OperatorKeys::at_host`]);
 /// - every host keeps the host prerequisites the coordinator sends, which a Mac installs and a
@@ -535,16 +543,6 @@ pub fn host_links(
     let health =
         crate::host_health::at_host(kind, &ctx.dirs.state, ctx.clock.as_ref(), log.clone());
     let clock: Arc<dyn hostkeeper_link::UnixClock> = Arc::new(SystemUnixClock);
-    let health_reads = crate::rasdaemon::at_host(
-        kind,
-        Path::new(crate::rasdaemon::DATABASE),
-        &health,
-        Arc::clone(&clock),
-        Box::new(ClockSleeper::new(Arc::clone(&ctx.clock), stop.clone())),
-        log.clone(),
-    )
-    .into_iter()
-    .collect();
     Links {
         enroller: Box::new(move || host_enroller(&endpoint, &pki, settings.clone(), kind)),
         link: Arc::new(link),
@@ -577,7 +575,6 @@ pub fn host_links(
         prerequisites: Some(Arc::new(prerequisites)),
         maintenance,
         health: Some(health),
-        health_reads,
     }
 }
 

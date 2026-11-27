@@ -1,6 +1,6 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1, the daemon's state file of HH3 and its rasdaemon source of HH9, marked **Built** where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3, its SMART and hwmon sources of HH11 and its rasdaemon source of HH9, marked **Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -79,7 +79,7 @@ Alerts are derived from it; a person's acknowledgements and repair notes are rec
 | `subject` | which one: the memory slot (`DIMM D1`), the CPU (`CPU 1`), the PCIe device (`0000:3b:00.0`), the disk (`nvme1n1`, with its serial kept as a digest), the sensor (`coretemp/Package id 0`), the power supply (`PSU 2`), `board` |
 | `severity` | `info`, `warning` or `critical`, by the table of its source (section 3) |
 | `state` | `event` (it happened), `asserted` (a condition began: a sensor over its threshold, a disk failing) or `deasserted` (that condition ended) |
-| `source` | `rasdaemon`, `smart`, `journal`, `sel`, `sysfs` and `baseline` on Linux; `panic`, `shutdown`, `diskutil`, `thermal` and `baseline` on a Mac (a `system_profiler` change is judged by the coordinator, so its record is `baseline`); `coordinator` for an alert's raising and ending; `operator` for a person's note |
+| `source` | `rasdaemon`, `smart`, `journal`, `sel`, `sysfs`, `hwmon` and `baseline` on Linux; `panic`, `shutdown`, `diskutil`, `thermal` and `baseline` on a Mac (a `system_profiler` change is judged by the coordinator, so its record is `baseline`); `coordinator` for an alert's raising and ending; `operator` for a person's note |
 | `code` | a stable token of the normalized fault, the same on both platforms where the fault is the same: `memory_uncorrectable`, `memory_corrected_rate`, `capacity_short`, `cpu_machine_check`, `pcie_fatal`, `disk_failing`, `disk_media_errors`, `io_error`, `thermal_critical`, `power_supply_failed`, `unexpected_reboot`, `panic_hardware`, `bmc_missing`, `note`, ... |
 | `message` | the normalized message: one line a person reads, at most 120 bytes |
 | `raw` | the source's own line, as it printed it, cut to 256 bytes |
@@ -151,14 +151,16 @@ the console says "not monitored: <source>", never a clean bill.
 | Source | What is read | Normalized to | Severity | Poll |
 |---|---|---|---|---|
 | **rasdaemon** (Built: `crates/hostkeeper-daemon/src/rasdaemon.rs`) | its database `/var/lib/rasdaemon/ras-mc_event.db`, read-only (4.5), the rows after each table's last rowid read (the mark in the state file, 4.4), of its tables `mc_event` (memory, by DIMM label), `mce_record` (CPU machine checks), `aer_event` (PCIe), `mf_event` (memory failure) and `disk_errors` (failed block requests); a table the database lacks is passed over, and an empty one is read (13.2, item 1) [V: the table names of the installed release] | `memory` by DIMM label (`mc<n>` with none), `cpu` by socket, `pcie` by device, `memory` for a memory failure, `disk` by name; `raw` is the row's fields; `event_id` `rasdaemon:<table>:<rowid>@<time>`; the corrected rows of a subject, and a disk's failed requests, one record per hour with their count (2.1) | uncorrected, fatal and memory failure C; deferred, an unknown type and a machine check with no status W; corrected `info`; a disk's failed requests W (`io_error`); `memory_corrected_rate` W at 10 or more an hour on one DIMM (the coordinator's) | 60 s |
-| **SMART**, through smartmontools | `smartctl --json --nocheck=standby` of each disk (SATA, SAS, NVMe): status, `critical_warning`, available spare, media errors, pending and reallocated sectors | `disk` by name, keyed by serial; `disk_failing` asserted while failing, `disk_media_errors` at each growth | failing or `critical_warning` C; growth W | hourly |
+| **SMART**, through smartmontools | `smartctl --json=c --nocheck=standby --info --health --attributes /dev/<disk>` of each disk (SATA, SAS, NVMe): status, `critical_warning`, available spare, media errors, pending and reallocated sectors (Built: `crates/hostkeeper-daemon/src/smart.rs`) | `disk` by name, keyed by serial; `disk_failing` asserted while failing and deasserted when it passes again or is gone, `disk_media_errors` at each growth (`info` at a disk's first read) | failing, `critical_warning` or a spare under its threshold C (its end C too, so it is never folded); growth W | hourly |
 | **The persistent journal** | the kernel's lines of the boot before and of this boot, read once per boot and then followed: machine checks (`mce:`), EDAC, AER, the BERT lines of the previous boot [V: the exact string], `[Hardware Error]`, and I/O errors (`I/O error, dev <disk>`) | `cpu`, `memory`, `pcie`, `disk` (`io_error`); the line's own severity token decides | fatal and recoverable C; corrected `info`; an I/O error W | once per boot, then followed |
 | **The BMC's event log** (IPMI SEL) | `Get SEL Info`, `Get SEL Entry` over `/dev/ipmi0` (Built: `crates/hostkeeper-daemon/src/ipmi.rs`, `IPMI_DEVICE`), entries newer than the last read; the slot and sensor named by the SDR | memory (sensor type `0x0C`, including "memory device disabled"), processor (`0x07`), power supply (`0x08`), fan (`0x04`) and temperature (`0x01`) to `memory`, `cpu`, `power`, `thermal`; watchdog, critical interrupt, OS critical stop, POST error to `board`; unknown and OEM types kept as `info`, never dropped | uncorrectable memory, memory disabled, a CPU thermal trip, a PSU or fan failure, an OS critical stop C; corrected memory, a temperature threshold W | 60 to 300 s, the entries read only when the count or add time changed |
 
 Also read, and normalized the same way: the capacity of every boot (section 4.3: `MemTotal`, the SMBIOS memory devices, CPUs, disks,
 NICs), which the coordinator compares and records as `capacity_short` (`baseline`); kernel taint M, B, D and L
 (`/proc/sys/kernel/tainted`, `cpu` or `memory`, `sysfs`); `HardwareCorrupted` of `/proc/meminfo` (`memory`); pstore records of the
-previous boot (`board`); hwmon temperatures against their driver's own `crit` (`thermal`, the drivers `coretemp`, `k10temp`, `nvme`);
+previous boot (`board`); hwmon temperatures against their driver's own `crit` (`thermal`, the drivers `coretemp`, `k10temp`, `nvme`;
+source `hwmon`, every 60 s, `thermal_critical` asserted at `crit` and deasserted at the driver's `crit_hyst` or 5 °C under `crit`,
+Built: `crates/hostkeeper-daemon/src/hwmon.rs`);
 ext4 `errors_count` and read-only remounts (`disk`); and a missing or silent BMC (`host`, `bmc_missing`, decision 6). A filesystem
 nearly full is not hardware: it is part of `storage_failing` (5.1) with no hardware record.
 
@@ -285,8 +287,9 @@ IPMI 2.0 event tables), sysfs and proc, the SMBIOS memory devices (`/sys/firmwar
 **Delegated**, through the `Launchctl` port (Built: `LaunchctlProcess` of `crates/hostkeeper-launchd`, which
 `crates/hostkeeper-daemon/src/mac.rs` uses on a Mac and which already runs programs on Linux: `maintenance_linux/apt.rs`, `dnf.rs` and
 `rebooter.rs` of `crates/hostkeeper-daemon/src`): a fixed argument list, no shell, an empty environment, a 64 KiB output cap and a
-kill at the deadline. `smartctl --json --nocheck=standby` (the `ioctl`s would need `unsafe`; never `-t` or any option that writes; its
-exit status bits read as `smartctl(8)` documents), and on a Mac `diskutil`, `pmset`, `powermetrics` and `system_profiler`. Not used:
+kill at the deadline. `smartctl --json=c --nocheck=standby --info --health --attributes` (the `ioctl`s would need `unsafe`; never `-t`
+or any option that writes; its exit status bits read as `smartctl(8)` documents; Built: `smart.rs`, through `LaunchctlProcess`, each
+disk killed at 60 s; a `smartctl` that is not installed is the source `unsupported`, never an error), and on a Mac `diskutil`, `pmset`, `powermetrics` and `system_profiler`. Not used:
 `mcelog`, `edac-utils`, `lm-sensors`, `smartd`.
 
 ### 4.3 The memory baseline: installed RAM, the DIMM list and `MemTotal` (decision 10)
@@ -366,7 +369,9 @@ that changes the host, the cordon, is a maintenance run, which runs each service
   `unreadable` source with its reason, never a crash; no file, or none of its tables, is `unsupported`. Pages are read one at a time,
   only those a read walks; a b-tree that loops or is deeper than 32 levels, and a record over 1 MiB, are malformed.
 - **Deadlines.** Every read has a deadline, an output cap, and a failure of its own that is recorded in `sources` and never fails the
-  heartbeat. Each source has its own worker, so a hung read stops that source only.
+  heartbeat. Each source has its own worker, so a hung read stops that source only (Built: `crates/hostkeeper-daemon/src/hardware_sources.rs`,
+  a thread per source started with the daemon, its state kept by `HealthKeeper::read`; when the states and six records would pass
+  the 4 KiB of `HostHealth`, the beat carries fewer records).
 - **Cost.** A few dozen small reads a minute; the SEL is read in full only when its count or add time changes. Programs: `smartctl`
   hourly; on a Mac `launchctl print` and `pmset` every 60 s, `diskutil` every 15 minutes, `powermetrics` at most every 5 minutes and
   only under a thermal limit, `system_profiler` at start and 2 minutes later.

@@ -51,7 +51,6 @@ fn host(rig: &Rig) -> (Heartbeater, Arc<FakeLink>, Arc<RecordingLog>) {
         bmc: None,
         serial_console: None,
         health: None,
-        health_reads: Vec::new(),
     };
     (links.heartbeater(&daemon), link, log)
 }

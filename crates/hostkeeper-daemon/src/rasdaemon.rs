@@ -1,8 +1,9 @@
 //! rasdaemon's database read into hardware event records (docs/design/host-health-alerts.md
-//! sections 3.1 and 4.5): a Linux host's worker reads [`DATABASE`] every [`POLL_SECS`] seconds
-//! ([`Rasdaemon::run`]), turns each new row of the tables it knows into a record of the host's
-//! hardware event log, holds them in the daemon's health state ([`HealthKeeper::record`]), and says
-//! whether the database could be read ([`HealthKeeper::source_state`]).
+//! sections 3.1 and 4.5): on a Linux host, the source [`RasdaemonSource`] of
+//! [`crate::hardware_sources`] reads [`DATABASE`] every [`POLL_SECS`] seconds, turns each new row
+//! of the tables it knows into a record of the host's hardware event log, and says whether the
+//! database could be read; its worker hands both to the daemon's health state
+//! ([`crate::host_health::HealthKeeper::read`]).
 //!
 //! **The tables** ([`TABLES`]): `mc_event` (memory errors, by DIMM label), `mce_record` (machine
 //! checks, by CPU socket), `aer_event` (PCIe errors, by device), `mf_event` (memory failures: a
@@ -18,9 +19,9 @@
 //! every row, so that what is older than the history window is history
 //! ([`crate::host_health::HISTORY_SECS`]). A table whose last rowid is below the mark was made
 //! again (rasdaemon reinstalled, its database removed): it is read from its first row, and the
-//! log says so. A record's `event_id` is `rasdaemon:<table>:<rowid>@<time>`, the row's time in
-//! Unix seconds, so a row read twice is one record, and a row of a database made again is not
-//! taken for the row of the same id before it.
+//! read says so in its notes. A record's `event_id` is `rasdaemon:<table>:<rowid>@<time>`, the
+//! row's time in Unix seconds, so a row read twice is one record, and a row of a database made
+//! again is not taken for the row of the same id before it.
 //!
 //! **Severity** (section 3.1): an uncorrected or fatal memory error, a machine check whose status
 //! has its uncorrected bit, an uncorrected or fatal PCIe error and a memory failure are
@@ -42,15 +43,15 @@
 //! until a read succeeds. The database is never written ([`crate::sqlite_read`]).
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use hostkeeper_launchd::PlatformKind;
-use hostkeeper_link::{Job, Log, Sleeper, Tick, UnixClock};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use serde::{Deserialize, Serialize};
 
-use crate::host_health::HealthKeeper;
+use crate::hardware_sources::{HardwareSource, SourceRead};
+use crate::host_health::PROC_STAT;
+use crate::maintenance_host::parse_boot_time;
 use crate::sqlite_read::{self, Database, Row, SqliteError, Table, Value};
 
 /// rasdaemon's database.
@@ -128,7 +129,8 @@ pub struct Reading {
     pub reason: String,
     /// When it was read: the records and the new mark.
     pub found: Option<Found>,
-    /// Lines for the daemon's log.
+    /// What the read found worth saying besides its records: a database made again, a mark that
+    /// does not parse.
     pub notes: Vec<String>,
 }
 
@@ -660,85 +662,53 @@ fn count_in(pending: &mut Vec<Pending>, new: Pending) {
     }
 }
 
-/// The source's worker: the database at its path read into its keeper, at the second of its
-/// clock.
-pub struct Rasdaemon {
-    database: PathBuf,
-    keeper: Arc<HealthKeeper>,
-    clock: Arc<dyn UnixClock>,
-    log: Arc<dyn Log>,
+/// rasdaemon's database as a source of the host's hardware ([`HardwareSource`]), read with
+/// [`read`] in the boot that began at the `btime` of the host's [`PROC_STAT`], which its first
+/// read reads (0 when it cannot be read, which marks no record of the boot before).
+pub struct RasdaemonSource {
+    root: PathBuf,
+    boot_unix: Option<u64>,
 }
 
-impl Rasdaemon {
-    /// The worker of the database `database`, holding its records in `keeper`, reading at the
-    /// second of `clock` and logging to `log`.
+impl RasdaemonSource {
+    /// The source of the host whose root is `root`: its [`DATABASE`] under it. Nothing is read
+    /// before the first read.
     #[must_use]
-    pub fn new(
-        database: PathBuf,
-        keeper: Arc<HealthKeeper>,
-        clock: Arc<dyn UnixClock>,
-        log: Arc<dyn Log>,
-    ) -> Rasdaemon {
-        Rasdaemon {
-            database,
-            keeper,
-            clock,
-            log,
-        }
-    }
-
-    /// One read: its notes logged, the source's state kept, and, when the mark moved, its
-    /// records held with the new mark; how many records it holds now that it did not before.
-    pub fn poll(&self) -> usize {
-        let now = self.clock.unix_secs();
-        let mark = self.keeper.mark(SOURCE);
-        let reading = read(
-            &self.database,
-            mark.as_deref(),
-            self.keeper.boot_unix(),
-            now,
-        );
-        for note in &reading.notes {
-            self.log.line(note);
-        }
-        self.keeper
-            .source_state(SOURCE, reading.status, &reading.reason);
-        reading
-            .found
-            .filter(|found| mark.as_deref() != Some(found.mark.as_str()))
-            .map_or(0, |found| {
-                self.keeper.record(SOURCE, &found.mark, found.events, now)
-            })
-    }
-
-    /// Reads, then waits [`POLL_SECS`] on `sleeper`, until the wait says stop.
-    pub fn run(&self, sleeper: &dyn Sleeper) {
-        loop {
-            self.poll();
-            if sleeper.sleep(POLL_SECS) == Tick::Stop {
-                return;
-            }
+    pub fn new(root: &Path) -> RasdaemonSource {
+        RasdaemonSource {
+            root: root.to_path_buf(),
+            boot_unix: None,
         }
     }
 }
 
-/// The worker a host of `kind` reads rasdaemon's database `database` with, into `keeper`, on
-/// `clock`, waiting on `sleeper`: a Linux host's ([`PlatformKind::Linux`] and
-/// [`PlatformKind::Openrc`]); none on a Mac, which has no rasdaemon.
-#[must_use]
-pub fn at_host(
-    kind: PlatformKind,
-    database: &Path,
-    keeper: &Arc<HealthKeeper>,
-    clock: Arc<dyn UnixClock>,
-    sleeper: Box<dyn Sleeper + Send>,
-    log: Arc<dyn Log>,
-) -> Option<Job> {
-    match kind {
-        PlatformKind::Linux | PlatformKind::Openrc => {
-            let worker = Rasdaemon::new(database.to_path_buf(), Arc::clone(keeper), clock, log);
-            Some(Box::new(move || worker.run(sleeper.as_ref())))
+impl HardwareSource for RasdaemonSource {
+    fn name(&self) -> &'static str {
+        SOURCE
+    }
+
+    fn every_secs(&self) -> u64 {
+        POLL_SECS
+    }
+
+    /// One [`read`]; a read that found the mark it was given gives no mark, so the state file is
+    /// not written again for a database with nothing new.
+    fn read(&mut self, mark: Option<&str>, now_unix: u64) -> SourceRead {
+        let root = &self.root;
+        let boot_unix = *self.boot_unix.get_or_insert_with(|| {
+            fs::read_to_string(root.join(PROC_STAT)).map_or(0, |text| parse_boot_time(&text))
+        });
+        let database = self.root.join(DATABASE.trim_start_matches('/'));
+        let reading = read(&database, mark, boot_unix, now_unix);
+        SourceRead {
+            status: reading.status,
+            reason: reading.reason,
+            mark: reading
+                .found
+                .as_ref()
+                .map(|found| found.mark.clone())
+                .filter(|found| mark != Some(found.as_str())),
+            events: reading.found.map(|found| found.events).unwrap_or_default(),
         }
-        PlatformKind::Macos => None,
     }
 }

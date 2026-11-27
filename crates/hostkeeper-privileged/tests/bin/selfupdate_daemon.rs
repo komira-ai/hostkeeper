@@ -405,8 +405,6 @@ fn run_daemon(
             // /var/lib/hostkeeper/identity and make its group with the real group tool; this
             // fixture's host must not.
             links.identity = None;
-            // Nor read the real host's rasdaemon database.
-            links.health_reads.clear();
             links
         } else {
             file_links(
@@ -465,7 +463,6 @@ fn file_links(
         bmc: None,
         serial_console: None,
         health: None,
-        health_reads: Vec::new(),
     }
 }
 
