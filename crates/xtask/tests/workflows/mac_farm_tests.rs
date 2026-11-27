@@ -303,7 +303,7 @@ fn the_farm_job_with_another_shape_or_rights_is_refused() {
     refused(
         FILE,
         "jobs:\n",
-        "jobs:\n  other:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: true\n",
+        "jobs:\n  other:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 5\n    steps:\n      - run: true\n        timeout-minutes: 1\n",
         &[&format!("job other is not a job of {FILE}")],
     );
     refused(
@@ -325,8 +325,7 @@ fn the_farm_job_with_another_shape_or_rights_is_refused() {
 #[test]
 fn a_farm_step_added_changed_or_moved_is_refused() {
     let who = format!("{FILE}: job {JOB}");
-    let build =
-        "      - name: Build xtask before the tailnet join\n        run: cargo xtask --help\n";
+    let build = "      - name: Build xtask before the tailnet join\n        timeout-minutes: 10\n        run: cargo xtask --help\n";
     let found = problems(
         FILE,
         build,

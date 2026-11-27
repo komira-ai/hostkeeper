@@ -9,6 +9,9 @@ crates.io
 # The Rust release's toolchain tarballs `cargo xtask mac-farm` sends to a farm Mac
 # (static.rust-lang.org, pinned in crates/xtask/src/mac_farm/toolchain.toml).
 rust-lang.org
+# The Zig release komira builds its CI tools with, which farm.yml downloads (pinned by SHA-256) to
+# build komira's assert_remote.
+ziglang.org
 # The page of a RustSec advisory, which the advisories issue links each advisory to.
 rustsec.org
 

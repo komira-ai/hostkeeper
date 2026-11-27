@@ -120,16 +120,16 @@ pub const STEP_KEYS: [&str; 6] = ["env", "name", "run", "timeout-minutes", "uses
 
 /// The steps of [`JOB`], in order, as [`shape`] writes them.
 pub const STEPS: [&str; 7] = [
-    "uses actions/checkout with persist-credentials=false",
-    "run rustup toolchain install",
-    "run cargo xtask release set-version --version \"$RELEASE_VERSION\"",
-    "run cargo xtask --help",
-    "uses tailscale/github-action with audience=${{ vars.TS_AUDIENCE }} with oauth-client-id=${{ vars.TS_CLIENT_ID }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=tag:ci with use-cache=false with version=1.94.2",
+    "uses actions/checkout with persist-credentials=false timeout-minutes 10",
+    "run rustup toolchain install timeout-minutes 10",
+    "run cargo xtask release set-version --version \"$RELEASE_VERSION\" timeout-minutes 15",
+    "run cargo xtask --help timeout-minutes 10",
+    "uses tailscale/github-action with audience=${{ vars.TS_AUDIENCE }} with oauth-client-id=${{ vars.TS_CLIENT_ID }} with sha256sum=c6f99a5d774c7783b56902188d69e9756fc3dddfb08ac6be4cb2585f3fecdc32 with tags=tag:ci with use-cache=false with version=1.94.2 timeout-minutes 10",
     concat!(
         "run cargo xtask mac-farm --address \"$FARM_ADDRESS\" --instance \"$FARM_INSTANCE\" --tls \"$FARM_TLS\" --properties \"$FARM_PROPERTIES\" --scratch \"$RUNNER_TEMP/mac-farm\" --summary \"$GITHUB_STEP_SUMMARY\" --env \"RELEASE_COMMIT=$RELEASE_COMMIT\" --output target/release/hostkeeper --output target/release/hk --output target/release/hello --output target/release/hostkeeper-bootstrap -- build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-hk --bin hk -p hello --bin hello -p hostkeeper-bootstrap --bin hostkeeper-bootstrap",
         " env FARM_ADDRESS=${{ vars.FARM_ADDRESS }} env FARM_INSTANCE=${{ vars.FARM_INSTANCE }} env FARM_PROPERTIES=${{ vars.FARM_DARWIN_ARM64_PROPERTIES }} env FARM_TLS=${{ vars.FARM_TLS || 'false' }} env RELEASE_COMMIT=${{ github.sha }} timeout-minutes 50",
     ),
-    "uses actions/upload-artifact with if-no-files-found=error with name=macho-unsigned-macos-arm64 with path=target/release/hostkeeper\ntarget/release/hk\ntarget/release/hello\ntarget/release/hostkeeper-bootstrap\n with retention-days=90",
+    "uses actions/upload-artifact with if-no-files-found=error with name=macho-unsigned-macos-arm64 with path=target/release/hostkeeper\ntarget/release/hk\ntarget/release/hello\ntarget/release/hostkeeper-bootstrap\n with retention-days=90 timeout-minutes 10",
 ];
 
 /// The top-level keys of [`FILE`], exactly: a workflow-level `env:` or `defaults:` would change

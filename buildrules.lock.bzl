@@ -38,7 +38,7 @@ MANIFEST_SHA256 = {
     "crates/hostkeeper-ui-tests/Cargo.toml": "5b2ecd67a5d3959c25a3588186ccf20c8ba361b7010c201fe504e6b4098b65df",
     "crates/hostkeeper-wire/Cargo.toml": "cf73870aa13a29494459f3d713f59a3947bcf3ef656b66fa847416f88e4c0f66",
     "crates/hostkeeper/Cargo.toml": "01d1d8fcff0478a1591b4ef116943cf3b2b25221ab6ae07dea0a7209d66ee244",
-    "crates/xtask/Cargo.toml": "1003d7c564aab5d67834b58b214ca7868f32806ae115f454661e552d72013a67",
+    "crates/xtask/Cargo.toml": "17cc209d60d82ab3e129b18af643357af6e50f22e0dd4e9ecafa4c02d11c90f8",
     "examples/hello/Cargo.toml": "e5e1cccb4049aa4b498d8c0f132ee60d3cb682275be6edfe55ec8c7b34740de4",
     "rust-toolchain.toml": "e3a213e0d222e94d213cafbc20932eb3f76c643b4dd63756acf95192df2aa310",
 }

@@ -24,6 +24,11 @@
 # its signer, the one signer hosts and docs/deploy/verify-a-release.md accept. The farm's address,
 # instance, TLS and Mac platform are the organisation's variables FARM_*; the verb masks the address
 # in the log before it prints anything.
+#
+# No buck2 runs here, so komira's buck2-farm action and its watchdog do not apply: the Remote
+# Execution client of `cargo xtask mac-farm` has a deadline for its connect alone. Every step has a
+# `timeout-minutes` of its own under the job's (the workflow lint, step_bounds.rs), so a step that
+# hangs on a dead connection ends at its own bound (docs/farm.md, "Time limits").
 name: mac-farm
 
 on:
@@ -49,15 +54,20 @@ jobs:
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
         with:
           persist-credentials: false
       - run: rustup toolchain install
+        timeout-minutes: 10
       - name: The workspace takes the version of the release
+        timeout-minutes: 15
         run: cargo xtask release set-version --version "$RELEASE_VERSION"
       # `cargo xtask` builds xtask; with --help it runs nothing.
       - name: Build xtask before the tailnet join
+        timeout-minutes: 10
         run: cargo xtask --help
       - name: Join the farm's tailnet
+        timeout-minutes: 10
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
           oauth-client-id: ${{ vars.TS_CLIENT_ID }}
@@ -76,6 +86,7 @@ jobs:
           RELEASE_COMMIT: ${{ github.sha }}
         run: cargo xtask mac-farm --address "$FARM_ADDRESS" --instance "$FARM_INSTANCE" --tls "$FARM_TLS" --properties "$FARM_PROPERTIES" --scratch "$RUNNER_TEMP/mac-farm" --summary "$GITHUB_STEP_SUMMARY" --env "RELEASE_COMMIT=$RELEASE_COMMIT" --output target/release/hostkeeper --output target/release/hk --output target/release/hello --output target/release/hostkeeper-bootstrap -- build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-hk --bin hk -p hello --bin hello -p hostkeeper-bootstrap --bin hostkeeper-bootstrap
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        timeout-minutes: 10
         with:
           name: macho-unsigned-macos-arm64
           path: |
