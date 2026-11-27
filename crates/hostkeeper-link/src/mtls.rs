@@ -159,7 +159,7 @@ impl Endpoint {
 
 /// How [`handshaken`] opens a connection to an address: given the address, as text, and the
 /// port.
-pub(crate) type Dial = dyn Fn(&str, u16) -> io::Result<Box<dyn Conn>>;
+pub(crate) type Dial<'a> = dyn Fn(&str, u16) -> io::Result<Box<dyn Conn>> + 'a;
 
 /// A TLS stream to the coordinator, its handshake completed.
 pub(crate) type Tls = StreamOwned<ClientConnection, Box<dyn Conn>>;
@@ -176,7 +176,7 @@ pub(crate) type Tls = StreamOwned<ClientConnection, Box<dyn Conn>>;
 pub(crate) fn handshaken(
     reach: &Reach,
     config: &Arc<ClientConfig>,
-    dial: &Dial,
+    dial: &Dial<'_>,
 ) -> Result<Tls, LinkError> {
     let candidates = reach
         .candidates()
@@ -199,7 +199,7 @@ fn handshake(
     reach: &Reach,
     config: &Arc<ClientConfig>,
     candidate: Candidate,
-    dial: &Dial,
+    dial: &Dial<'_>,
 ) -> Result<Tls, LinkError> {
     let connection = ClientConnection::new(Arc::clone(config), reach.endpoint().name.clone())
         .map_err(|_| LinkError::Transport(io::ErrorKind::Other))?;
