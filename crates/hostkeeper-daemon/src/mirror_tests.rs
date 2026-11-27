@@ -717,11 +717,14 @@ fn the_coordinator_wiring_needs_an_address_that_can_be_dialed() {
         over_coordinator(
             &config("https://coordinator.test:8443"),
             pki,
+            pki,
             Arc::clone(&clock)
         )
         .is_some()
     );
-    assert!(over_coordinator(&config("https://coordinator.test:8443/x"), pki, clock).is_none());
+    assert!(
+        over_coordinator(&config("https://coordinator.test:8443/x"), pki, pki, clock).is_none()
+    );
     Quiet.line("nothing");
 }
 

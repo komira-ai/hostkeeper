@@ -2,8 +2,11 @@
 //! `hostkeeper.agent.v1`), HTTP/2 and rustls mutual TLS, to a coordinator that advertised
 //! `grpc-v1`.
 //!
-//! - **Who it talks to, and who it is.** As [`crate::JsonMtlsLink`]: the coordinator's address is
-//!   the daemon config's `coordinator`, its certificate must chain to the CA of the pki
+//! - **Who it talks to, and who it is.** As [`crate::JsonMtlsLink`]: the coordinator is the name
+//!   of the daemon config's `coordinator`, dialed at the addresses of its [`Reach`] in turn
+//!   until one completes the handshake, each dial and handshake within an equal share of the
+//!   call's bound (the lookup is made before the bound starts, and waits as the reach's lookup
+//!   does), its certificate must chain to the CA of the pki
 //!   directory's current generation whose SHA-256 the config pins (one implementation of that
 //!   trust, [`crate::mtls`]'s, with ALPN `h2` here), and the client certificate and key are the
 //!   heartbeat's [`ClientIdentity`]. The CA bundle is read again at every heartbeat.
@@ -46,12 +49,13 @@ use tonic::transport::Endpoint as ChannelEndpoint;
 
 use crate::beat::{Heartbeat, MAX_HEARTBEAT_BYTES};
 use crate::dial::CALL_SECS;
-use crate::mtls::{Endpoint, EndpointError, client_config, failed};
+use crate::mtls::{EndpointError, client_config, failed};
 use crate::names::Reason;
 use crate::order::Reply;
 use crate::pki::{CA, CURRENT};
 use crate::ports::{ClientIdentity, CoordinatorLink, LinkError, Log, ReplyFault, Unsendable};
 use crate::proto_map::{self, Dropped};
+use crate::reach::{Candidate, Reach};
 
 /// The most bytes of a gRPC reply that are read: 1 MiB. An order may carry the entry of a
 /// release's targets, at most 24 KiB encoded (`docs/design/packages.md` section 3.5), and a
@@ -93,7 +97,7 @@ pub enum GrpcLinkError {
 /// The [`CoordinatorLink`] over gRPC and mutual TLS.
 pub struct GrpcMtlsLink {
     runtime: Runtime,
-    endpoint: Endpoint,
+    reach: Arc<Reach>,
     /// The address the HTTP/2 requests name, `http://` because the TLS is already done.
     origin: Uri,
     pin: Sha256Hex,
@@ -107,21 +111,21 @@ pub struct GrpcMtlsLink {
 }
 
 impl GrpcMtlsLink {
-    /// The link to the coordinator of `config`, trusting the CA of the pki directory `pki`
-    /// whose SHA-256 `config` pins, reached through `dial`, logging to `log`. Each call is
+    /// The link to the coordinator `reach` names, trusting the CA of the pki directory `pki`
+    /// whose SHA-256 `config` pins, dialed through `dial`, logging to `log`. Each call is
     /// bounded by [`CALL_SECS`].
     ///
     /// # Errors
-    /// [`GrpcLinkError::Endpoint`]: the config's coordinator address is not one the link dials.
+    /// [`GrpcLinkError::Endpoint`]: the coordinator's address is not one the link dials.
     /// [`GrpcLinkError::Runtime`]: the runtime cannot be started.
     pub fn new(
         config: &DaemonConfig,
         pki: &Path,
+        reach: Arc<Reach>,
         dial: Arc<dyn GrpcDial>,
         log: Arc<dyn Log>,
     ) -> Result<GrpcMtlsLink, GrpcLinkError> {
-        let endpoint = Endpoint::of(&config.coordinator)?;
-        let origin = format!("http://{}", endpoint.authority)
+        let origin = format!("http://{}", reach.endpoint().authority)
             .parse::<Uri>()
             .map_err(|_| EndpointError::Host(config.coordinator.as_str().to_owned()))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -129,7 +133,7 @@ impl GrpcMtlsLink {
             .build()?;
         Ok(GrpcMtlsLink {
             runtime,
-            endpoint,
+            reach,
             origin,
             pin: config.ca_sha256.clone(),
             ca_bundle: pki.join(CURRENT).join(CA),
@@ -146,23 +150,47 @@ impl GrpcMtlsLink {
         GrpcMtlsLink { bound, ..self }
     }
 
-    /// One heartbeat over a new connection: dial, TLS handshake, then the gRPC call on the
-    /// established stream.
+    /// The handshake with `candidate`'s address, the certificate checked against the
+    /// coordinator's name.
+    async fn handshake(
+        &self,
+        config: &Arc<ClientConfig>,
+        candidate: Candidate,
+    ) -> Result<tokio_rustls::client::TlsStream<Box<dyn AsyncConn>>, LinkError> {
+        let sock = self
+            .dial
+            .dial(&candidate.addr.ip().to_string(), candidate.addr.port())
+            .await
+            .map_err(|e| LinkError::Transport(e.kind()))?;
+        TlsConnector::from(Arc::clone(config))
+            .connect(self.reach.endpoint().name.clone(), sock)
+            .await
+            .map_err(|e| failed(&e))
+    }
+
+    /// One heartbeat over a new connection: each of `candidates` dialed and its TLS handshake
+    /// run until one completes, which the reach is told, then the gRPC call on the established
+    /// stream. Nothing is said before the handshake: what answered must be the coordinator. Each
+    /// address's dial and handshake take at most an equal share of the call's bound, so an
+    /// address that never answers leaves the others theirs.
     async fn call(
         &self,
         config: Arc<ClientConfig>,
+        candidates: Vec<Candidate>,
         request: HeartbeatRequest,
     ) -> Result<HeartbeatResponse, LinkError> {
-        let sock = self
-            .dial
-            .dial(&self.endpoint.host, self.endpoint.port)
-            .await
-            .map_err(|e| LinkError::Transport(e.kind()))?;
-        // The handshake first: what answered must be the coordinator before anything is said.
-        let tls = TlsConnector::from(config)
-            .connect(self.endpoint.name.clone(), sock)
-            .await
-            .map_err(|e| failed(&e))?;
+        let mut reached = Err(LinkError::Transport(io::ErrorKind::NotFound));
+        let share = self.bound / u32::try_from(candidates.len()).unwrap_or(u32::MAX).max(1);
+        for candidate in candidates {
+            reached = tokio::time::timeout(share, self.handshake(&config, candidate))
+                .await
+                .unwrap_or(Err(LinkError::Transport(io::ErrorKind::TimedOut)));
+            if reached.is_ok() {
+                self.reach.reached(candidate);
+                break;
+            }
+        }
+        let tls = reached?;
         let mut stream = Some(TokioIo::new(tls));
         let connector = tower::service_fn(move |_: Uri| {
             let stream = stream.take();
@@ -203,8 +231,12 @@ impl CoordinatorLink for GrpcMtlsLink {
             return Err(LinkError::Unsendable(Unsendable::Bytes { len }));
         }
         let config = client_config(&self.ca_bundle, &self.pin, identity, H2)?;
+        let candidates = self
+            .reach
+            .candidates()
+            .map_err(|e| LinkError::Transport(e.kind()))?;
         let response = self.runtime.block_on(async {
-            tokio::time::timeout(self.bound, self.call(config, request))
+            tokio::time::timeout(self.bound, self.call(config, candidates, request))
                 .await
                 .unwrap_or(Err(LinkError::Transport(io::ErrorKind::TimedOut)))
         })?;
@@ -249,6 +281,7 @@ fn refusal(status: &tonic::Status) -> LinkError {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::net::SocketAddr;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
@@ -258,6 +291,7 @@ mod tests {
     use super::{Dialing, Dropped, GrpcDial, GrpcMtlsLink, refusal};
     use crate::names::Reason;
     use crate::ports::{LinkError, Log, ReplyFault};
+    use crate::reach::{Lookup, Reach};
 
     /// A log that keeps its lines.
     #[derive(Default)]
@@ -266,6 +300,15 @@ mod tests {
     impl Log for Lines {
         fn line(&self, text: &str) {
             self.0.lock().expect("the lines").push(text.to_owned());
+        }
+    }
+
+    /// A lookup that is never used.
+    struct NoLookup;
+
+    impl Lookup for NoLookup {
+        fn lookup(&self, _host: &str, _port: u16) -> io::Result<Vec<SocketAddr>> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
         }
     }
 
@@ -305,7 +348,15 @@ mod tests {
             "0".repeat(64)
         );
         let config = DaemonConfig::parse(&text).expect("a daemon config");
-        GrpcMtlsLink::new(&config, Path::new("pki"), Arc::new(NoDial), log.clone()).expect("a link")
+        let reach = Reach::new(&config, Arc::new(NoLookup), log.clone()).expect("a reach");
+        GrpcMtlsLink::new(
+            &config,
+            Path::new("pki"),
+            Arc::new(reach),
+            Arc::new(NoDial),
+            log.clone(),
+        )
+        .expect("a link")
     }
 
     fn dropped(what: &str, why: &'static str) -> Dropped {

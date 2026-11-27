@@ -3,6 +3,7 @@
 
 mod support;
 
+use std::net::IpAddr;
 use std::os::unix::fs::symlink;
 
 use hostkeeper_config::daemon::{
@@ -190,6 +191,61 @@ fn a_serial_console_that_is_not_a_port_is_refused_by_name() {
     assert_eq!(
         refusal(&text).to_string(),
         "the daemon config's serial_console is not ttyS<n> or ttyAMA<n>, with n from 0 to 99"
+    );
+}
+
+/// A config that leaves `coordinator_ip` out gives the coordinator no address beside its name,
+/// so a config written for an earlier release loads as it did.
+#[test]
+fn coordinator_ip_is_absent_by_default() {
+    assert!(!EXAMPLE.contains("coordinator_ip"));
+    assert_eq!(DaemonConfig::parse(EXAMPLE).unwrap().coordinator_ip, None);
+}
+
+/// `coordinator_ip` is read as the address it writes, IPv4 or IPv6 without brackets, and nothing
+/// else of the config changes: the coordinator's URL, whose name the certificate is checked
+/// against, stays as it is.
+#[test]
+fn coordinator_ip_is_read_as_written() {
+    for (value, address) in [
+        ("192.0.2.10", IpAddr::from([192, 0, 2, 10])),
+        (
+            "2001:db8::10",
+            IpAddr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10]),
+        ),
+    ] {
+        let text = format!("coordinator_ip = \"{value}\"\n{EXAMPLE}");
+        let config = DaemonConfig::parse(&text).expect("coordinator_ip loads");
+        assert_eq!(config.coordinator_ip, Some(address), "{value}");
+        assert_eq!(
+            DaemonConfig {
+                coordinator_ip: None,
+                ..config
+            },
+            DaemonConfig::parse(EXAMPLE).unwrap()
+        );
+    }
+}
+
+/// Catches an address the daemon could not dial being taken: a name, a bracketed address, an
+/// address with a port, an empty string or a value that is not a string is refused by the key's
+/// name, and the reason says what the key holds.
+#[test]
+fn a_coordinator_ip_that_is_not_an_address_is_refused_by_name() {
+    for value in [
+        "\"coordinator.example\"",
+        "\"[2001:db8::10]\"",
+        "\"192.0.2.10:8443\"",
+        "\"\"",
+        "1",
+    ] {
+        let text = format!("coordinator_ip = {value}\n{EXAMPLE}");
+        assert_eq!(invalid_key(refusal(&text)), "coordinator_ip", "{value}");
+    }
+    let text = format!("coordinator_ip = \"192.0.2.300\"\n{EXAMPLE}");
+    assert_eq!(
+        refusal(&text).to_string(),
+        "the daemon config's coordinator_ip is not an IPv4 or IPv6 address"
     );
 }
 

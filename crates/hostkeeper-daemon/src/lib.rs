@@ -144,6 +144,10 @@
 //!   [`start::serve`] starts, in that order, once the daemon is ready, and which sends the
 //!   watchdog notice ([`notify::Watchdog`]) after each heartbeat; [`unix_clock`] is the wall
 //!   clock of the loop's deferrals, the daemon's one read of it.
+//! - [`coordinator_address`]: the coordinator's reach (where its name is dialed: the addresses it
+//!   looks up to, the one last reached, the config's `coordinator_ip`), which the heartbeat link
+//!   and the mirror dial through, and the state file that keeps the address last reached across
+//!   a restart.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
@@ -162,6 +166,7 @@ pub mod builtin;
 pub mod checks;
 pub mod cli;
 pub mod console;
+pub mod coordinator_address;
 pub mod coordinator_store;
 pub mod entry;
 pub mod executor;
