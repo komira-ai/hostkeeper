@@ -238,7 +238,10 @@ renames it by hand ([docs/admin.md](docs/admin.md)). Neither verb installs, upda
 version, and neither lifts a halt. To switch a version with the coordinator unreachable, root
 stops the daemon and runs `hostkeeper activate` on the host, and `hostkeeper pin` and
 `hostkeeper unpin` hold and release the coordinator's orders for a service
-([docs/admin.md](docs/admin.md#roll-a-service-back-on-the-host)).
+([docs/admin.md](docs/admin.md#roll-a-service-back-on-the-host)). `hostkeeper renew` asks the
+running daemon to renew the host's certificate at its next enrollment step rather than at half its
+life, for the same key and with no approval
+([docs/operations/enrollment.md](docs/operations/enrollment.md#renew-a-certificate-now)).
 
 - `abort <service>` stops the service's running step and ends its update. The daemon asks the
   update's runner to launch nothing more (no `rollback`, no `cleanup`), stops the unit of the
