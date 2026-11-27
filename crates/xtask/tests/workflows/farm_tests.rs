@@ -409,6 +409,10 @@ fn the_checks_and_builds_run_in_their_order_after_farm_connect() {
     );
 }
 
+/// What release_ref says of a checkout of another repository, in the job that calls xtask, that
+/// is not the tool's checkout: the committed file's 15th step.
+const CHECKOUT_BESIDE_XTASK: &str = "farm.yml: job build step 15 checks out another repository or into a path, in a job that calls xtask";
+
 #[test]
 fn the_tool_is_built_from_komiras_sources_at_the_actions_commit() {
     // Catches: the tool's sources from another commit than the action's (the action's command
@@ -445,10 +449,19 @@ fn the_tool_is_built_from_komiras_sources_at_the_actions_commit() {
             "          path: buck-out/komira\n",
             "          path: komira\n",
         ),
-        (" -OReleaseSafe ", " -ODebug "),
     ] {
-        assert_eq!(problems_with(from, to), [tool.as_str()], "{to:?}");
+        // A checkout of another shape is no longer the one release_ref lets stand in a job that
+        // calls xtask, so that rule refuses it too.
+        assert_eq!(
+            problems_with(from, to),
+            [tool.as_str(), CHECKOUT_BESIDE_XTASK],
+            "{to:?}"
+        );
     }
+    assert_eq!(
+        problems_with(" -OReleaseSafe ", " -ODebug "),
+        [tool.as_str()]
+    );
     let compile = format!("{COMPILE_STEP}        run: '{COMPILE_RUN}'\n");
     assert_eq!(problems_with(&compile, ""), [tool.as_str()]);
     assert_eq!(
