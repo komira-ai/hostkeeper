@@ -1,5 +1,5 @@
-//! A `prepare` whose manifest bound is 0 (`prepare = 0`): launched under the updater's ceiling
-//! ([`PREPARE_CEILING_SECS`]), stopped there by the dead-man, and read as a deferral with the
+//! A `prepare` declared unbounded in its manifest (`prepare = 0`): launched under the updater's
+//! ceiling ([`PREPARE_CEILING_SECS`]), stopped there by the dead-man, and read as a deferral with the
 //! reason `prepare_ceiling`; resumed after a crash by stopping its unit first. Every other step
 //! keeps its bound, and a `prepare` with a bound of its own keeps that one.
 

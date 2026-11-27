@@ -108,10 +108,11 @@ impl Host {
     /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
     /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
     /// after its switch is installed, unhealthy, and does. Neither makes a rollout live. This
-    /// reads the last word whatever its age; the decisions read [`Self::holds_slot_at`].
+    /// reads the last word whatever its age (as [`Self::holds_slot_at`] when it was said); the
+    /// decisions read [`Self::holds_slot_at`].
     #[must_use]
     pub fn holds_slot(&self) -> bool {
-        self.beat.updating.is_some() || self.beat.promotion_pending || self.failed_unhealthy()
+        self.holds_slot_at(self.seen)
     }
 }
 
