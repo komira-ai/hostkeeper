@@ -22,7 +22,8 @@
 //! of the daemon. The first read of a source on a host (no mark yet) is its history: a record of
 //! it older than [`HISTORY_SECS`] is kept as `info`, its message starting [`HISTORY_PREFIX`], and
 //! raises nothing. Each heartbeat carries at most six held records, the most severe first, then
-//! the oldest, as many as keep the health within its bound of 4096 bytes encoded; the ones the
+//! the oldest; each is held with its texts cut to their bounds, so six of them and the boot keep
+//! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
 //! A state file that cannot be written is logged and tried again at the next change; what the
@@ -35,7 +36,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
-use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_MESSAGE, check_health};
+use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_MESSAGE};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 
@@ -270,7 +271,7 @@ fn is_history(event: &pb::HardwareEvent, now_unix: u64) -> bool {
 impl HostHealthSource for HealthKeeper {
     fn health(&self) -> pb::HostHealth {
         let inner = lock(&self.inner);
-        let mut health = pb::HostHealth {
+        pb::HostHealth {
             events: inner.file.held.to_send(),
             baseline: None,
             boot_id: if inner.boot_known {
@@ -281,9 +282,7 @@ impl HostHealthSource for HealthKeeper {
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
             sources: Vec::new(),
-        };
-        while check_health(&health).is_err() && health.events.pop().is_some() {}
-        health
+        }
     }
 
     fn written(&self, event_ids: &[String]) {

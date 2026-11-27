@@ -34,10 +34,10 @@ fn marker(rig: &Rig) -> Marker {
     }
 }
 
-/// Serves `rig`'s daemon with its keeper until `terminated` ends or the daemon asks to exit for
-/// its own update (`update`): whether the loops were told to stop, and how often the probe was
-/// asked.
-fn serve(rig: &Rig, terminated: Terminated, update: bool) -> (bool, usize) {
+/// Serves `rig`'s daemon, with its keeper when `keeping` (links with none otherwise), until
+/// `terminated` ends or the daemon asks to exit for its own update (`update`): whether the loops
+/// were told to stop, and how often the probe was asked.
+fn serve_with(rig: &Rig, keeping: bool, terminated: Terminated, update: bool) -> (bool, usize) {
     let started = start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
     let daemon = Arc::clone(started.daemon());
     let probe = Counted::default();
@@ -52,7 +52,7 @@ fn serve(rig: &Rig, terminated: Terminated, update: bool) -> (bool, usize) {
         Arc::new(RecordingLog::default()),
     );
     let links = hostkeeper_daemon::links::Links {
-        health: Some(Arc::new(keeper)),
+        health: keeping.then(|| Arc::new(keeper)),
         ..idle_links()
     };
     let stop = links.stop.clone();
@@ -65,6 +65,11 @@ fn serve(rig: &Rig, terminated: Terminated, update: bool) -> (bool, usize) {
         .expect("a runtime");
     runtime.block_on(start::serve_until(started, links, terminated));
     (stop.is_stopped(), probe.0.load(Ordering::SeqCst))
+}
+
+/// [`serve_with`] the keeper.
+fn serve(rig: &Rig, terminated: Terminated, update: bool) -> (bool, usize) {
+    serve_with(rig, true, terminated, update)
 }
 
 /// Proves a SIGTERM ends serving with the marker judged once (`clean`, the probe saying the
@@ -89,4 +94,15 @@ fn an_exit_for_the_daemons_own_update_leaves_running() {
     let (stopped, asked) = serve(&rig, Box::pin(std::future::pending()), true);
     assert_eq!((stopped, asked), (true, 0));
     assert_eq!(marker(&rig), Marker::Running);
+}
+
+/// Proves a SIGTERM to a daemon whose links keep no health still ends serving with the loops
+/// told to stop, and no probe asked.
+///
+/// Catches: a daemon with no keeper that does not stop at SIGTERM, or fails at it.
+#[test]
+fn a_sigterm_with_no_keeper_stops_the_loops() {
+    let rig = Rig::new("serve-sigterm-no-keeper");
+    let (stopped, asked) = serve_with(&rig, false, Box::pin(std::future::ready(())), false);
+    assert_eq!((stopped, asked), (true, 0));
 }

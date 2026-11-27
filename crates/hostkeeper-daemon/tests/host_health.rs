@@ -481,14 +481,15 @@ fn folds_add_up_and_warnings_and_criticals_are_never_folded() {
     assert!(hard.records.iter().all(|r| r.count == 1));
 }
 
-/// Proves the health of a heartbeat holds at most six records, and fewer when six at their
-/// bounds would pass 4096 bytes encoded: the least severe, newest ones left for later.
+/// Proves the health of a heartbeat holds six records, the oldest, of eight held with every
+/// text at its bound and the boot id at its bound, and keeps its bound of 4096 bytes encoded; the
+/// two newest wait for a later heartbeat.
 ///
 /// Catches: a health over its bound, which the coordinator refuses whole, every heartbeat.
 #[test]
-fn the_health_keeps_its_bound_leaving_the_last_records_for_later() {
+fn six_records_at_their_bounds_keep_the_health_within_its_bound() {
     let dir = Scratch::new("health-fit");
-    let (keeper, _) = start(&dir, boot("boot-1"), yes());
+    let (keeper, _) = start(&dir, boot(&"b".repeat(64)), yes());
     let full = |n: u64| pb::HardwareEvent {
         event_id: format!("{n:0>64}"),
         subject: "s".repeat(32),
@@ -502,10 +503,8 @@ fn the_health_keeps_its_bound_leaving_the_last_records_for_later() {
     keeper.record("sel", "", (1..=8).map(full).collect(), NOW);
     let health = keeper.health();
     assert_eq!(check_health(&health), Ok(()));
-    assert!(!health.events.is_empty() && health.events.len() <= MAX_EVENTS);
     let sent: Vec<u64> = health.events.iter().map(|e| e.time_unix).collect();
-    let expected: Vec<u64> = (1..=sent.len() as u64).collect();
-    assert_eq!(sent, expected);
+    assert_eq!(sent, (1..=MAX_EVENTS as u64).collect::<Vec<u64>>());
 }
 
 /// Proves a state file that does not parse, or that another machine wrote, is moved aside and
