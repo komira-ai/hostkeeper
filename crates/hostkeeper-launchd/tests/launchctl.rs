@@ -33,6 +33,7 @@ fn info(state: JobState, pid: Option<u32>, exit: Option<i32>, signal: Option<i32
         pid,
         last_exit_status: exit,
         last_terminating_signal: signal,
+        runs: None,
     }
 }
 
@@ -91,6 +92,56 @@ fn a_job_killed_by_a_signal_has_no_exit_code() {
     assert_eq!(parsed.last_terminating_signal, Some(9));
     assert_eq!(parsed.last_exit_status, None);
     assert_eq!(parsed.state, JobState::NotRunning);
+}
+
+/// Proves a job's `runs` line is read as launchd's count of its spawns, and that a print with
+/// none has no count; a `runs` that is not a number, or printed twice, is refused, and a nested
+/// block's `runs` is not the job's.
+///
+/// Catches: the count a Mac's restarts are read from lost, made up for a job that prints none, or
+/// read from a nested block.
+#[test]
+fn a_jobs_runs_are_read_when_printed() {
+    let running = |runs: Option<u32>| JobInfo {
+        runs,
+        ..info(JobState::Running, Some(4242), None, None)
+    };
+    assert_eq!(
+        parse_print(&job(&["state = running", "pid = 4242", "runs = 17"])),
+        Ok(running(Some(17)))
+    );
+    assert_eq!(
+        parse_print(&job(&["state = running", "pid = 4242", "runs = 0"])),
+        Ok(running(Some(0)))
+    );
+    assert_eq!(
+        parse_print(&job(&["state = running", "pid = 4242"])),
+        Ok(running(None))
+    );
+    assert_eq!(
+        parse_print(&job(&[
+            "state = running",
+            "pid = 4242",
+            "endpoints = {",
+            "runs = 9",
+            "}",
+        ])),
+        Ok(running(None))
+    );
+    assert_eq!(
+        parse_print(&job(&["state = running", "runs = many"])),
+        bad("runs", "many")
+    );
+    assert_eq!(
+        parse_print(&job(&["state = running", "runs = -1"])),
+        bad("runs", "-1")
+    );
+    assert_eq!(
+        parse_print(&job(&["state = running", "runs = 2", "runs = 3"])),
+        Err(ParseError::Duplicate {
+            key: "runs".to_owned()
+        })
+    );
 }
 
 /// Catches "spawn scheduled" read as another state.

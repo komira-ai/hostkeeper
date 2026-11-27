@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_daemon::hardware_sources::{HardwareSource, poll, run};
 use hostkeeper_daemon::host_health::{BootFacts, HISTORY_PREFIX, HISTORY_SECS, HealthKeeper};
 use hostkeeper_daemon::mac_capacity::{CAPACITY_SYSCTL_ARGS, PROFILER_ARGS};
+use hostkeeper_daemon::mac_disk::SOURCE as DISKUTIL_SOURCE;
 use hostkeeper_daemon::mac_health::{
     CAPACITY_AGAIN_SECS, CAPACITY_PERIOD_SECS, CAPACITY_SOURCE, CapacitySource, HOST_SUBJECT,
     HostReportDir, JUDGE_AFTER_SECS, MAX_MARKED, MAX_REPORT_BYTES, PANIC_PERIOD_SECS, PANIC_SOURCE,
@@ -24,6 +25,7 @@ use hostkeeper_daemon::mac_health::{
     judge_shutdown,
 };
 use hostkeeper_daemon::mac_panic::{PanicReport, parse};
+use hostkeeper_daemon::mac_thermal::SOURCE as THERMAL_SOURCE;
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlOutput, PlatformKind};
 use hostkeeper_link::testing::{FakeClock, RecordingLog, ScriptedSleeper};
@@ -798,16 +800,24 @@ fn the_capacity_is_read_at_start_after_two_minutes_then_daily() {
     assert_eq!(m.sysctl.calls().len(), 3);
 }
 
-/// Proves a Mac's sources are its panic reports and its capacity, and no other host has any of
-/// them. Making them reads nothing.
+/// Proves a Mac's sources are its panic reports, its capacity, its disk's SMART verdict and its
+/// thermal pressure, and no other host has any of them. Making them reads nothing.
 #[test]
-fn a_mac_has_its_panic_and_capacity_sources_and_no_other_host_does() {
+fn a_mac_has_its_hardware_sources_and_no_other_host_does() {
     let dir = Scratch::new("mac-for-host");
     let m = mac(&dir, Some("boot-2"), BOOT, FakeReports::default());
     let names = |kind| -> Vec<&'static str> {
         for_host(kind, &m.keeper).iter().map(|s| s.name()).collect()
     };
-    assert_eq!(names(PlatformKind::Macos), [PANIC_SOURCE, CAPACITY_SOURCE]);
+    assert_eq!(
+        names(PlatformKind::Macos),
+        [
+            PANIC_SOURCE,
+            CAPACITY_SOURCE,
+            DISKUTIL_SOURCE,
+            THERMAL_SOURCE
+        ]
+    );
     assert!(names(PlatformKind::Linux).is_empty());
     assert!(names(PlatformKind::Openrc).is_empty());
     assert!(m.health().sources.is_empty(), "nothing read");

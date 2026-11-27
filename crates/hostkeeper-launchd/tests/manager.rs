@@ -9,7 +9,8 @@ use hostkeeper_launchd::{FakeLaunchctl, Label, LaunchctlError, LaunchdServiceMan
 use hostkeeper_observe::fake::{FakeExpectedExe, FakeHealthClient, FakeProcessProbe};
 use hostkeeper_observe::{
     ActiveState, Current, Deadline, HealthView, ObserveError, ObserveOptions, Observer, Ports,
-    ServiceInput, ServiceManager, ServiceState, UnitState, UnobservedReason, VersionView,
+    ServiceInput, ServiceManager, ServiceState, UnitRestarts, UnitState, UnobservedReason,
+    VersionView,
 };
 
 const UNIT: &str = "dev.hostkeeper.web-main";
@@ -109,6 +110,59 @@ fn print_output_maps_to_the_unit_states() {
         assert_eq!(manager.unit_state(UNIT), Ok(expected), "for {output:?}");
         let asked = vec![vec!["print".to_owned(), format!("system/{UNIT}")]];
         assert_eq!(fake.calls(), asked, "for {output:?}");
+    }
+}
+
+/// Proves a loaded job's restarts are launchd's `runs` less the first spawn, with the last result
+/// in systemd's words (`signal` before any exit code, `success` for 0, `exit-code` otherwise,
+/// empty when it never exited) and the last exit code; and that a job with no `runs` line has
+/// no restarts.
+///
+/// Catches: a Mac's crash loop never counted (no restarts from launchd), the first spawn counted
+/// as a restart, or a killed job's restart read as a success.
+#[test]
+fn a_jobs_runs_are_its_restarts() {
+    let restarts = |count: u32, result: &str, exit_status: Option<i32>| UnitRestarts {
+        count,
+        result: result.to_owned(),
+        exit_status,
+    };
+    let cases: Vec<(&[&str], Option<UnitRestarts>)> = vec![
+        (
+            &["state = running", "pid = 4242", "runs = 1"],
+            Some(restarts(0, "", None)),
+        ),
+        (
+            &["state = running", "pid = 4242", "runs = 0"],
+            Some(restarts(0, "", None)),
+        ),
+        (
+            &[
+                "state = running",
+                "pid = 4242",
+                "runs = 90",
+                "last exit code = 1",
+            ],
+            Some(restarts(89, "exit-code", Some(1))),
+        ),
+        (
+            &["state = waiting", "runs = 3", "last exit code = 0"],
+            Some(restarts(2, "success", Some(0))),
+        ),
+        (
+            &[
+                "state = spawn scheduled",
+                "runs = 6",
+                "last terminating signal = Killed: 9",
+            ],
+            Some(restarts(5, "signal", None)),
+        ),
+        (&["state = running", "pid = 4242"], None),
+    ];
+    for (lines, expected) in cases {
+        let (manager, _) = asking(UNIT, Ok(LaunchctlOutput::success(&printed(UNIT, lines))));
+        let seen = manager.unit_state(UNIT).expect("a state");
+        assert_eq!(seen.restarts, expected, "for {lines:?}");
     }
 }
 

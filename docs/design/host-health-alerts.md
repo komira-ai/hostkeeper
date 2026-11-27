@@ -1,7 +1,7 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1, the daemon's state file of HH3, its SMART and hwmon sources of HH11, its rasdaemon source of HH9
-and the Linux kernel sources of HH10, marked **Built** where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3, its SMART and hwmon sources of HH11, its rasdaemon source of HH9,
+the Linux kernel sources of HH10, and the Mac's sources of HH12 and HH13, marked **Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -208,8 +208,8 @@ needs a person at the Mac and gives its result on the screen only; no daemon can
 |---|---|---|---|---|
 | **Panic reports** | `/Library/Logs/DiagnosticReports/*.panic` and the `.ips` reports whose header `bug_type` is `210` (other `.ips` reports are app crashes; `Retired/` not read), each once by its `incident_id` | `board`, `panic_hardware` for SError or AMCC wording; `panic_software` for an SoC or userspace watchdog, a kext or other software (a runaway build can trip a watchdog) | hardware C; software W | at start, 2 minutes later, then every 5 minutes; on a first install those older than 7 days are `info` history (4.5) (Built: the parser and classifier `crates/hostkeeper-daemon/src/mac_panic.rs`, the reader `mac_health.rs`) |
 | **Unexpected-shutdown records** | a new `kern.bootsessionuuid` with no clean-shutdown marker (section 4.4); `raw` the panic line of that boot's panic report, or the boot's id when it has none (the unified log is not read, below) | `host`, `unexpected_reboot`, merged with a panic of the same boot (its class in the message) | W | once a boot, judged 2 minutes after the daemon's start so macOS has written the panic report (Built: `mac_health.rs`) |
-| **`diskutil` SMART status** | `diskutil info -plist disk0`: `SMARTStatus` | `disk`, `disk_failing` asserted at `Failing`, deasserted at `Verified`; `Not Supported` is `unsupported` | C | every 15 minutes |
-| **Thermal pressure** | `pmset -g therm` (no root); `powermetrics --samplers thermal -n 1` only once `pmset` shows a limit, at most every 5 minutes [V: `-n 1`] | `thermal`, asserted after 5 samples at heavy, deasserted after 10 minutes nominal | heavy W; trapping C | 60 s |
+| **`diskutil` SMART status** | `diskutil info -plist disk0`: `SMARTStatus` | `disk`, `disk_failing` asserted at `Failing`, deasserted at `Verified`; `Not Supported` is `unsupported`, an open assertion kept; a verdict of another word `unreadable` (Built: `crates/hostkeeper-daemon/src/mac_disk.rs`, source `diskutil`) | C | every 15 minutes |
+| **Thermal pressure** | `pmset -g therm` (no root): a thermal or performance warning level above 0, or a CPU speed or scheduler limit under 100, is a limit; `powermetrics --samplers thermal -n 1` only once `pmset` shows a limit, at most every 5 minutes, its `Current pressure level` the sample (a sample within 5 minutes of its last run takes its level) [V: `-n 1`, and the words of both on a real Mac] | `thermal`, subject `thermal pressure`, code `thermal_pressure`: asserted after 5 samples in a row at heavy or worse, a warning that a trapping sample escalates to a critical assertion about it; deasserted after 10 minutes nominal, at the assertion's severity (Built: the pure rule and the source, `crates/hostkeeper-daemon/src/mac_thermal.rs`, source `thermal`) | heavy W; trapping and sleeping C | 60 s |
 | **`system_profiler` inventory changes** | `system_profiler -json SPHardwareDataType SPNVMeDataType` (the installed memory and processors, and each internal disk by its BSD name, size and serial, which `SPStorageDataType`'s volumes do not give), `sysctl -n hw.memsize hw.physicalcpu hw.logicalcpu`; the source state `system_profiler` (Built: `crates/hostkeeper-daemon/src/mac_capacity.rs`, read by `mac_health.rs`; the GPU cores and `hw.perflevel0` have no `Baseline` field yet and are not read) | the capacity of the boot; the coordinator records a change as `capacity_short` (`baseline`). On a Mac it compares `hw.memsize`, the CPU and GPU core counts and the disk's size, with no DIMM list (Apple silicon has none): a capacity compare, not a memory error watch. A Mac short of its baseline is cordoned for repair as a Linux host is (section 6) | W | at start, 2 minutes later, then daily |
 
 Not used on a Mac: `log show` (slow and heavy on a build host; `SMARTStatus` and the panic classes cover the serious cases), IOKit wear
@@ -309,7 +309,12 @@ journal's kernel lines [V: through `journalctl --dmesg --boot=<n> --output=json`
 files fits the workspace's crates], `/dev/kmsg`, the SEL and SDR through `ipmi_rs` with a decoder for the sensor types above (the
 IPMI 2.0 event tables), sysfs and proc, the SMBIOS memory devices (`/sys/firmware/dmi/entries/17-*/raw`, the table `dmidecode --type
 17` decodes), the boot id and the marker; on a Mac the panic report parser (JSON and text; falling back to the file name and the first
-`panic(cpu` line), the `runs` ring and the `sysctl`s.
+`panic(cpu` line), the `runs` ring and the `sysctl`s. The `runs` ring (Built: `crates/hostkeeper-daemon/src/mac_runs.rs`)
+is a Mac's count of its services' restarts: launchd keeps no `NRestarts`, so the observer reads each job's `runs` (the times launchd
+spawned it since it was loaded) from `launchctl print`, less the first, and the daemon keeps the counts at which it changed in its
+state file (4.4), from which each heartbeat's `ServiceBeat.restarts` (count, the restarts of the last 10 minutes, the last result and
+exit status) is made as a Linux host's is; a count that fell (a `bootout` and `bootstrap`) starts the job again, and a `kickstart`
+counts as a restart.
 
 **Delegated**, through the `Launchctl` port (Built: `LaunchctlProcess` of `crates/hostkeeper-launchd`, which
 `crates/hostkeeper-daemon/src/mac.rs` uses on a Mac and which already runs programs on Linux: `maintenance_linux/apt.rs`, `dnf.rs` and
@@ -361,7 +366,8 @@ to HH12; the baseline is HH4's. A Mac and a Linux host with no `/etc/machine-id`
 
 The daemon keeps a state file in its state directory, written whole (write, fsync, rename), keyed by machine id: the boot id, the
 baseline, the high-water marks (the SEL's last record id and add time, rasdaemon's ids, the panic reports' incident ids, the pstore
-names, the journal's cursor), the clean-shutdown marker and the events still held. At start the daemon writes `running`. At SIGTERM it
+names, the journal's cursor), the clean-shutdown marker and the events still held; on a Mac also the `runs` ring (4.2, Built), so a
+restart of the daemon keeps its services' recent restarts. At start the daemon writes `running`. At SIGTERM it
 writes `clean` with the boot id only if the system is really going down (Linux: `systemctl is-system-running` answers `stopping`, or
 a reboot, poweroff or halt job is queued); a SIGTERM of a daemon restart or of hostkeeper's own self-update must not count, or a later
 crash would read as a clean reboot. On a Mac launchd also sends SIGTERM at a bootout and no shutdown probe is known [V], so the marker

@@ -4,8 +4,9 @@
 //! change. It holds the machine it was written on, the boot it was last written in, the
 //! clean-shutdown marker of that boot, whether the boot before it ended with one, which boot that
 //! was ([`HealthFile::previous_boot_id`]), the records
-//! not yet written to the host's log ([`Queue`]), and each source's high-water mark
-//! ([`SourceMark`]).
+//! not yet written to the host's log ([`Queue`]), each source's high-water mark
+//! ([`SourceMark`]), and on a Mac the `runs` ring of its services' launchd jobs
+//! ([`crate::mac_runs::RunsRing`]).
 //!
 //! **Read.** A file that is not there is a host the daemon has not run on, or whose state
 //! directory was wiped: nothing held, no marker. A file that does not parse is moved aside, to
@@ -38,6 +39,7 @@ use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use serde::{Deserialize, Serialize};
 
 use crate::files::{WriteStep, write_atomic};
+use crate::mac_runs::RunsRing;
 
 /// The state file, in the state directory.
 pub const HEALTH_FILE: &str = "health-state.json";
@@ -278,6 +280,9 @@ pub struct HealthFile {
     pub held: Queue,
     /// Each source's mark, by the source's token.
     pub sources: BTreeMap<String, SourceMark>,
+    /// On a Mac, the recent counts of its services' launchd jobs ([`crate::mac_runs`]); empty
+    /// elsewhere, and in a file of a release before it.
+    pub runs: RunsRing,
 }
 
 /// What reading the state file came to.

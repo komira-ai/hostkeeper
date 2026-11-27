@@ -21,7 +21,8 @@
 //! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation
 //! [`Daemon::status`] reports ([`Daemon::observer`]), in the loop's words ([`observation`]), with
 //! the service's restarts counted over the last ten minutes of the daemon's monotonic clock
-//! ([`RestartWindow`]).
+//! ([`RestartWindow`]), or, on a Mac whose daemon keeps a health state, of the Unix clock in the
+//! `runs` ring of its state file ([`crate::mac_runs`], [`DaemonObserver::with_runs`]).
 //!
 //! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
@@ -40,7 +41,7 @@ use hostkeeper_link::{
     Drift, Health, HeldHalt, HeldHalts, Liveness, MaintainOrder, MaintainSink, Observation, Order,
     OrderId, OrderRef, OrderResult, OrderSink, Outcome, Reason, RecordedService, Renewal,
     RenewalSource, ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource,
-    Verb,
+    UnixClock, Verb,
 };
 use hostkeeper_observe::{RestartWindow, ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -48,6 +49,7 @@ use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
 
 use crate::executor::{Ctx, Daemon, Reply};
+use crate::host_health::HealthKeeper;
 use crate::installed::{self, CURRENT};
 use crate::observer;
 use crate::refusal::Refusal;
@@ -466,17 +468,34 @@ pub fn settled_result(record: &Record) -> Option<OrderResult> {
 }
 
 /// The service-observer port over the daemon's observer, and the window its services' restarts
-/// are counted in.
+/// are counted in: in memory, or the `runs` ring of a keeper's state file, read at a Unix clock.
 pub struct DaemonObserver {
     daemon: Arc<Daemon>,
     restarts: Mutex<RestartWindow>,
+    runs: Option<(Arc<HealthKeeper>, Arc<dyn UnixClock>)>,
 }
 
 impl DaemonObserver {
+    /// The port over `daemon`, its services' restarts counted in memory.
     pub fn new(daemon: Arc<Daemon>) -> DaemonObserver {
         DaemonObserver {
             daemon,
             restarts: Mutex::new(RestartWindow::new()),
+            runs: None,
+        }
+    }
+
+    /// The port over `daemon`, its services' restarts counted in the `runs` ring of `keeper`'s
+    /// state file at `clock`'s seconds ([`HealthKeeper::runs`]) when there is a keeper (a Mac's),
+    /// and in memory otherwise.
+    pub fn with_runs(
+        daemon: Arc<Daemon>,
+        keeper: Option<Arc<HealthKeeper>>,
+        clock: Arc<dyn UnixClock>,
+    ) -> DaemonObserver {
+        DaemonObserver {
+            runs: keeper.map(|keeper| (keeper, clock)),
+            ..DaemonObserver::new(daemon)
         }
     }
 }
@@ -512,8 +531,9 @@ impl ServiceObserver for DaemonObserver {
     /// absent ([`own_running`]). A repository package's observation also carries its drift
     /// ([`drift`]). Its restarts are its run units' counts at this observation, with the
     /// restarts of the last ten minutes the window counted ([`RestartWindow::record`], at the
-    /// daemon's monotonic second); a service not observed, or whose units the service manager
-    /// counts no restarts of, has none, and the window forgets it.
+    /// daemon's monotonic second; or the keeper's `runs` ring, [`HealthKeeper::runs`], at the
+    /// Unix second); a service not observed, or whose units the service manager counts no
+    /// restarts of, has none, and the window forgets it.
     fn observe(&self, service: &ServiceName) -> Observation {
         let ctx = self.daemon.ctx();
         let seen = observer::observe(
@@ -524,11 +544,14 @@ impl ServiceObserver for DaemonObserver {
             service,
         );
         let units = seen.as_ref().map_or(&[][..], |seen| &seen.restarts[..]);
-        let restarts = self
-            .restarts
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .record(service.as_str(), units, ctx.clock.mono_secs());
+        let restarts = match &self.runs {
+            Some((keeper, clock)) => keeper.runs(service.as_str(), units, clock.unix_secs()),
+            None => self
+                .restarts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .record(service.as_str(), units, ctx.clock.mono_secs()),
+        };
         let observed = seen.map_or_else(
             || Observation {
                 liveness: Liveness::Unobserved,

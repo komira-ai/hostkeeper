@@ -34,13 +34,14 @@ pub struct UnitState {
     /// The unit's main process, `None` when it has none (systemd `MainPID=0`, such as a
     /// `oneshot` unit with `RemainAfterExit`).
     pub main_pid: Option<u32>,
-    /// How the unit has restarted; `None` where the manager keeps no restart counter (launchd,
-    /// OpenRC, a systemd unit type with no `NRestarts`, a unit the manager does not know).
+    /// How the unit has restarted; `None` where the manager keeps no restart counter (OpenRC, a
+    /// systemd unit type with no `NRestarts`, a launchd job whose `launchctl print` has no
+    /// `runs`, a unit the manager does not know).
     pub restarts: Option<UnitRestarts>,
 }
 
 /// How one unit has restarted, as the service manager counts it (systemd's `NRestarts`, `Result`,
-/// `ExecMainCode` and `ExecMainStatus`).
+/// `ExecMainCode` and `ExecMainStatus`; launchd's `runs` less the first, and its last exit).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnitRestarts {
     /// The manager's count of the unit's automatic restarts. systemd sets it back to 0 when the

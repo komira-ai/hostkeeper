@@ -15,7 +15,8 @@
 //! state, each worker waiting on the daemon's clock until its stop flag is set: on Linux (systemd and OpenRC) SMART through `smartctl`
 //! ([`crate::smart`]), the hwmon temperatures ([`crate::hwmon`]), rasdaemon's database
 //! ([`crate::rasdaemon`]) and the kernel's log and files ([`crate::kernel_sources`]); on a Mac its
-//! panic reports and its capacity ([`crate::mac_health`]).
+//! panic reports, its capacity, its disk's SMART verdict and its thermal pressure
+//! ([`crate::mac_health`]).
 
 use std::path::Path;
 use std::sync::Arc;

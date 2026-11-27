@@ -32,9 +32,12 @@ For each installed service, once per round:
 4. **Restarts**, from the service manager too, in the same `systemctl show`: each run unit's
    `NRestarts` (its count of automatic restarts), `Result` (`success`, `exit-code`, `signal`,
    `start-limit-hit`, ...) and, when `ExecMainCode=1` (the main process exited by itself; 2 and
-   3 are a signal), its exit code `ExecMainStatus`. A unit with no `NRestarts` (a systemd before
-   235, a unit type that is not a service), one the manager does not know, and every unit on
-   OpenRC or launchd, which keep no counter, has no restarts. An `NRestarts`, or with
+   3 are a signal), its exit code `ExecMainStatus`. On a Mac, from `launchctl print` of each run
+   job: its `runs` less the first spawn as the count, a result of `signal` when a signal ended
+   its last run, `success` when it exited 0 and `exit-code` otherwise, and that exit code. A unit
+   with no `NRestarts` (a systemd before 235, a unit type that is not a service), a job whose
+   print has no `runs`, one the manager does not know, and every unit on OpenRC, which keeps no
+   counter, has no restarts. An `NRestarts`, or with
    `ExecMainCode=1` an `ExecMainStatus`, that is not a number is a `manager_error`, never a
    count. A round discarded after a read of the unit set keeps the restarts of that read: a unit
    in a restart loop changes its main pid between the two reads, and its count still reaches
@@ -73,6 +76,11 @@ daemon's monotonic second:
 - At most 256 observations of a unit are kept, the oldest dropped first. A unit that leaves the
   run set, and a service observed with no counts (not observed, or with no unit the manager
   counts), are forgotten; the window starts empty at each start of the daemon.
+- On a Mac the window is the `runs` ring of the daemon's health state file instead
+  (`crates/hostkeeper-daemon/src/mac_runs.rs`, docs/macos.md): the same counts, at the Unix
+  second, keeping a sample only when a job's count changed (at most 64 of a job), so it is written
+  when a job restarts and survives a restart of the daemon. launchd's count starts again at a
+  `bootout` and `bootstrap`, which is a count that fell; a `kickstart` by hand is counted.
 
 A unit at its start limit (`Result=start-limit-hit`) is `failed`, so its service is `stopped`
 (unhealthy), and its restarts say `start-limit-hit` with the count that led to it.

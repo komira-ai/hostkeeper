@@ -1,0 +1,6 @@
+Thermal warning level set to 2.
+Performance warning level set to 1.
+2026-11-26 03:10:00 +0000 CPU Power notify
+	CPU_Scheduler_Limit 	= 100
+	CPU_Available_CPUs 	= 12
+	CPU_Speed_Limit 	= 72

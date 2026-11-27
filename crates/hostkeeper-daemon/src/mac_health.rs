@@ -1,8 +1,9 @@
 //! A Mac's hardware sources (docs/design/host-health-alerts.md sections 3.2, 4.4 and 4.5), each a
 //! [`HardwareSource`] the daemon runs on a worker of its own ([`crate::hardware_sources`]), so a
-//! slow program holds no heartbeat: its kernel panic reports, with its unexpected restarts, and its
-//! capacity. Each reads through ports, so all of it runs against fakes; [`for_host`] gives a
-//! Mac's own.
+//! slow program holds no heartbeat: its kernel panic reports, with its unexpected restarts, its
+//! capacity, its internal disk's SMART verdict ([`crate::mac_disk`]) and its thermal pressure
+//! ([`crate::mac_thermal`]). Each reads through ports, so all of it runs against fakes;
+//! [`for_host`] gives a Mac's own.
 //!
 //! **Panic reports** ([`PanicSource`], source [`PANIC_SOURCE`]): the `.panic` and `.ips` files of
 //! [`DIAGNOSTIC_REPORTS`] itself, regular files only (so `Retired/` and links are not read), the
@@ -55,7 +56,9 @@ use crate::mac::TOOL_DEADLINE;
 use crate::mac_capacity::{
     CAPACITY_SYSCTL_ARGS, PROFILER_ARGS, SYSTEM_PROFILER, capacity, parse_profile, parse_sysctls,
 };
+use crate::mac_disk::DiskutilSource;
 use crate::mac_panic::{PanicReport, is_candidate, parse};
+use crate::mac_thermal::ThermalSource;
 use crate::maintenance_boot::SYSCTL;
 
 pub use crate::mac_panic::PANIC_SOURCE;
@@ -391,21 +394,36 @@ impl HardwareSource for CapacitySource {
     }
 }
 
+/// What `program` printed with `args`, as text, when it ran and exited 0; why not otherwise,
+/// named `name` ([`run_bytes`]).
+pub(crate) fn run_text(
+    program: &dyn Launchctl,
+    args: &[&str],
+    name: &str,
+) -> Result<String, String> {
+    run_bytes(program, args, name).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// What `program` printed with `args`, when it ran and exited 0; why not otherwise, named `name`.
-fn run_text(program: &dyn Launchctl, args: &[&str], name: &str) -> Result<String, String> {
+pub(crate) fn run_bytes(
+    program: &dyn Launchctl,
+    args: &[&str],
+    name: &str,
+) -> Result<Vec<u8>, String> {
     let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
     let output = program
         .run(&args)
         .map_err(|e| format!("{name} did not run: {e}"))?;
     match output.code {
-        Some(0) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Some(0) => Ok(output.stdout),
         Some(code) => Err(format!("{name} exited {code}")),
         None => Err(format!("{name} was ended by a signal")),
     }
 }
 
 /// The sources of a host of `kind` over `keeper`: on a Mac its own panic reports
-/// ([`DIAGNOSTIC_REPORTS`]) and capacity (`sysctl`, `system_profiler`); none on any other host.
+/// ([`DIAGNOSTIC_REPORTS`]), capacity (`sysctl`, `system_profiler`), disk's SMART verdict
+/// (`diskutil`) and thermal pressure (`pmset`, `powermetrics`); none on any other host.
 #[must_use]
 pub fn for_host(kind: PlatformKind, keeper: &Arc<HealthKeeper>) -> Vec<Box<dyn HardwareSource>> {
     if kind != PlatformKind::Macos {
@@ -424,5 +442,7 @@ pub fn for_host(kind: PlatformKind, keeper: &Arc<HealthKeeper>) -> Vec<Box<dyn H
                 TOOL_DEADLINE,
             )),
         )),
+        Box::new(DiskutilSource::at_host()),
+        Box::new(ThermalSource::at_host()),
     ]
 }

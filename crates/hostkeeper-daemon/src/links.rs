@@ -247,7 +247,11 @@ impl Links {
                 link: Arc::clone(&self.link),
                 certs: Arc::clone(&self.certs),
                 records: Arc::new(DaemonRecords::new(Arc::clone(daemon))),
-                observer: Arc::new(DaemonObserver::new(Arc::clone(daemon))),
+                observer: Arc::new(DaemonObserver::with_runs(
+                    Arc::clone(daemon),
+                    self.health.clone().filter(|_| counts_runs(PLATFORM)),
+                    Arc::clone(&self.clock),
+                )),
                 orders: Arc::new(DaemonOrders::new(Arc::clone(daemon))),
                 dispatch: Arc::clone(&self.dispatch),
                 halts: Arc::new(DaemonHalts::new(Arc::clone(daemon))),
@@ -366,6 +370,13 @@ impl EnrollLoop<'_> {
 /// coordinator ([`crate::coordinator_store`]). A Linux daemon announces it when it has a
 /// repository sink (the link's rule), which is when its mirror reads private repositories.
 pub const fn reads_private_repositories(platform: Platform) -> bool {
+    matches!(platform, Platform::DarwinArm64)
+}
+
+/// Whether a daemon of `platform` counts its services' restarts in the `runs` ring of its health
+/// state file ([`crate::mac_runs`]) rather than in memory: a Mac's, whose launchd counts a job's
+/// runs and no restarts.
+pub const fn counts_runs(platform: Platform) -> bool {
     matches!(platform, Platform::DarwinArm64)
 }
 

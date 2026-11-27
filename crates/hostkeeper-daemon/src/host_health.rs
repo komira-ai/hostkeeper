@@ -36,6 +36,11 @@
 //! **Capacity** ([`HealthKeeper::set_capacity`]): the host's capacity as last read, kept in memory
 //! only and sent in every heartbeat's `baseline`; it is read again at every start of the daemon.
 //!
+//! **The `runs` ring** ([`HealthKeeper::runs`]): on a Mac, the recent counts of its services'
+//! launchd jobs ([`crate::mac_runs`]), from which each heartbeat's restarts of a service are made;
+//! the state file is written when the ring keeps a new sample or forgets a job, so a job's restarts
+//! are counted across a restart of the daemon.
+//!
 //! **The boot before** ([`HealthKeeper::unclean_previous_boot`]): in a boot whose first start found
 //! the file last written in another boot, with no clean-shutdown marker, that boot. It is kept in
 //! the file, so a later start of the daemon in the same boot (a restart, a crash) still knows it.
@@ -53,6 +58,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
+use hostkeeper_observe::RunUnitRestarts;
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_proto::health::{
     MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
@@ -350,6 +356,23 @@ impl HealthKeeper {
     /// sends none.
     pub fn set_capacity(&self, capacity: Option<pb::Baseline>) {
         lock(&self.inner).capacity = capacity;
+    }
+
+    /// The restarts of `service`, whose launchd jobs counted `seen` at `now_unix`, by the `runs`
+    /// ring of the state file ([`crate::mac_runs::RunsRing::record`]), the file written when the
+    /// ring changed; none when `seen` is empty.
+    pub fn runs(
+        &self,
+        service: &str,
+        seen: &[RunUnitRestarts],
+        now_unix: u64,
+    ) -> Option<pb::ServiceRestarts> {
+        let mut inner = lock(&self.inner);
+        let (restarts, changed) = inner.file.runs.record(service, seen, now_unix);
+        if changed {
+            self.save(&inner.file);
+        }
+        restarts
     }
 
     fn save(&self, file: &HealthFile) {

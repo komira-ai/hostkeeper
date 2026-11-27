@@ -2,16 +2,19 @@
 //! restarts, counted across observations on the daemon's monotonic clock, and the body of its
 //! health URL's answer that was not 2xx. The service manager, the health URL and the clock are
 //! the rig's fakes, scripted as systemd and js-agent answered on a host whose unit restarted in a
-//! loop.
+//! loop; and a Mac's, whose restarts are counted in the `runs` ring of its health state file.
 
 mod support;
 
 use std::fs;
 use std::sync::Arc;
 
+use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
 use hostkeeper_daemon::link_adapters::DaemonObserver;
+use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_daemon::testing::manifest;
-use hostkeeper_link::{Health, Liveness, ServiceObserver};
+use hostkeeper_link::testing::{FakeClock, RecordingLog};
+use hostkeeper_link::{Health, Liveness, ServiceObserver, UnixClock};
 use hostkeeper_observe::{ActiveState, UnitRestarts, UnitState};
 use hostkeeper_proto::hostkeeper::agent::v1::ServiceRestarts;
 use support::{Rig, d, name};
@@ -188,5 +191,81 @@ fn a_service_not_observed_has_no_restarts_and_is_forgotten() {
     assert_eq!(
         observer.observe(&js_agent).restarts,
         Some(restarts(14, 0, "exit-code", Some(1)))
+    );
+}
+
+struct Never;
+
+impl ShutdownProbe for Never {
+    fn going_down(&self) -> GoingDown {
+        GoingDown::No("a test".to_owned())
+    }
+}
+
+/// Proves a Mac's observer counts a service's restarts in the keeper's `runs` ring at the Unix
+/// clock: the first observation counts none, a rise counts, and a new observer and keeper over
+/// the same state directory (the daemon restarted) go on counting from the count the one before
+/// saw; with no keeper the restarts are counted in memory, starting from none.
+///
+/// Catches: a Mac's job in a crash loop whose count is lost at every restart of the daemon, or a
+/// keeper given and not used.
+#[test]
+fn a_macs_restarts_are_counted_in_the_runs_ring_across_a_restart() {
+    let rig = Rig::new("observer-runs");
+    installed(&rig);
+    let health = rig.scratch.path().join("health");
+    fs::create_dir(&health).expect("the health state directory");
+    let clock = Arc::new(FakeClock::new(1_795_662_000, 0));
+    let observer = |keeper: Option<Arc<HealthKeeper>>| {
+        DaemonObserver::with_runs(
+            Arc::new(rig.daemon()),
+            keeper,
+            Arc::clone(&clock) as Arc<dyn UnixClock>,
+        )
+    };
+    let keeper = || {
+        Some(Arc::new(HealthKeeper::open(
+            &health,
+            BootFacts {
+                boot_id: Some("boot-1".to_owned()),
+                boot_unix: 1_795_660_000,
+                machine_id: String::new(),
+            },
+            Box::new(Never),
+            Arc::new(RecordingLog::default()),
+        )))
+    };
+    let js_agent = name("js-agent");
+    let count = |n: u32| {
+        rig.manager
+            .set_state(UNIT, unit(ActiveState::Activating, n, "exit-code", Some(1)));
+    };
+
+    let first = observer(keeper());
+    count(2);
+    assert_eq!(
+        first.observe(&js_agent).restarts,
+        Some(restarts(2, 0, "exit-code", Some(1)))
+    );
+    clock.advance(60);
+    count(5);
+    assert_eq!(
+        first.observe(&js_agent).restarts,
+        Some(restarts(5, 3, "exit-code", Some(1)))
+    );
+    drop(first);
+
+    let restarted = observer(keeper());
+    clock.advance(60);
+    count(7);
+    assert_eq!(
+        restarted.observe(&js_agent).restarts,
+        Some(restarts(7, 5, "exit-code", Some(1)))
+    );
+
+    let in_memory = observer(None);
+    assert_eq!(
+        in_memory.observe(&js_agent).restarts,
+        Some(restarts(7, 0, "exit-code", Some(1)))
     );
 }
