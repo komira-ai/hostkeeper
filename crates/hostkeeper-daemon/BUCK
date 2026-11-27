@@ -10,6 +10,7 @@ cargo_package(
         "tests/fixtures/kernel",
         "tests/fixtures/mac_health",
         "tests/fixtures/maintenance",
+        "tests/fixtures/rasdaemon",
         "//:README.md",
         "//:packaging/linux",
         "//crates/hostkeeper-install:tests/macos_pkg/support",

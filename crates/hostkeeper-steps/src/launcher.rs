@@ -18,9 +18,9 @@ use hostkeeper_hook::Invocation;
 pub enum Bound {
     /// At most this many seconds.
     Secs(NonZeroU64),
-    /// No bound: a `prepare` whose manifest timeout is 0 (docs/design/hostkeeper-design.md,
-    /// sections 4.7 and 8.5), and a `drain` whose run names no deadline
-    /// (docs/design/maintenance-updates.md, 5.3). Nothing but the hook's own end ends it: the
+    /// No bound: a `drain` whose run names no deadline (docs/design/maintenance-updates.md, 5.3).
+    /// The step runner never gives it: a `prepare` whose manifest timeout is 0 runs under the
+    /// updater's ceiling ([`crate::PREPARE_CEILING_SECS`]). Nothing but the hook's own end ends it: the
     /// dead-man is not armed, the systemd unit has `RuntimeMaxSec=infinity`, and the launchd and
     /// OpenRC launchers never end it.
     Unbounded,
@@ -48,8 +48,8 @@ pub struct StepCall<'a> {
     /// A launcher that runs the step as a unit uses it; it is stopped by name on resume.
     pub unit: &'a str,
     /// The bound of this step: the manifest's bound of the step, or the time left of the verify
-    /// window when that is shorter; [`Bound::Unbounded`] only for a `prepare` whose manifest timeout is
-    /// 0.
+    /// window when that is shorter, or the updater's ceiling for a `prepare` whose manifest timeout
+    /// is 0 ([`crate::PREPARE_CEILING_SECS`]); never [`Bound::Unbounded`].
     pub bound: Bound,
 }
 

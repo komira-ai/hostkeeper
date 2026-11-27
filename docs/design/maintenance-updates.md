@@ -421,7 +421,7 @@ changes keep it so:
   `--package-lock-wait-secs` (the daemon's flag, given to the hook too).
 
 The step runner's sequence does not fit as it stands: it runs `rollback` after a failed `prepare`, `cutover` or `verify`, its reboot row
-restarts a new release's units, and only `prepare` may run unbounded (Built: `hostkeeper-hook` `next.rs`, `hostkeeper-steps`
+restarts a new release's units, and only `prepare` may declare no bound of its own (Built: `hostkeeper-hook` `next.rs`, `hostkeeper-steps`
 `resume.rs` and `runner.rs`). An OS update has no release to restart and cannot be rolled back. So the daemon runs a `maintain` order by a
 small sequencer of its own (Built: `crates/hostkeeper-daemon/src/maintenance_run.rs`, the order in `verbs/maintain.rs`), whose position is
 kept in a durable, versioned run record beside the step records and fsynced before and after each step, so a crash, a reboot or a daemon

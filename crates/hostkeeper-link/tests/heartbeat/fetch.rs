@@ -6,13 +6,15 @@
 use std::io;
 use std::sync::Arc;
 
-use hostkeeper_link::testing::{FakeCerts, FakeClock};
+use hostkeeper_link::testing::{FakeCerts, FakeClock, FakeLookup, RecordingLog};
 use hostkeeper_link::{
-    CertState, CoordinatorGet, EndpointError, GetError, Got, HEAD_MAX, Limit, LinkError,
+    CertState, CoordinatorGet, EndpointError, GetError, Got, HEAD_MAX, Limit, LinkError, Reach,
     ReplyFault, TrustFault,
 };
 
-use crate::tls::{Ca, Close, Farm, PipeTransport, Pki, config, config_text, serve};
+use crate::tls::{
+    COORDINATOR_IP, Ca, Close, Farm, PipeTransport, Pki, config, config_text, reach, serve,
+};
 
 /// A limit generous enough for the tests' bodies.
 const ROOMY: Limit = Limit {
@@ -42,14 +44,15 @@ impl Bench {
         let transport = Arc::new(PipeTransport::default());
         let clock = Arc::new(FakeClock::new(1_000, 500));
         let certs = Arc::new(FakeCerts::new(CertState::Enrolled(farm.host.identity())));
+        let config = config(&farm.ca);
         let get = CoordinatorGet::new(
-            &config(&farm.ca),
+            &config,
             &pki.root(),
             certs.clone(),
+            reach(&config),
             transport.clone(),
             clock.clone(),
-        )
-        .expect("a client");
+        );
         Bench {
             farm,
             transport,
@@ -153,7 +156,7 @@ fn a_body_is_streamed_to_the_sink_with_the_hosts_certificate() {
     assert_eq!(request.peer, cert.as_ref());
     assert_eq!(
         bench.transport.dialed(),
-        [("coordinator.test".to_owned(), 8443)]
+        [(COORDINATOR_IP.to_string(), 8443)]
     );
     assert_eq!(bench.transport.bounds(), [ROOMY.deadline_secs]);
 }
@@ -450,20 +453,17 @@ fn a_connection_that_fails_is_a_transport_error() {
     assert_eq!((got, body), (broken, b"abc".to_vec()));
 }
 
-/// Catches a coordinator address with a path being dialed: the client refuses it as the
-/// heartbeat's link does.
+/// Catches a coordinator address with a path being dialed: the reach a client is made from
+/// refuses it as the heartbeat's link's does, so no client is made over it.
 #[test]
 fn an_address_with_a_path_is_refused_at_construction() {
     let farm = Farm::new();
-    let pki = Pki::with_bundle("get-endpoint", &farm.ca.pem);
     let text = config_text("https://coordinator.test:8443/x", &farm.ca.sha256_hex());
     let parsed = hostkeeper_config::daemon::DaemonConfig::parse(&text).expect("a config");
-    let refused = CoordinatorGet::new(
+    let refused = Reach::new(
         &parsed,
-        &pki.root(),
-        Arc::new(FakeCerts::new(CertState::Enrolled(farm.host.identity()))),
-        Arc::new(PipeTransport::default()),
-        Arc::new(FakeClock::new(0, 0)),
+        Arc::new(FakeLookup::answering(&[COORDINATOR_IP])),
+        Arc::new(RecordingLog::default()),
     );
     assert!(matches!(refused, Err(EndpointError::Path(_))));
 }

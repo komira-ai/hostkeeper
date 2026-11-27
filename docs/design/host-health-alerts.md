@@ -1,7 +1,7 @@
 # Host health alerts: one hardware event log per host
 
-Status: design, built in part (the wire of HH1, the daemon's state file of HH3 and the Linux kernel sources of HH10, marked **Built**
-where they are). It extends the alerts of
+Status: design, built in part (the wire of HH1, the daemon's state file of HH3, its SMART and hwmon sources of HH11, its rasdaemon source of HH9
+and the Linux kernel sources of HH10, marked **Built** where they are). It extends the alerts of
 [hostkeeper-design.md](hostkeeper-design.md) section 6.7 (Built: `Alerts.List`, `hk alerts list`,
 `crates/hostkeeper-coordinator/src/alerts.rs` and its `alerts_*.rs` modules, the book `alerts_book.rs`), the daemon's observation of
 its services ([service-observation.md](../service-observation.md); Built: `crates/hostkeeper-observe`), the maintenance runs' drain
@@ -151,7 +151,7 @@ the console says "not monitored: <source>", never a clean bill.
 
 | Source | What is read | Normalized to | Severity | Poll |
 |---|---|---|---|---|
-| **rasdaemon** | its database `/var/lib/rasdaemon/ras-mc_event.db`, opened read-only, new rows by `max(id)` of its tables `mc_event` (memory, by DIMM label), `mce_record` (CPU machine checks), `aer_event` (PCIe) and `mf_event` (memory failure) [V: the table names of the installed release] | `memory` by DIMM label, `cpu`, `pcie` by device; `raw` is the row's message | uncorrected and fatal C; corrected `info`, and `memory_corrected_rate` W at 10 or more an hour on one DIMM | 60 s |
+| **rasdaemon** (Built: `crates/hostkeeper-daemon/src/rasdaemon.rs`) | its database `/var/lib/rasdaemon/ras-mc_event.db`, read-only (4.5), the rows after each table's last rowid read (the mark in the state file, 4.4), of its tables `mc_event` (memory, by DIMM label), `mce_record` (CPU machine checks), `aer_event` (PCIe), `mf_event` (memory failure) and `disk_errors` (failed block requests); a table the database lacks is passed over, and an empty one is read (13.2, item 1) [V: the table names of the installed release] | `memory` by DIMM label (`mc<n>` with none), `cpu` by socket, `pcie` by device, `memory` for a memory failure, `disk` by name; `raw` is the row's fields; `event_id` `rasdaemon:<table>:<rowid>@<time>`; the corrected rows of a subject, and a disk's failed requests, one record per hour with their count (2.1) | uncorrected, fatal and memory failure C; deferred, an unknown type and a machine check with no status W; corrected `info`; a disk's failed requests W (`io_error`); `memory_corrected_rate` W at 10 or more an hour on one DIMM (the coordinator's) | 60 s |
 | **SMART**, through smartmontools | `smartctl --json=c --nocheck=standby --info --health --attributes /dev/<disk>` of each disk (SATA, SAS, NVMe): status, `critical_warning`, available spare, media errors, pending and reallocated sectors (Built: `crates/hostkeeper-daemon/src/smart.rs`) | `disk` by name, keyed by serial; `disk_failing` asserted while failing and deasserted when it passes again or is gone, `disk_media_errors` at each growth (`info` at a disk's first read) | failing, `critical_warning` or a spare under its threshold C (its end C too, so it is never folded); growth W | hourly |
 | **The persistent journal** | the kernel's lines of the boot before and of this boot, read once per boot and then followed: machine checks (`mce:`), EDAC, AER, the BERT lines of the previous boot [V: the exact string], `[Hardware Error]`, and I/O errors (`I/O error, dev <disk>`) | `cpu`, `memory`, `pcie`, `disk` (`io_error`); the line's own severity token decides | fatal and recoverable C; corrected `info`; an I/O error W | once per boot, then followed |
 | **The BMC's event log** (IPMI SEL) | `Get SEL Info`, `Get SEL Entry` over `/dev/ipmi0` (Built: `crates/hostkeeper-daemon/src/ipmi.rs`, `IPMI_DEVICE`), entries newer than the last read; the slot and sensor named by the SDR | memory (sensor type `0x0C`, including "memory device disabled"), processor (`0x07`), power supply (`0x08`), fan (`0x04`) and temperature (`0x01`) to `memory`, `cpu`, `power`, `thermal`; watchdog, critical interrupt, OS critical stop, POST error to `board`; unknown and OEM types kept as `info`, never dropped | uncorrectable memory, memory disabled, a CPU thermal trip, a PSU or fan failure, an OS critical stop C; corrected memory, a temperature threshold W | 60 to 300 s, the entries read only when the count or add time changed |
@@ -303,7 +303,8 @@ first beats and when they change. A size test with 16 services and every part at
 ### 4.2 How each is read
 
 The workspace forbids `unsafe` (Built: `unsafe_code = "forbid"`; `ipmi.rs` says why its `ioctl`s are `ipmi_rs`'s), and the daemon
-runs as root. **Native**, from files and existing crates, each parser tested on fixtures: rasdaemon's database (read-only SQLite), the
+runs as root. **Native**, from files and existing crates, each parser tested on fixtures: rasdaemon's database (read-only SQLite, through
+the daemon's own reader of the file format, Built: `crates/hostkeeper-daemon/src/sqlite_read.rs`, 4.5), the
 journal's kernel lines [V: through `journalctl --dmesg --boot=<n> --output=json`, a delegated program, if no reader of the journal's
 files fits the workspace's crates], `/dev/kmsg`, the SEL and SDR through `ipmi_rs` with a decoder for the sensor types above (the
 IPMI 2.0 event tables), sysfs and proc, the SMBIOS memory devices (`/sys/firmware/dmi/entries/17-*/raw`, the table `dmidecode --type
@@ -389,8 +390,15 @@ that changes the host, the cordon, is a maintenance run, which runs each service
   pattern of the probe's `STEPS`, Built: `crates/hostkeeper-daemon/src/maintenance_hook/probe.rs`), with one New slot for a disk or a
   label whose value must be a name the host listed (a `/sys/block` name of `^[a-z0-9]+$`, a unit of a manifest) and may not start with
   `-`.
-- **rasdaemon.** Its database is opened `mode=ro` with a busy timeout and short reads, so it cannot block rasdaemon's writer; a locked
-  database or an unexpected journal mode is an `unreadable` source, never a crash.
+- **rasdaemon** (Built: `crates/hostkeeper-daemon/src/sqlite_read.rs`). Its database is read by the daemon's own reader of SQLite's
+  file format, not by SQLite: the Linux build is static for musl and compiles no C but ring's (`.cargo/config.toml`), and SQLite's C
+  needs a libc. The reader opens the file read-only and takes no lock, so it cannot block rasdaemon's writer; instead a read counts
+  only when no hot rollback journal (`ras-mc_event.db-journal` holding a transaction) is beside the file before and after it and the
+  file's change counter did not move during it, and is tried again otherwise, three times in all. Short reads: at most 256 rows at a
+  time, each its own read, and 4096 rows of a table in one poll (all of them on the source's first read, so its history is judged at
+  once). A database written at every attempt, in WAL mode (whose newest pages are not in the file), in UTF-16, or malformed is an
+  `unreadable` source with its reason, never a crash; no file, or none of its tables, is `unsupported`. Pages are read one at a time,
+  only those a read walks; a b-tree that loops or is deeper than 32 levels, and a record over 1 MiB, are malformed.
 - **Deadlines.** Every read has a deadline, an output cap, and a failure of its own that is recorded in `sources` and never fails the
   heartbeat. Each source has its own worker, so a hung read stops that source only (Built: `crates/hostkeeper-daemon/src/hardware_sources.rs`,
   a thread per source started with the daemon, its state kept by `HealthKeeper::read`; when the states and six records would pass
@@ -551,7 +559,8 @@ names, serials and addresses.
 
 - **Normalization, per source.** Each source's fixture gives records of exactly the expected `component`, `subject`, `severity`,
   `state`, `source`, `code`, `message` and `raw`, compared whole: rasdaemon rows of `mc_event` (corrected and uncorrected, by DIMM
-  label), `mce_record`, `aer_event`, `mf_event`, and a locked database (`unreadable`); `smartctl --json` for pass, fail, low spare,
+  label), `mce_record`, `aer_event`, `mf_event` and `disk_errors`, a database being written and one in WAL mode (`unreadable`), no
+  database and no table (`unsupported`), and an empty table (read); `smartctl --json` for pass, fail, low spare,
   `critical_warning`, media errors grown, a disk in standby, missing, timeout and over the cap; journal lines of an MCE, an EDAC error,
   a fatal and a corrected AER error, a BERT record of the previous boot, an I/O error, and unrelated lines (no record); SEL entries of
   memory (named by the SDR), memory disabled, processor, PSU, fan, temperature asserted then deasserted, OEM (`info`), "log cleared",
@@ -698,5 +707,6 @@ section 6.7 and the operations docs that name it.
 
 1. **Which hosts expect EDAC data in rasdaemon?** Proposed: every Linux host is expected to run rasdaemon (decision 8), but an empty
    memory table is not `host_not_monitored`, since a firmware-first host legitimately records memory errors only in the BMC's event log;
-   the host's page says which of the two a host's memory errors come from. Alternative: label the firmware-first hosts and expect memory
+   the host's page says which of the two a host's memory errors come from. The daemon reads it so (Built: an empty `mc_event` table
+   is the source `rasdaemon` read, `ok`, with no record), which the alternative would keep. Alternative: label the firmware-first hosts and expect memory
    rows from the others.

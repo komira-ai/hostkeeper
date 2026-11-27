@@ -30,6 +30,12 @@
 //! coordinator through a [`Transport`]; [`TcpTransport`] ([`dial`]) is the production one and
 //! the only code of the crate that opens a socket, with [`TcpDial`], its async counterpart.
 //!
+//! Every link dials the addresses a [`Reach`] ([`reach`]) gives it: those the coordinator's name
+//! looks up to (through a [`Lookup`]; the daemon's is a [`BackgroundLookup`] over
+//! [`SystemLookup`]), then the last address whose handshake completed as the coordinator, then
+//! the daemon config's `coordinator_ip`. The certificate is checked against the name whatever
+//! address answered.
+//!
 //! [`CoordinatorGet`] ([`fetch`]) reads a path of the coordinator's agent listener over the same
 //! mutual TLS and streams the body to the caller's sink, through the same [`Transport`]: the
 //! daemon's mirror of a private repository reads its files with it. `get_from` reads a file from
@@ -76,6 +82,7 @@ pub mod ports;
 pub mod prerequisites;
 pub mod probe;
 mod proto_map;
+pub mod reach;
 pub mod repositories;
 pub mod serial_console;
 #[cfg(feature = "testing")]
@@ -90,7 +97,7 @@ pub use beat::{
 };
 pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};
-pub use dial::{CALL_SECS, TcpDial, TcpTransport};
+pub use dial::{BackgroundLookup, CALL_SECS, LOOKUP_SECS, SystemLookup, TcpDial, TcpTransport};
 pub use fetch::{CoordinatorGet, GetError, Got, Limit};
 pub use full_disk_access::{FullDiskAccess, FullDiskAccessSource};
 pub use grpc::GRPC_REPLY_MAX;
@@ -123,5 +130,6 @@ pub use prerequisites::{
     PrerequisitesRefusal, PrerequisitesReport, PushedPrerequisites,
 };
 pub use probe::{ProbeStep, RemoteLoginProbe};
+pub use reach::{Lookup, Reach};
 pub use repositories::{MAX_REFUSAL_REASON, PushedSet, RepositoriesReport, RepositoryRefusal};
 pub use serial_console::SerialConsoleReport;

@@ -55,6 +55,9 @@
 //! - [`kernel_sources`]: the kernel's evidence of hardware faults on a Linux host, its log
 //!   ([`kernel_log`]) and its files ([`kernel_files`]), read every minute into the hardware records
 //!   its heartbeats report ([`host_health`]).
+//! - [`rasdaemon`]: rasdaemon's database, read every minute on a Linux host into hardware event
+//!   records held in the daemon's health state ([`host_health`]), through a reader of the SQLite
+//!   file format that takes no lock and writes nothing ([`sqlite_read`]).
 //! - [`serial_baseline`]: the serial console baseline (the GRUB file, the getty's drop-in and the
 //!   getty) a Linux host whose config names a `serial_console` keeps, looked at every ten minutes
 //!   and reported in its heartbeats as `applied`, `reboot_pending`, `failed` or `unsupported`.
@@ -147,6 +150,10 @@
 //!   [`start::serve`] starts, in that order, once the daemon is ready, and which sends the
 //!   watchdog notice ([`notify::Watchdog`]) after each heartbeat; [`unix_clock`] is the wall
 //!   clock of the loop's deferrals, the daemon's one read of it.
+//! - [`coordinator_address`]: the coordinator's reach (where its name is dialed: the addresses it
+//!   looks up to, the one last reached, the config's `coordinator_ip`), which the heartbeat link
+//!   and the mirror dial through, and the state file that keeps the address last reached across
+//!   a restart.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
 //! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
@@ -165,6 +172,7 @@ pub mod builtin;
 pub mod checks;
 pub mod cli;
 pub mod console;
+pub mod coordinator_address;
 pub mod coordinator_store;
 pub mod entry;
 pub mod executor;
@@ -240,6 +248,7 @@ pub mod pin;
 pub mod place;
 pub mod prerequisites;
 pub mod prune;
+pub mod rasdaemon;
 pub mod real_packages;
 pub mod refusal;
 pub mod remote_login_probe;
@@ -253,6 +262,7 @@ pub mod selfupdate;
 pub mod serial_baseline;
 pub mod shutdown_probe;
 pub mod smart;
+pub mod sqlite_read;
 pub mod ssh_effective;
 pub mod ssh_files;
 pub mod ssh_host;

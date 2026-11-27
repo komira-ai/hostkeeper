@@ -121,6 +121,9 @@ hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # set on a scratch file, which the quarantine check reads.
 rustix = { workspace = true, features = ["fs", "process"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
+# rasdaemon's database made by SQLite itself, for the tests of the daemon's reader of the file
+# format (`sqlite_read`, `rasdaemon`).
+rusqlite.workspace = true
 tokio-rustls.workspace = true
 rustls.workspace = true
 

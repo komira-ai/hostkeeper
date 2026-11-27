@@ -20,7 +20,11 @@ The crate depends on no crate of this workspace; `crates/xtask/tests/layering` k
 Format exactly as design 4.1: `coordinator` and `release_channel` (`https://` URLs),
 `ca_sha256` (64 hex digits), `[trusted_signers]` (`organisation`, `workflow`, `refs`,
 `hosted_runner`; `TrustedSigners::allows_ref` matches a ref against its globs, `*` within one
-`/`-separated part) and `[bounds]`. Every key is required except `release_channel`, `keep_awake`, `serial_console` and those of `[bounds]`, which default
+`/`-separated part) and `[bounds]`. `coordinator_ip` (an IPv4 or IPv6 address, without brackets or
+port) is the coordinator's address beside the name of `coordinator`: the daemon dials it when the
+name cannot be looked up, on the URL's port, and still checks the certificate against the name. A
+daemon of an earlier release refuses a config with it, as it refuses any key it does not know.
+Every key is required except `release_channel`, `coordinator_ip`, `keep_awake`, `serial_console` and those of `[bounds]`, which default
 to the design's example (`Bounds::default`; `keep_awake`, a boolean read by a Mac's daemon alone, to `true`:
 the Mac's power settings are made so that it never sleeps; `serial_console`, a Linux server's serial
 port `ttyS<n>` or `ttyAMA<n>` whose baseline the daemon keeps, to none). The port's grammar and the
