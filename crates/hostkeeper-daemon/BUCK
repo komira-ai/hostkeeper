@@ -9,6 +9,7 @@ cargo_package(
     extra_srcs = [
         "tests/fixtures/capacity",
         "tests/fixtures/kernel",
+        "tests/fixtures/mac_health",
         "tests/fixtures/maintenance",
         "tests/fixtures/rasdaemon",
         "//:README.md",

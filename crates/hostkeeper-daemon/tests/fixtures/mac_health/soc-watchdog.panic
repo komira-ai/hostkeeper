@@ -1,0 +1,6 @@
+{"bug_type":"210","timestamp":"2026-11-22 08:15:30.00 -0500","os_version":"macOS 15.1 (24B83)","incident_id":"1a2b3c4d-2222-3333-4444-555555555555"}
+{
+  "incident" : "1a2b3c4d-2222-3333-4444-555555555555",
+  "panicString" : "panic(cpu 7 caller 0xfffffe0034567890): SOCD report detected: (AP watchdog expired) @AppleSocDebug.cpp:402\nDebugger message: panic\n",
+  "bug_type" : "210"
+}

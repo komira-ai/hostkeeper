@@ -1,0 +1,18 @@
+{"bug_type":"210","timestamp":"2026-11-20 03:00:00.00 +0000","os_version":"macOS 15.1 (24B83)","roots_installed":0,"incident_id":"2B6F9C1E-7D1A-4C3E-9F20-6A1D0E5B8C44"}
+{
+  "build" : "macOS 15.1 (24B83)",
+  "product" : "Mac14,3",
+  "socId" : "8112",
+  "kernel" : "Darwin Kernel Version 24.1.0: root:xnu-11215.41.3~2\/RELEASE_ARM64_T8112",
+  "incident" : "2B6F9C1E-7D1A-4C3E-9F20-6A1D0E5B8C44",
+  "crashReporterKey" : "0000000000000000000000000000000000000000",
+  "date" : "2026-11-20 03:00:00.41 +0000",
+  "panicString" : "panic(cpu 4 caller 0xfffffe0012345678): \"SError interrupt, ESR 0xbe000011\" @AppleARMPlatform.cpp:1234\nDebugger message: panic\nMemory ID: 0x6\nOS release type: User\nOS version: 24B83\nKernel version: Darwin Kernel Version 24.1.0\nPanicked task 0xfffffe1234567890: 0 pages, 1 threads: pid 0: kernel_task\n\n** Stackshot Succeeded ** Bytes Traced 123456 (Uncompressed 234567) **\n",
+  "panicFlags" : "0x902",
+  "bug_type" : "210",
+  "otherString" : "\n** Stackshot Succeeded ** Bytes Traced 123456 (Uncompressed 234567) **\n",
+  "macOSPanicFlags" : "0x0",
+  "macOSPanicString" : "BAD MAGIC! (flag set in iBoot panic header), no macOS panic log available",
+  "extensionInfo" : "",
+  "processByPid" : {}
+}

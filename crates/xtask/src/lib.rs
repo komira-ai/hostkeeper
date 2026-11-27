@@ -3,10 +3,9 @@
 //!
 //! - `install-tool`: check a downloaded tool against its pinned SHA-256 and install it
 //!   (`install`).
-//! - `farm-build`: the farm lane's `buck2 build`, refused unless buck2 has the farm's workers, the
-//!   generated build table is fresh (a stale one is handed over as a patch) and its summary line
-//!   says `local: 0`; a build whose only failures are cut connections to the farm runs once more
-//!   (`farm`).
+//! - `farm-workers` and `farm-table`: the farm lane's two checks that are not builds: buck2 has
+//!   the farm's workers, and the generated build table is fresh (a stale one is handed over as a
+//!   patch) (`farm`).
 //! - `mac-farm`: one Cargo command of this workspace on a Mac of the build farm, from a Linux
 //!   runner, as one Remote Execution action whose inputs are the checkout, the crates of
 //!   `Cargo.lock` and the pinned Rust toolchain; the files it names with `--output` are written
@@ -139,21 +138,27 @@ enum Verb {
         #[arg(long)]
         member: Option<PathBuf>,
     },
-    /// The farm lane's build: `buck2 build <target>` with the farm's workers configured and the
-    /// generated build table fresh, run once more when its only failures are cut connections to
-    /// the farm, its summary line saying `local: 0` (docs/farm.md); buck2's daemon is stopped
-    /// after.
-    FarmBuild {
+    /// The farm lane's check that buck2 has the farm's worker property set, before anything is
+    /// built (docs/farm.md); it builds nothing.
+    FarmWorkers {
         /// The buck2 program (the workflow installed the pinned release there).
         #[arg(long)]
         buck2: PathBuf,
-        /// What to build (`//:ci`).
+    },
+    /// The farm lane's check that the generated build table is fresh, by the `buildrules` command
+    /// line the step before built; a stale table's fix is written as a patch and told in the job
+    /// summary, and the check fails (docs/farm.md).
+    FarmTable {
+        /// The buck2 program, which `buildrules sync` is given.
         #[arg(long)]
-        target: String,
+        buck2: PathBuf,
+        /// The `buildrules` command line (the step before built it on the farm, to this file).
+        #[arg(long)]
+        buildrules: PathBuf,
         /// Where a stale table's fix, the patch of `buildrules sync`, is written.
         #[arg(long)]
         patch: PathBuf,
-        /// The job summary: a stale table's fix and a build run again after a cut are told there.
+        /// The job summary: a stale table's fix is told there.
         #[arg(long)]
         summary: PathBuf,
         /// The repository of the run (`owner/name`), for the command that applies the patch.
@@ -258,9 +263,10 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 &download, &sha256, &unpack, &out,
             )?])
         }
-        Verb::FarmBuild {
+        Verb::FarmWorkers { buck2 } => Ok(vec![farm::workers(&buck2)?]),
+        Verb::FarmTable {
             buck2,
-            target,
+            buildrules,
             patch,
             summary,
             repo,
@@ -272,9 +278,9 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
                 repo,
                 run_id,
             };
-            Ok(vec![farm::build(
+            Ok(vec![farm::fresh_table(
+                &buildrules,
                 &buck2,
-                &target,
                 &handoff,
                 &mut std::io::stderr(),
             )?])

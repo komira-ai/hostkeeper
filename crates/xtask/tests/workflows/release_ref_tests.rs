@@ -20,9 +20,14 @@ const NEW_VERB: &str = "cargo xtask release channel-host --channel \"$C\" --outp
 
 /// The problems of a workflow of one job `j` whose steps are `steps`.
 fn job_problems(steps: &str) -> Vec<String> {
+    file_problems("t.yml", steps)
+}
+
+/// The problems of the workflow `file` of one job `j` whose steps are `steps`.
+fn file_problems(file: &str, steps: &str) -> Vec<String> {
     let text = format!("jobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n{steps}");
     let doc = yaml::load(&text).expect("the workflow parses");
-    problems("t.yml", &doc)
+    problems(file, &doc)
 }
 
 /// A step that runs `command`.
@@ -296,4 +301,46 @@ fn the_floors_command_line_is_the_published_release_it_names() {
     // The verbs the release jobs run are there; the one the floor predates is not.
     assert!(body.iter().any(|l| l.starts_with("release targets ")));
     assert!(!body.iter().any(|l| l.starts_with("release channel-host")));
+}
+
+/// farm.yml's checkout of komira's assert_remote sources, as the farm lane's rule wants it.
+const TOOL_CHECKOUT: &str =
+    "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: komira-ai/komira
+          ref: b2080fe989248adf9b47d4bd14c0ecefa0802f79
+          path: buck-out/komira
+          sparse-checkout: /tools/build/ci/assert_remote/*.zig
+          sparse-checkout-cone-mode: false
+          filter: blob:none
+          persist-credentials: false
+";
+
+#[test]
+fn farm_ymls_checkout_of_the_tools_sources_alone_stands_beside_xtask_calls() {
+    // Catches: the farm lane's checkout of komira's sources into buck-out/ refused though the
+    // job's xtask is still its own checkout's; that exception reaching another file or a checkout
+    // of another shape; and the exception taken for a checkout that changes the workspace (a
+    // call after it from a release's checkout is still read).
+    let steps = format!("{OWN_CHECKOUT}{TOOL_CHECKOUT}{}", run("cargo xtask --help"));
+    assert_eq!(file_problems("farm.yml", &steps), Vec::<String>::new());
+    let refused_checkout = "t.yml: job j step 2 checks out another repository or into a path, in a job that calls xtask";
+    assert_eq!(file_problems("t.yml", &steps), [refused_checkout]);
+    let elsewhere = steps.replace("path: buck-out/komira", "path: komira");
+    assert_eq!(
+        file_problems("farm.yml", &elsewhere),
+        [refused_checkout.replace("t.yml", "farm.yml")]
+    );
+    assert_eq!(
+        file_problems(
+            "farm.yml",
+            &format!("{RELEASE_CHECKOUT}{TOOL_CHECKOUT}{}", run(NEW_VERB))
+        ),
+        [refused(
+            3,
+            17,
+            "`cargo xtask release channel-host` is not a verb of release 0.1.208"
+        )
+        .replace("t.yml", "farm.yml")]
+    );
 }

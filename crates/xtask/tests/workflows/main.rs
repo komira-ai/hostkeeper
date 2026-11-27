@@ -8,7 +8,8 @@
 //! no secret and no macOS job on a pull request, in `pr_device_tests.rs`; those of the Mac's
 //! tests, the macOS stage of `release.yml` (no macOS job runs for a pull request), in
 //! `release_macos_tests.rs`; those of `farm.yml`, the farm lane and the one pull-request workflow
-//! whose job holds `id-token: write`, in `farm_tests.rs`, and of the tests that lane leaves to the
+//! whose job holds `id-token: write`, in `farm_tests.rs`, and of the time limits of its steps and of
+//! `mac-farm.yml`'s, in `step_bounds_tests.rs`, and of the tests that lane leaves to the
 //! Mac (the build files of the members with macOS-only code say so), in `farm_macos_tests.rs`;
 //! those of the merge queue (`ci.yml` and
 //! `pr-device.yml` run and report every check `main` requires for a merge group as for a pull
@@ -102,6 +103,8 @@ mod set_desired_tests;
 mod sign_code_run_tests;
 mod signing_run;
 mod signing_run_tests;
+mod step_bounds;
+mod step_bounds_tests;
 mod tailnet_join_tests;
 mod targets_run_tests;
 mod template_doc;
