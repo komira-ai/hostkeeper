@@ -220,6 +220,64 @@ async fn an_earlier_package_that_is_halted_or_excluded_holds_the_later_ones_back
     assert_eq!(verb(farm.order("a1", &[])), install("base"));
 }
 
+/// Excludes the host `host` from `package`, as `hosts exclude` does.
+fn exclude(farm: &Farm, package: &str, host: &str) {
+    farm.world
+        .coordinator()
+        .ops()
+        .change(
+            Write::BeforeMemory,
+            AuditEntry::new("test", "exclude"),
+            |state| {
+                state.excluded.push(Exclusion {
+                    service: package.to_owned(),
+                    node_id: host.to_owned(),
+                    reason: "for the test".to_owned(),
+                });
+            },
+        )
+        .expect("excluded");
+}
+
+/// Proves: an earlier package that an operator excluded the host from and that the host runs, at
+/// any version, counts as installed: with hostkeeper wanted at a version the hosts do not run and
+/// each host excluded from hostkeeper, the package listed after it is ordered to a host whose
+/// beat reports hostkeeper running (`a1`, and `a3` at first) and not told `install_order`; to a
+/// host whose beat reports hostkeeper absent (`a2`), or whose last beat no longer lists it (`a3`
+/// then), it is not, and waits `install_order`.
+///
+/// Catches: the beat of a package a host is excluded from, which the fleet keeps apart from the
+/// package's counted hosts, read as no word of it, which holds every later package of the host's
+/// group back for as long as the exclusion stands.
+#[tokio::test]
+async fn an_earlier_package_the_host_runs_and_is_excluded_from_does_not_hold_the_later_ones_back() {
+    let farm = Farm::new("io-excluded-runs");
+    farm.flag(4);
+    farm.group("alpha", &["app"], Some(wide()));
+    for host in ["a1", "a2", "a3"] {
+        farm.host(host, "alpha");
+    }
+    farm.deploy("", "hostkeeper", "2.0", 1).await;
+    farm.deploy("", "app", "2.0", 2).await;
+    for host in ["a1", "a2", "a3"] {
+        exclude(&farm, "hostkeeper", host);
+    }
+
+    assert_eq!(verb(farm.order("a1", &[])), install("app"));
+    assert_ne!(farm.why("a1", "app"), INSTALL_ORDER);
+
+    let mut absent = farm.beat_with(&[]);
+    absent.services.as_mut().expect("services")[0].health = Health::Absent;
+    assert_eq!(verb(farm.order_on("a2", absent)), None);
+    assert_eq!(farm.why("a2", "app"), INSTALL_ORDER);
+
+    assert_eq!(verb(farm.order("a3", &[])), install("app"));
+    let mut unlisted = farm.beat_with(&[]);
+    unlisted.services.as_mut().expect("services").clear();
+    assert_eq!(verb(farm.order_on("a3", unlisted)), None);
+    assert_eq!(farm.why("a3", "app"), INSTALL_ORDER);
+}
+
 /// What a host reports of `package` it was ordered to install at `target` and has not run: absent
 /// at `target`, with the deferral of `target` its daemon reports while its wait lasts when
 /// `declined`, as a service whose first install cannot go on without its config package's files
