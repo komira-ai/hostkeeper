@@ -115,7 +115,7 @@ version_ge() {
 
 # The facts of one `hk hosts get` answer, one line each.
 FACTS='.host as $h | ($h.maintenance // {}) as $m | ($m.mac // {}) as $x | ($x.updateAccount // {}) as $a |
-    "  group \($h.hostGroup // "-"), live \($h.live // false), daemon \($h.heartbeat.agent.version // "-")",
+    "  group \($h.hostGroup // "-"), live \(($h | .live) // false), daemon \($h.heartbeat.agent.version // "-")",
     "  macOS \($m.host.osVersion // "-") (\($m.host.osBuild // "-"))",
     "  update account: present \($a.present // false), admin \($a.admin // false), secure token \($a.secureToken // false), hidden \($a.hidden // false)",
     "  FileVault \(($x.filevault // "FILE_VAULT_STATE_UNSPECIFIED") | sub("FILE_VAULT_STATE_"; "") | ascii_downcase), authrestart supported \($x.authrestartSupported // false)",
@@ -126,13 +126,13 @@ FACTS='.host as $h | ($h.maintenance // {}) as $m | ($m.mac // {}) as $x | ($x.u
     (if [($m.due // [])[] | select(.kind == "MAINTENANCE_KIND_MACOS")] == [] then "  due macOS: nothing" else
         (($m.due // [])[] | select(.kind == "MAINTENANCE_KIND_MACOS")
             | "  due macOS \(.from // "-") -> \(.to // "-") \(.label // "")\(if .needsReboot then ", restarts" else "" end)\(if ((.from // "") | split(".")[0]) != ((.to // "") | split(".")[0]) then ", a new major: not taken" else "" end)") end),
-    (if $m.run then "  in run \($m.run.runId) at \($m.run.step)" else empty end)'
+    (if ($m | .run) then "  in run \(($m | .run).runId) at \(($m | .run).step)" else empty end)'
 
 # What stops a macOS turn on the Mac, by the coordinator's rules, one line each; none: ready. A
 # due item counts only within the running major (from and to share their first number), as the
 # coordinator counts it while the group's macos_major is off (maintenance_mac.rs, counts_as_due).
 GAPS='def minor: ((.from // "") | split(".")[0]) == ((.to // "") | split(".")[0]); .host as $h | ($h.maintenance // null) as $m |
-    (if ($h.live // false) | not then "not live" else empty end),
+    (if (($h | .live) // false) | not then "not live" else empty end),
     (if $m == null then "no maintenance report: its daemon has not announced maintenance-v1" else
         ((if ($h.maintenanceStale // false) then "its report is stale" else empty end),
          (if ($m.lookFailed // "") != "" then "its last look failed: \($m.lookFailed)" else empty end),
