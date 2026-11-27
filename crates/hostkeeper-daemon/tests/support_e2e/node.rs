@@ -292,6 +292,7 @@ impl<M: Host> Node<M> {
             bmc: None,
             serial_console: None,
             health: None,
+            health_reads: Vec::new(),
         };
         self.running = Some(Running {
             heartbeater: links.heartbeater(&daemon),

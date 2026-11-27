@@ -26,9 +26,16 @@
 //! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
+//! **Source states.** Each source says what its last read came to
+//! ([`HealthKeeper::source_state`]: read, unsupported or unreadable, with the reason), which every
+//! heartbeat carries, one entry per source, and the log gets a line when it changes. A source's
+//! state is kept in memory only: until a source's first read after the daemon's start it is not
+//! listed.
+//!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -36,7 +43,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
-use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_MESSAGE};
+use hostkeeper_proto::health::{
+    MAX_BOOT_ID, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
+};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
 
@@ -121,6 +130,8 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
+    /// What each source's last read came to, by the source's token.
+    sources: BTreeMap<String, pb::SourceState>,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -175,6 +186,7 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
+                sources: BTreeMap::new(),
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -244,6 +256,31 @@ impl HealthKeeper {
         held
     }
 
+    /// Keeps what the last read of `source` came to: `status`, and `reason` when it was not
+    /// read, each cut to its bound; the log gets a line when it differs from the one before.
+    pub fn source_state(&self, source: &str, status: pb::SourceStatus, reason: &str) {
+        let state = pb::SourceState {
+            source: cut(source, MAX_SOURCE),
+            status: status.into(),
+            reason: cut(reason, MAX_SOURCE_REASON),
+        };
+        let mut inner = lock(&self.inner);
+        let before = inner.sources.insert(state.source.clone(), state.clone());
+        if before.as_ref() != Some(&state) {
+            let line = format!(
+                "hardware source {}: {status:?}: {}",
+                state.source, state.reason
+            );
+            self.log.line(line.trim_end_matches(": "));
+        }
+    }
+
+    /// When the boot the daemon runs in began, Unix seconds; 0 when it was not read.
+    #[must_use]
+    pub fn boot_unix(&self) -> u64 {
+        lock(&self.inner).file.boot_unix
+    }
+
     /// The mark `source` last kept; none before its first read on this host.
     #[must_use]
     pub fn mark(&self, source: &str) -> Option<String> {
@@ -281,7 +318,7 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources: Vec::new(),
+            sources: inner.sources.values().take(MAX_SOURCES).cloned().collect(),
         }
     }
 

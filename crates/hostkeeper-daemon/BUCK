@@ -8,6 +8,7 @@ cargo_package(
     path = ".",
     extra_srcs = [
         "tests/fixtures/maintenance",
+        "tests/fixtures/rasdaemon",
         "//:README.md",
         "//:packaging/linux",
         "//crates/hostkeeper-install:tests/macos_pkg/support",

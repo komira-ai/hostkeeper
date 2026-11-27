@@ -104,6 +104,7 @@ fn a_retry_time_far_ahead_is_capped_at_an_hour_from_now() {
         bmc: None,
         serial_console: None,
         health: None,
+        health_reads: Vec::new(),
     };
     let mut heartbeater = links.heartbeater(&daemon);
 

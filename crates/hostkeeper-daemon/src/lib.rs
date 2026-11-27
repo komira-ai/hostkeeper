@@ -52,6 +52,9 @@
 //! - [`ipmi`]: the BMC a Linux host's enrollment claims ask for its MAC, over `/dev/ipmi0`.
 //! - [`bmc`]: the BMC's address and MAC a Linux host's heartbeats report, read over the same
 //!   device every ten minutes.
+//! - [`rasdaemon`]: rasdaemon's database, read every minute on a Linux host into hardware event
+//!   records held in the daemon's health state ([`host_health`]), through a reader of the SQLite
+//!   file format that takes no lock and writes nothing ([`sqlite_read`]).
 //! - [`serial_baseline`]: the serial console baseline (the GRUB file, the getty's drop-in and the
 //!   getty) a Linux host whose config names a `serial_console` keeps, looked at every ten minutes
 //!   and reported in its heartbeats as `applied`, `reboot_pending`, `failed` or `unsupported`.
@@ -229,6 +232,7 @@ pub mod pin;
 pub mod place;
 pub mod prerequisites;
 pub mod prune;
+pub mod rasdaemon;
 pub mod real_packages;
 pub mod refusal;
 pub mod remote_login_probe;
@@ -241,6 +245,7 @@ pub mod seed;
 pub mod selfupdate;
 pub mod serial_baseline;
 pub mod shutdown_probe;
+pub mod sqlite_read;
 pub mod ssh_effective;
 pub mod ssh_files;
 pub mod ssh_host;
