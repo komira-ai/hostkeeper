@@ -530,6 +530,9 @@ fn malformed(what: &'static str) -> SqliteError {
     SqliteError::Malformed(what)
 }
 
+/// A file's name, the change made to its header, and the error it is refused with.
+type HeaderCase = (&'static str, fn(&mut [u8]), SqliteError);
+
 /// Proves a header that is not SQLite's, or breaks it, is refused by what is wrong: too short, no
 /// magic, a page size that is none, a file format version that is neither, a WAL version, too
 /// much reserved space, an encoding past UTF-16; that a page size of 1 is 65536; and that a
@@ -546,7 +549,7 @@ fn a_broken_header_is_refused_by_what_is_wrong() {
     fs::write(&magic, [0u8; 100]).expect("write");
     assert_eq!(refused(&magic), SqliteError::NotSqlite);
     assert_eq!(SqliteError::NotSqlite.to_string(), "not a SQLite database");
-    let cases: [(&str, fn(&mut [u8]), SqliteError); 5] = [
+    let cases: [HeaderCase; 5] = [
         (
             "size.db",
             |b| b[16..18].copy_from_slice(&1000u16.to_be_bytes()),
