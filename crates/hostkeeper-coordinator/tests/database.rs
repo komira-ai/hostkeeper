@@ -406,7 +406,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
 }
 
 /// Proves: a `serve` is refused on a database that holds a migration newer than this release's
-/// that says `refuse`, with the exact text of the database's refusal naming migration 33; a newer
+/// that says `refuse`, with the exact text of the database's refusal naming migration 34; a newer
 /// one that says `may-run` is taken.
 ///
 /// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
@@ -420,17 +420,17 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     database.lock_is_free();
 
     let put = "INSERT INTO schema_version (version, name, older_releases) \
-               VALUES (33, 'from_the_future', ";
+               VALUES (34, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
     assert!(matches!(&why, StartError::Database(_)), "{why}");
     assert_eq!(
         why.to_string(),
-        "the database's schema is newer than this coordinator (migration 33, from_the_future)"
+        "the database's schema is newer than this coordinator (migration 34, from_the_future)"
     );
     database.lock_is_free();
 
-    run(&database, "DELETE FROM schema_version WHERE version = 33");
+    run(&database, "DELETE FROM schema_version WHERE version = 34");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }

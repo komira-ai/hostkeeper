@@ -3,8 +3,8 @@
 
 use super::hardware_log_of;
 use crate::hardware_files::hardware_events_path;
+use crate::hardware_log::Query;
 use crate::hardware_log::tests::mixed;
-use crate::hardware_log::{HardwareLog, Query};
 use crate::testutil::scratch;
 
 /// Proves: over files the log is the file beside the state file, which a log chosen again for

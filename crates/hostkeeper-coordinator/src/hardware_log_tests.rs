@@ -51,7 +51,7 @@ pub(crate) fn record(
         event_id: event_id.to_owned(),
         machine_serial: format!("SN-{host}"),
         time_unix,
-        observed_unix: time_unix + 60,
+        observed_unix: time_unix.saturating_add(60),
         boot_id: "b7c1".to_owned(),
         of_previous_boot: true,
         component: component.to_owned(),
@@ -488,7 +488,7 @@ fn a_hosts_records_are_written_stamped_and_answered_whole() {
             .expect("listed")
             .records
     };
-    assert_eq!(listed(&coordinator), [expected.clone()]);
+    assert_eq!(listed(&coordinator), std::slice::from_ref(&expected));
     let later: crate::audit_file::UnixClock = Arc::new(|| NOW + 99);
     let later = Rig::start(&rig.dir, &rig.clock)
         .with_ops(ops_of(&rig.dir).with_unix(later))
