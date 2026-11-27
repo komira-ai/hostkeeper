@@ -43,7 +43,7 @@ const PROCESS_TESTS: [(&str, &str); 22] = [
     ),
     (
         "tests/farm_build_cli.rs",
-        "runs the xtask binary as a process on farm-build, with the fake buck2 as its buck2",
+        "runs the xtask binary as a process on farm-workers and farm-table, with a fake buck2",
     ),
     (
         "tests/coordinator_update_unit.rs",
