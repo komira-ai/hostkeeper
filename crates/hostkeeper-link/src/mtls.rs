@@ -4,7 +4,13 @@
 //! is the gRPC one, on the same trust. It speaks the bytes kbf's agent speaks (kbf `crates/kbf-updater/src/agent/coordinator.rs`
 //! at `v0.0.64`): one POST per connection, HTTP/1.1, `Connection: close`.
 //!
-//! - **Who it talks to.** The coordinator's address is the daemon config's `coordinator`. Its
+//! - **Who it talks to.** The coordinator is the name of the daemon config's `coordinator`,
+//!   dialed at the addresses its [`Reach`] gives, in order, until one completes the TLS
+//!   handshake as the coordinator (the addresses the name looks up to, the one last reached,
+//!   the config's `coordinator_ip`); a connection that fails, or a server whose certificate is
+//!   refused, passes to the next, and the call fails with the last one's error. The call keeps
+//!   one bound, [`crate::CALL_SECS`] on the link's clock from after the lookup: each connection
+//!   is made with the time left of it. Its
 //!   certificate must chain to the CA whose SHA-256 is the config's `ca_sha256`: the roots are
 //!   the certificates of the CA bundle in the pki directory's current generation
 //!   (`<pki>/current/ca.pem`, which enrollment writes) whose SHA-256 is that one, read again at
@@ -27,7 +33,7 @@
 //!   when it changes.
 //!
 //! The link reaches the coordinator through a [`Transport`]: [`crate::TcpTransport`] in the
-//! daemon, an in-process one in the tests.
+//! daemon, an in-process one in the tests. It hands the transport an address, never the name.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -42,13 +48,17 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use hostkeeper_steps::Clock;
+
 use crate::beat::Heartbeat;
+use crate::dial::CALL_SECS;
 use crate::names::Reason;
 use crate::order::Reply;
 use crate::pki::{CA, CURRENT};
 use crate::ports::{
     ClientIdentity, CoordinatorLink, LinkError, Log, ReplyFault, TrustFault, Unsendable,
 };
+use crate::reach::{Candidate, Reach};
 use crate::wire_map::{self, Update};
 
 /// The most bytes of a reply's body that are read: kbf's `REPLY_MAX`.
@@ -147,37 +157,96 @@ impl Endpoint {
     }
 }
 
+/// How [`handshaken`] opens a connection to an address: given the address, as text, and the
+/// port.
+pub(crate) type Dial<'a> = dyn Fn(&str, u16) -> io::Result<Box<dyn Conn>> + 'a;
+
+/// A TLS stream to the coordinator, its handshake completed.
+pub(crate) type Tls = StreamOwned<ClientConnection, Box<dyn Conn>>;
+
+/// A TLS stream to the coordinator that `reach` names, under `config`: each address of
+/// [`Reach::candidates`] in turn is dialed through `dial` (given the address and the port) and
+/// its handshake run, until one completes, which [`Reach::reached`] is told. Nothing is said
+/// before the handshake: what answered must be the coordinator first.
+///
+/// # Errors
+/// No address to dial ([`LinkError::Transport`] of the lookup's kind), or the error of the last
+/// address tried: [`LinkError::Transport`], or [`LinkError::Untrusted`] when its certificate was
+/// refused.
+pub(crate) fn handshaken(
+    reach: &Reach,
+    config: &Arc<ClientConfig>,
+    dial: &Dial<'_>,
+) -> Result<Tls, LinkError> {
+    let candidates = reach
+        .candidates()
+        .map_err(|e| LinkError::Transport(e.kind()))?;
+    let mut last = LinkError::Transport(io::ErrorKind::NotFound);
+    for candidate in candidates {
+        match handshake(reach, config, candidate, dial) {
+            Ok(tls) => {
+                reach.reached(candidate);
+                return Ok(tls);
+            }
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
+}
+
+/// The handshake with `candidate`'s address, the certificate checked against `reach`'s name.
+fn handshake(
+    reach: &Reach,
+    config: &Arc<ClientConfig>,
+    candidate: Candidate,
+    dial: &Dial<'_>,
+) -> Result<Tls, LinkError> {
+    let connection = ClientConnection::new(Arc::clone(config), reach.endpoint().name.clone())
+        .map_err(|_| LinkError::Transport(io::ErrorKind::Other))?;
+    let sock = dial(&candidate.addr.ip().to_string(), candidate.addr.port())
+        .map_err(|e| LinkError::Transport(e.kind()))?;
+    let mut tls = StreamOwned::new(connection, sock);
+    while tls.conn.is_handshaking() {
+        tls.conn
+            .complete_io(&mut tls.sock)
+            .map_err(|e| failed(&e))?;
+    }
+    Ok(tls)
+}
+
 /// The [`CoordinatorLink`] over the JSON heartbeat route and mutual TLS.
 pub struct JsonMtlsLink {
-    endpoint: Endpoint,
+    reach: Arc<Reach>,
     pin: Sha256Hex,
     ca_bundle: PathBuf,
     transport: Arc<dyn Transport>,
+    clock: Arc<dyn Clock>,
     log: Arc<dyn Log>,
     /// The update last logged as not run, so that it is logged once.
     dropped: Mutex<Option<Update>>,
 }
 
 impl JsonMtlsLink {
-    /// The link to the coordinator of `config`, trusting the CA of the pki directory `pki`
-    /// whose SHA-256 `config` pins, reached through `transport`, logging to `log`.
-    ///
-    /// # Errors
-    /// [`EndpointError`]: the config's coordinator address is not one the link dials.
+    /// The link to the coordinator `reach` names, trusting the CA of the pki directory `pki`
+    /// whose SHA-256 `config` pins, dialed through `transport` within the bound of each call on
+    /// `clock`, logging to `log`.
     pub fn new(
         config: &DaemonConfig,
         pki: &Path,
+        reach: Arc<Reach>,
         transport: Arc<dyn Transport>,
+        clock: Arc<dyn Clock>,
         log: Arc<dyn Log>,
-    ) -> Result<JsonMtlsLink, EndpointError> {
-        Ok(JsonMtlsLink {
-            endpoint: Endpoint::of(&config.coordinator)?,
+    ) -> JsonMtlsLink {
+        JsonMtlsLink {
+            reach,
             pin: config.ca_sha256.clone(),
             ca_bundle: pki.join(CURRENT).join(CA),
             transport,
+            clock,
             log,
             dropped: Mutex::new(None),
-        })
+        }
     }
 
     /// The TLS configuration of one heartbeat: the pinned CA as the only root, and `identity`.
@@ -188,23 +257,15 @@ impl JsonMtlsLink {
     /// Posts `body` over a new connection and returns every byte of the answer, up to the
     /// bound.
     fn exchange(&self, config: Arc<ClientConfig>, body: &[u8]) -> Result<Vec<u8>, LinkError> {
-        let connection = ClientConnection::new(config, self.endpoint.name.clone())
-            .map_err(|_| LinkError::Transport(io::ErrorKind::Other))?;
-        let sock = self
-            .transport
-            .connect(&self.endpoint.host, self.endpoint.port)
-            .map_err(|e| LinkError::Transport(e.kind()))?;
-        let mut tls = StreamOwned::new(connection, sock);
-        // The handshake first: what answered must be the coordinator before anything is said.
-        while tls.conn.is_handshaking() {
-            tls.conn
-                .complete_io(&mut tls.sock)
-                .map_err(|e| failed(&e))?;
-        }
+        let deadline = self.clock.mono_secs().saturating_add(CALL_SECS);
+        let mut tls = handshaken(&self.reach, &config, &|host, port| {
+            let left = deadline.saturating_sub(self.clock.mono_secs());
+            self.transport.connect_within(host, port, left)
+        })?;
         let head = format!(
             "POST {HEARTBEAT_PATH} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\n\
              Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            self.endpoint.authority,
+            self.reach.endpoint().authority,
             body.len()
         );
         tls.write_all(head.as_bytes())

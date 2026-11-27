@@ -244,8 +244,13 @@ impl Bench {
             &format!("https://127.0.0.1:{}", listening.addr.port()),
             &ca.sha256_hex(),
         );
-        let fetch = over_coordinator(&host_config, &files.pki, Arc::new(FakeClock::new(0, 0)))
-            .expect("the coordinator's fetch");
+        let fetch = over_coordinator(
+            &host_config,
+            &files.pki,
+            mac.rig.scratch.path(),
+            Arc::new(FakeClock::new(0, 0)),
+        )
+        .expect("the coordinator's fetch");
 
         for dir in [mac.rig.scratch.path(), &mac.rig.packages] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");

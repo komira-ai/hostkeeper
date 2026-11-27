@@ -50,9 +50,12 @@
 //!
 //! The heartbeat loop's link to the coordinator is [`HostLink`]: the [`NegotiatedLink`] of
 //! [`coordinator_link`] (the JSON route and gRPC, both over mutual TLS), made at the first
-//! heartbeat the loop sends, on the loop's own worker.
+//! heartbeat the loop sends, on the loop's own worker. Both dial the coordinator's name where its
+//! reach says ([`crate::coordinator_address`]): the addresses it looks up to, the one last
+//! reached (kept in the state directory across a restart), and the config's `coordinator_ip`.
 
 use std::io;
+use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -63,16 +66,17 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::{
     BmcSource, CertSource, ClientIdentity, CoordinatorLink, Dispatch, FullDiskAccessSource,
-    GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, LoopConfig,
-    MaintainSink, MaintenanceSource, NegotiatedLink, OperatorKeysSink, Platform, Ports,
-    PrerequisitesSink, RemoteLoginProbeSource, Reply, RepositorySink, SerialConsoleSource, Sleeper,
-    SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    GrpcLinkError, GrpcMtlsLink, Heartbeat, Heartbeater, JsonMtlsLink, LinkError, Lookup,
+    LoopConfig, MaintainSink, MaintenanceSource, NegotiatedLink, OperatorKeysSink, Platform, Ports,
+    PrerequisitesSink, Reach, RemoteLoginProbeSource, Reply, RepositorySink, SerialConsoleSource,
+    Sleeper, SshSink, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_observe::command::MAX_STDOUT;
 use hostkeeper_steps::Clock;
 
 use crate::console::ConsoleIssue;
+use crate::coordinator_address::{self, ADDRESS_FILE, host_reach};
 use crate::executor::Daemon;
 use crate::facts_file::FactsFile;
 use crate::host_health::HealthKeeper;
@@ -423,33 +427,47 @@ impl Log for DaemonLog {
     }
 }
 
-/// The link to the coordinator of `config`: a [`NegotiatedLink`] over the JSON route
+/// The link to the coordinator `reach` names: a [`NegotiatedLink`] over the JSON route
 /// ([`JsonMtlsLink`] through [`TcpTransport`], bounded on `clock`) and gRPC ([`GrpcMtlsLink`]
-/// through [`TcpDial`]). Both trust the CA bundle of the pki directory `pki`'s current generation
-/// whose SHA-256 `config` pins (`ca_sha256`), read again at every heartbeat, and both log to
-/// `log`. Nothing is read or dialed here.
+/// through [`TcpDial`]), both dialing the addresses of `reach`, which they share, so an address
+/// one of them reached is the other's too. Both trust the CA bundle of the pki directory `pki`'s
+/// current generation whose SHA-256 `config` pins (`ca_sha256`), read again at every heartbeat,
+/// and both log to `log`. Nothing is read or dialed here.
 ///
 /// The gRPC link owns a Tokio runtime: the link must be made, called and dropped outside any
 /// other runtime ([`HostLink`] makes it on the heartbeat loop's worker).
 ///
 /// # Errors
-/// [`GrpcLinkError::Endpoint`]: `config`'s coordinator address is not one the links dial.
+/// [`GrpcLinkError::Endpoint`]: the coordinator's address is not one the links dial.
 /// [`GrpcLinkError::Runtime`]: the gRPC link's runtime cannot be started.
 pub fn coordinator_link(
     config: &DaemonConfig,
     pki: &Path,
+    reach: &Arc<Reach>,
     clock: Arc<dyn Clock>,
     log: Arc<dyn Log>,
 ) -> Result<NegotiatedLink, GrpcLinkError> {
-    let grpc = GrpcMtlsLink::new(config, pki, Arc::new(TcpDial), Arc::clone(&log))?;
-    let json = JsonMtlsLink::new(config, pki, Arc::new(TcpTransport::new(clock)), log)?;
+    let grpc = GrpcMtlsLink::new(
+        config,
+        pki,
+        Arc::clone(reach),
+        Arc::new(TcpDial),
+        Arc::clone(&log),
+    )?;
+    let transport = Arc::new(TcpTransport::new(Arc::clone(&clock)));
+    let json = JsonMtlsLink::new(config, pki, Arc::clone(reach), transport, clock, log);
     Ok(NegotiatedLink::new(json, grpc))
 }
 
-/// The heartbeat loop's link in the shipped daemon: [`coordinator_link`], made at the first
-/// heartbeat and kept. The loop calls the link only once the host has a certificate, so a host
-/// not enrolled yet makes nothing; and the call is on the loop's worker, outside the daemon's
-/// runtime, where the gRPC link's own runtime may be made and dropped.
+/// The heartbeat loop's link in the shipped daemon: [`coordinator_link`] over the reach
+/// [`host_reach`] makes (looked up through `lookup`, remembering the address of the state
+/// directory's [`ADDRESS_FILE`]), made at the first heartbeat and kept. The loop calls the link
+/// only once the host has a certificate, so a host not enrolled yet makes nothing; and the call
+/// is on the loop's worker, outside the daemon's runtime, where the gRPC link's own runtime may
+/// be made and dropped.
+///
+/// After each heartbeat, an address the reach reached that is not the one the file holds is
+/// written to it; a write that fails is logged, once for that address.
 ///
 /// A link that cannot be made leaves that heartbeat unsent, as [`LinkError::Transport`] of the
 /// kind [`io::ErrorKind::Other`]; why ([`GrpcLinkError`]) is logged once, and again when it
@@ -457,6 +475,8 @@ pub fn coordinator_link(
 pub struct HostLink {
     config: DaemonConfig,
     pki: PathBuf,
+    state_dir: PathBuf,
+    lookup: Arc<dyn Lookup>,
     clock: Arc<dyn Clock>,
     log: Arc<dyn Log>,
     state: Mutex<Made>,
@@ -465,26 +485,82 @@ pub struct HostLink {
 /// What [`HostLink`] has made so far.
 #[derive(Default)]
 struct Made {
-    link: Option<NegotiatedLink>,
+    link: Option<Linked>,
     /// Why the last try failed, as logged.
     refused: Option<String>,
 }
 
+/// The link made, its reach, and the address the state file was last given.
+struct Linked {
+    link: NegotiatedLink,
+    reach: Arc<Reach>,
+    kept: Option<SocketAddr>,
+}
+
 impl HostLink {
-    /// The link [`coordinator_link`] makes of these, once a heartbeat needs it.
+    /// The link [`coordinator_link`] makes of these, once a heartbeat needs it, keeping the
+    /// address it reaches in `state_dir`.
     pub fn new(
         config: DaemonConfig,
         pki: PathBuf,
+        state_dir: PathBuf,
+        lookup: Arc<dyn Lookup>,
         clock: Arc<dyn Clock>,
         log: Arc<dyn Log>,
     ) -> HostLink {
         HostLink {
             config,
             pki,
+            state_dir,
+            lookup,
             clock,
             log,
             state: Mutex::new(Made::default()),
         }
+    }
+
+    fn make(&self) -> Result<Linked, GrpcLinkError> {
+        let reach = host_reach(
+            &self.config,
+            Some(&self.state_dir),
+            Arc::clone(&self.lookup),
+            Arc::clone(&self.log),
+        )?;
+        let reach = Arc::new(reach);
+        let link = coordinator_link(
+            &self.config,
+            &self.pki,
+            &reach,
+            Arc::clone(&self.clock),
+            Arc::clone(&self.log),
+        )?;
+        Ok(Linked {
+            link,
+            kept: reach.remembered(),
+            reach,
+        })
+    }
+
+    /// One heartbeat over `linked`, then the address it reached kept.
+    fn beat(
+        &self,
+        linked: &mut Linked,
+        identity: &ClientIdentity,
+        beat: &Heartbeat,
+    ) -> Result<Reply, LinkError> {
+        let answer = linked.link.heartbeat(identity, beat);
+        if let Some(addr) = linked.reach.remembered()
+            && linked.kept != Some(addr)
+        {
+            linked.kept = Some(addr);
+            if let Err(error) = coordinator_address::write(&self.state_dir, &linked.reach, addr) {
+                self.log.line(&format!(
+                    "error: the coordinator's address {addr} is not kept in {}: {error}",
+                    self.state_dir.join(ADDRESS_FILE).display()
+                ));
+            }
+        }
+        answer
     }
 }
 
@@ -492,17 +568,14 @@ impl CoordinatorLink for HostLink {
     fn heartbeat(&self, identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
         // One loop calls the link, one heartbeat at a time: the lock is never waited for.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(link) = &state.link {
-            return link.heartbeat(identity, beat);
+        if let Some(linked) = state.link.as_mut() {
+            return self.beat(linked, identity, beat);
         }
-        let made = coordinator_link(
-            &self.config,
-            &self.pki,
-            Arc::clone(&self.clock),
-            Arc::clone(&self.log),
-        );
-        match made {
-            Ok(link) => state.link.insert(link).heartbeat(identity, beat),
+        match self.make() {
+            Ok(made) => {
+                let linked = state.link.insert(made);
+                self.beat(linked, identity, beat)
+            }
             Err(error) => {
                 let why = error.to_string();
                 if state.refused.as_deref() != Some(why.as_str()) {

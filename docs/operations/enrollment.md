@@ -272,6 +272,14 @@ Place the config:
    On a Linux server whose BMC carries its serial console, take the `#` off the template's
    `serial_console = "ttyS1"` line: the daemon then keeps the serial console baseline
    ([console.md](console.md#the-daemon-keeps-the-serial-baseline)).
+   When the name in `coordinator` is a record of a public DNS zone for an address on the hosts'
+   own network, take the `#` off the template's `coordinator_ip` line and write that address:
+   the daemon then dials it when the name cannot be looked up (the site's uplink is down), on the
+   URL's port, and still checks the coordinator's certificate against the name. Without it, the
+   daemon dials the last address that answered as the coordinator, which it keeps in its state
+   directory (`coordinator-address.json`), so only a host that never reached the coordinator
+   needs the key. A daemon of an earlier release refuses a config with the key: write it once the
+   host runs a release that reads it.
 3. Check that no placeholder is left: `grep -n '@@' /etc/hostkeeper/hostkeeper.toml` prints
    nothing.
 4. Make it root's and closed to writes by others: `chown root:root /etc/hostkeeper/hostkeeper.toml`
