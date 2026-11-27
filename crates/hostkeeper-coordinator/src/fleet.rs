@@ -57,7 +57,8 @@ pub const CLOCK_SKEW_AFTER: Duration = Duration::from_secs(120);
 /// is eight intervals: room for a lost reply and several missed beats, short enough that a host
 /// that never heard frees its slot before an operator would notice. A host that has gone silent
 /// ([`DOWN_AFTER`]) keeps the slot of its order past this, as it may have heard the order and
-/// started: only `Hosts.Exclude` with `abandon` frees it ([`Fleet::is_ordered`]).
+/// started, until `Hosts.Exclude` with `abandon` frees it or it has been silent for
+/// [`crate::silent::SILENT_UPDATE_AFTER`] ([`Fleet::is_ordered`]).
 pub const ORDER_AGE: Duration = Duration::from_secs(120);
 
 /// An update, an install or an uninstall the coordinator told a host to run, not yet seen in the

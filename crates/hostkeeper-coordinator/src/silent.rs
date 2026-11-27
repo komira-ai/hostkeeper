@@ -1,14 +1,16 @@
 //! A host silent in the middle of an update: how long its last word of an update running holds
 //! anything, and the alert that names it once that word holds nothing.
 //!
-//! An order the coordinator sent ages out ([`crate::fleet::ORDER_AGE`]); the host's own last
-//! heartbeat does not. A host that died, or lost its route to the coordinator, while its last
-//! heartbeat said it was updating (or waiting for its promotion) would keep its service's
+//! An order the coordinator sent ages out ([`crate::fleet::ORDER_AGE`]) while its host still
+//! heartbeats; the host's own last heartbeat does not, and nor does the order of a host gone
+//! silent, which may have heard it and started ([`crate::fleet::Fleet::is_ordered`]). A host that
+//! died, or lost its route to the coordinator, while its last heartbeat said it was updating (or
+//! waiting for its promotion), or after it was ordered, would keep its service's
 //! rollout live ([`crate::live`]) and its update slot ([`crate::stages`]) for as long as it stays
 //! silent, and every other service would wait `rollout_elsewhere` behind it, the release that
-//! fixes the fault included. So that word counts only while the host has been silent for less
-//! than [`SILENT_UPDATE_AFTER`]: from then on the host holds no update slot and no rollout place
-//! for it, and `silent_while_updating` names the host, the service and the version
+//! fixes the fault included. So that word, and that order, count only while the host has been
+//! silent for less than [`SILENT_UPDATE_AFTER`]: from then on the host holds no update slot and no
+//! rollout place for it, and `silent_while_updating` names the host, the service and the version
 //! ([`silent_updates`]). A failure the host last reported holds what it held before
 //! ([`Host::holds_slot`]): its slot of its own service is the operator's to free, and it never
 //! made a rollout live.
@@ -25,6 +27,8 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use hostkeeper_wire::HostId;
+use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, Outcome};
 
 use crate::alerts::{Alert, Kind, Said, Subject};
@@ -79,9 +83,11 @@ impl Host {
 
 /// `silent_while_updating`: each host of a service of `packages`, counted by the service or not
 /// ([`Fleet::occupants_of`]), whose last word of it is an update running or its promotion
-/// pending and that has been silent for [`SILENT_UPDATE_AFTER`] or more at `now`. The version is
-/// the update's target, or, for a promotion, the version the host runs. It stands until the host
-/// heartbeats again, or the fleet forgets its word of the service.
+/// pending and that has been silent for [`SILENT_UPDATE_AFTER`] or more at `now`, and each host
+/// silent as long since it was ordered an update of the service and did not report it
+/// ([`Fleet::lost_orders`]). The version is the update's target, or, for a promotion, the version
+/// the host runs. It stands until the host heartbeats again, or the fleet forgets its word of the
+/// service or its order.
 pub(crate) fn silent_updates(
     fleet: &Fleet,
     packages: &BTreeSet<String>,
@@ -90,7 +96,7 @@ pub(crate) fn silent_updates(
     packages
         .iter()
         .flat_map(|name| {
-            fleet.occupants_of(name).filter_map(move |(id, host)| {
+            let reported = fleet.occupants_of(name).filter_map(move |(id, host)| {
                 let version = match (&host.beat.updating, host.beat.promotion_pending) {
                     (Some(target), _) => target,
                     (None, true) => &host.beat.version,
@@ -100,23 +106,44 @@ pub(crate) fn silent_updates(
                     return None;
                 }
                 let silent = now.saturating_sub(host.seen).as_secs();
-                Some(Alert {
-                    subject: Subject {
-                        service: name.clone(),
-                        host: id.to_string(),
-                        version: version.to_string(),
-                        ..Subject::of(Kind::SilentWhileUpdating)
-                    },
-                    message: format!(
-                        "{id} has not heartbeated for {silent} s and its last word was an update \
-                         of {name} to {version}: after {} s of silence that word holds no update \
-                         slot and no rollout place, so the other rollouts go on. The update may \
-                         still be running on the host: check the host before acting on it",
-                        SILENT_UPDATE_AFTER.as_secs()
-                    ),
-                    said: Said::default(),
-                })
-            })
+                let said = format!("its last word was an update of {name} to {version}");
+                Some(alert(name, id, version, silent, &said))
+            });
+            let ordered = fleet
+                .lost_orders(name, now)
+                .map(move |(id, version, silent)| {
+                    let said = format!(
+                        "it was ordered an update of {name} to {version} and never reported it"
+                    );
+                    alert(name, id, version, silent.as_secs(), &said)
+                });
+            let mut alerts: Vec<Alert> = reported.collect();
+            for one in ordered {
+                if !alerts.iter().any(|a| a.subject.host == one.subject.host) {
+                    alerts.push(one);
+                }
+            }
+            alerts
         })
         .collect()
+}
+
+/// The `silent_while_updating` alert of the host `id`, silent `silent` seconds, about an update of
+/// `name` to `version` that `said` tells.
+fn alert(name: &str, id: &HostId, version: &Version, silent: u64, said: &str) -> Alert {
+    Alert {
+        subject: Subject {
+            service: name.to_owned(),
+            host: id.to_string(),
+            version: version.to_string(),
+            ..Subject::of(Kind::SilentWhileUpdating)
+        },
+        message: format!(
+            "{id} has not heartbeated for {silent} s and {said}: after {} s of silence that \
+             word holds no update slot and no rollout place, so the other rollouts go on. The \
+             update may still be running on the host: check the host before acting on it",
+            SILENT_UPDATE_AFTER.as_secs()
+        ),
+        said: Said::default(),
+    }
 }

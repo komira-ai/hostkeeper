@@ -744,9 +744,10 @@ async fn an_order_for_a_new_version_replaces_the_old_one() {
 
 /// Catches: an order freeing its slot by age while its host is silent (design 5.4): `s1` is
 /// ordered and sends nothing after, as a host that heard the order and started and whose beats
-/// are lost; at `ORDER_AGE` and 900 s after the order `s2` is told nothing, so two updates are
-/// never live. A host that still heartbeats frees it at its age
-/// (`an_order_nobody_reports_ages_out`).
+/// are lost; at `ORDER_AGE`, 900 s and one second short of `SILENT_UPDATE_AFTER` after the order
+/// `s2` is told nothing, so two updates are never live; at that bound the silent host holds
+/// nothing, as a silent updating host does, and `s2` is ordered. A host that still heartbeats
+/// frees it at its age (`an_order_nobody_reports_ages_out`).
 #[tokio::test]
 async fn a_silent_ordered_host_keeps_the_slot_past_order_age() {
     let rig = started("svc-order-silent", ONE_STORAGE).await;
@@ -756,7 +757,8 @@ async fn a_silent_ordered_host_keeps_the_slot_past_order_age() {
             .expect("a heartbeat"),
         update("2.0")
     );
-    for after in [ORDER_AGE.as_secs(), 900] {
+    let bound = crate::silent::SILENT_UPDATE_AFTER.as_secs();
+    for after in [ORDER_AGE.as_secs(), 900, bound - 1] {
         rig.at(2_100 + after);
         assert_eq!(
             c.heartbeat_native(storage("s2"), beat("1.0"))
@@ -765,6 +767,13 @@ async fn a_silent_ordered_host_keeps_the_slot_past_order_age() {
             "{after} s after s1's order, s1 silent: it keeps the slot"
         );
     }
+    rig.at(2_100 + bound);
+    assert_eq!(
+        c.heartbeat_native(storage("s2"), beat("1.0"))
+            .expect("a heartbeat"),
+        update("2.0"),
+        "silent for the bound: s1 holds nothing"
+    );
 }
 
 mod publishers_tests;

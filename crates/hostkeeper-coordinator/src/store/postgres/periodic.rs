@@ -105,8 +105,9 @@ pub(crate) fn prune_instances(tx: &mut Tx<'_>, at: Option<i64>) -> Result<u64, p
 /// more since they were given) of a host that still heartbeats: one whose row of `fleet_hosts`
 /// was seen within [`crate::fleet::DOWN_AFTER`], or that has none. Every reader already takes
 /// them as freed slots, so deleting one without the gate frees nothing a decision holds (section
-/// 5.2); the order of a host gone silent holds its slot whatever its age
-/// ([`crate::fleet::Fleet::is_ordered`]) and is kept. How many went.
+/// 5.2); the order of a host gone silent holds its slot past its age (for at most
+/// [`crate::silent::SILENT_UPDATE_AFTER`]: [`crate::fleet::Fleet::is_ordered`]) and is kept while
+/// the host stays silent, so its alert stands. How many went.
 ///
 /// # Errors
 /// The client's error.

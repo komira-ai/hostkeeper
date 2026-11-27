@@ -4,11 +4,16 @@
 //! An order holds the slot from the moment it is given until the host reports it. A host that
 //! goes on heartbeating without `updating` did not hear it, so the order's age ([`ORDER_AGE`])
 //! frees the slot. A host that went silent after it was ordered ([`DOWN_AFTER`] without a beat)
-//! keeps the slot whatever the order's age: it may have heard the order and started, and only its
-//! beats are lost. An operator ends that wait with `Hosts.Exclude` and `abandon`
-//! ([`Fleet::abandon_in`]); a beat of the host, updating or not, ends it as any beat does. A host
-//! the fleet has never heard (an order given before anything of the host was noted, as only a test
-//! does) is judged by the order's age alone.
+//! keeps the slot past the order's age: it may have heard the order and started, and only its
+//! beats are lost. It keeps it as a host whose last word was an update running does, until it has
+//! been silent for [`SILENT_UPDATE_AFTER`]: from then on the order holds no slot and no rollout
+//! place, and `silent_while_updating` names the host ([`crate::silent::silent_updates`], one
+//! rule for both: a host cut off for hours must not hold every other rollout). The order is kept
+//! while the host stays silent (so the alert stands, and the row of a shared store is not ended);
+//! the host's first beat is read as any other's, and the order then ends by its age. An operator
+//! frees the slot before the bound with `Hosts.Exclude` and `abandon` ([`Fleet::abandon_in`]). A
+//! host the fleet has never heard (an order given before anything of the host was noted, as only a
+//! test does) is judged by the order's age alone.
 //!
 //! A restarted coordinator knows no host until it beats, and forgets its orders (design 8.2). A
 //! host that was updating when last heard, as its enrollment kept it, holds its slot from the
@@ -22,6 +27,7 @@ use hostkeeper_wire::wire::{Health, Heartbeat};
 use hostkeeper_wire::{HostId, Platform};
 
 use super::{DOWN_AFTER, Fleet, Host, ORDER_AGE, Order};
+use crate::silent::SILENT_UPDATE_AFTER;
 
 impl Fleet {
     /// When the host `id` was last heard: the latest of its node's last heartbeat and its last
@@ -37,13 +43,48 @@ impl Fleet {
             .max()
     }
 
-    /// Whether `order`, given to the host `id`, is outstanding at `now`: given within
-    /// [`ORDER_AGE`], or given before while the host has not heartbeated within [`DOWN_AFTER`].
+    /// How long the host `id` has been silent at `now`; `None` for a host never heard.
+    fn silence(&self, id: &HostId, now: Duration) -> Option<Duration> {
+        self.last_heard(id).map(|seen| now.saturating_sub(seen))
+    }
+
+    /// Whether `order`, given to the host `id`, is kept at `now`: given within [`ORDER_AGE`], or
+    /// given before while the host has not heartbeated within [`DOWN_AFTER`], whatever the
+    /// silence. A kept order holds the slot only while [`Self::order_holds`] says so.
+    pub(super) fn order_kept(&self, id: &HostId, order: &Order, now: Duration) -> bool {
+        now.saturating_sub(order.at) < ORDER_AGE
+            || self
+                .silence(id, now)
+                .is_some_and(|silent| silent >= DOWN_AFTER)
+    }
+
+    /// Whether `order`, given to the host `id`, is outstanding at `now`, holding its slot: given
+    /// within [`ORDER_AGE`], or given before while the host has been silent for [`DOWN_AFTER`]
+    /// or more and less than [`SILENT_UPDATE_AFTER`] (the bound of [`Host::is_lost`]).
     pub(super) fn order_holds(&self, id: &HostId, order: &Order, now: Duration) -> bool {
         now.saturating_sub(order.at) < ORDER_AGE
             || self
-                .last_heard(id)
-                .is_some_and(|seen| now.saturating_sub(seen) >= DOWN_AFTER)
+                .silence(id, now)
+                .is_some_and(|silent| silent >= DOWN_AFTER && silent < SILENT_UPDATE_AFTER)
+    }
+
+    /// The orders of `service` kept for a host that has been silent for [`SILENT_UPDATE_AFTER`]
+    /// or more at `now`, so they hold nothing: each host, the version ordered (for an uninstall,
+    /// the version the host ran) and how long the host has been silent.
+    pub(crate) fn lost_orders<'a>(
+        &'a self,
+        service: &'a str,
+        now: Duration,
+    ) -> impl Iterator<Item = (&'a HostId, &'a Version, Duration)> + 'a {
+        self.orders
+            .iter()
+            .filter(move |((_, s), order)| {
+                s == service && now.saturating_sub(order.at) >= ORDER_AGE
+            })
+            .filter_map(move |((id, _), order)| {
+                let silent = self.silence(id, now)?;
+                (silent >= SILENT_UPDATE_AFTER).then_some((id, &order.target, silent))
+            })
     }
 
     /// The hosts with an order of `service` outstanding at `now` ([`Self::order_holds`]) whose

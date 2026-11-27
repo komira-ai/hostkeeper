@@ -301,3 +301,50 @@ async fn abandoning_a_host_with_no_record_writes_none() {
         order("second")
     );
 }
+
+/// Proves: a host restored as updating after a restart holds the slot as a silent updating host
+/// does, for `SILENT_UPDATE_AFTER` from the restart and no longer: `d2` is told nothing one second
+/// short of the bound, and is ordered `second` at it, when `silent_while_updating` names `d1`.
+///
+/// Catches: a restored hold with no end (a host gone for good holding every rollout after each
+/// restart), one that ends at once, and one freed with no one told.
+#[tokio::test]
+async fn a_host_restored_as_updating_holds_the_slot_until_the_silent_bound() {
+    let (mut rig, enrollment) = rig("one-live-restart-enrolled-bound").await;
+    assert_eq!(
+        send(&rig, &enrollment, 2_000, "d1", &[other_at("1.0")]),
+        order("other")
+    );
+    send(&rig, &enrollment, 2_010, "d1", &[other_updating()]);
+    restart(&mut rig, &enrollment, 2_030);
+    let bound = crate::silent::SILENT_UPDATE_AFTER.as_secs();
+    let services: std::collections::BTreeSet<String> = ["other".to_owned()].into();
+    let named = |at: u64| -> Vec<String> {
+        crate::silent::silent_updates(
+            &rig.coordinator.lock_fleet(),
+            &services,
+            std::time::Duration::from_secs(at),
+        )
+        .into_iter()
+        .map(|alert| alert.subject.host)
+        .collect()
+    };
+    assert_eq!(
+        send(
+            &rig,
+            &enrollment,
+            2_030 + bound - 1,
+            "d2",
+            &[second_behind()]
+        ),
+        ServiceReply::Nothing,
+        "one second inside the bound"
+    );
+    assert!(named(2_030 + bound - 1).is_empty());
+    assert_eq!(
+        send(&rig, &enrollment, 2_030 + bound, "d2", &[second_behind()]),
+        order("second"),
+        "at the bound"
+    );
+    assert_eq!(named(2_030 + bound), ["d1"]);
+}

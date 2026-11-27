@@ -157,7 +157,7 @@ impl Fleet {
     /// the rows too, once the rows were read (over a store other coordinators share): the next take
     /// of the rows leaves out a row of each given by `now`, and that decision ends it. Without it
     /// the next take would put the order back, and the order of a silent host would hold its slot
-    /// for ever ([`Fleet::order_holds`]).
+    /// for ever, and its alert stand ([`Fleet::order_kept`]).
     pub(super) fn drop_orders(
         &mut self,
         keys: impl IntoIterator<Item = (HostId, String)>,
@@ -172,7 +172,8 @@ impl Fleet {
 
     /// What a decision writes back of the orders and tries: the difference between `read` (the
     /// rows of `fleet_orders` it read at `now_unix`) and the orders memory holds at `now` that
-    /// are still outstanding ([`Fleet::order_holds`]), and the tries memory raised above `sent`
+    /// are still kept ([`Fleet::order_kept`]: an order of a host silent past the bound holds
+    /// nothing but is kept until it beats), and the tries memory raised above `sent`
     /// (those it held when it took the rows in). An order read that memory no longer holds ends,
     /// and its try is kept.
     #[must_use]
@@ -188,7 +189,7 @@ impl Fleet {
         let held: Vec<OrderRow> = self
             .orders
             .iter()
-            .filter(|((host, _), order)| self.order_holds(host, order, now))
+            .filter(|((host, _), order)| self.order_kept(host, order, now))
             .map(|((host, service), order)| {
                 let at_unix = read
                     .iter()

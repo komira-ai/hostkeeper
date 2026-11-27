@@ -7,6 +7,7 @@ use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::Health;
 
 use crate::fleet::{DOWN_AFTER, Fleet, Node, ORDER_AGE, QUIET_START};
+use crate::silent::{SILENT_UPDATE_AFTER, silent_updates};
 use crate::store::decision::{OrderRow, Rows};
 use crate::testutil::{beat, id, role, secs, version};
 
@@ -299,5 +300,67 @@ fn a_host_updating_when_last_heard_holds_its_slot_until_it_beats() {
             .count(),
         1,
         "the restored word is gone"
+    );
+}
+
+/// Proves: an ordered host silent since its order holds its slot one second short of
+/// `SILENT_UPDATE_AFTER` and is named by no alert; at the bound its order holds no slot (the host
+/// is not busy for another service and its order is not shown as current), `silent_while_updating`
+/// names it with the version ordered, and a decision still keeps the order (a shared store's row is
+/// not ended, so the alert stands); its first beat after that is read as any other: the order,
+/// past its age, no longer holds, and the alert is gone.
+///
+/// Catches: an ordered host cut off for hours holding every other service's rollout, which the
+/// bound on a silent updating host was made to end; the bound off by a second; a host freed with
+/// no one told; and an alert left standing once the host is back.
+#[test]
+fn a_silent_ordered_host_frees_its_slot_at_the_silent_bound_and_is_named() {
+    let web: std::collections::BTreeSet<String> = ["web".to_owned()].into();
+    let edge = T + SILENT_UPDATE_AFTER;
+    let silent = ordered();
+    assert!(held(&silent, edge - secs(1)), "one second inside the bound");
+    assert!(silent_updates(&silent, &web, edge - secs(1)).is_empty());
+    assert!(!held(&silent, edge), "at the bound");
+    let alerts = silent_updates(&silent, &web, edge);
+    let named: Vec<_> = alerts
+        .iter()
+        .map(|a| (a.subject.host.as_str(), a.subject.version.as_str()))
+        .collect();
+    assert_eq!(named, [("s1", "2.0")]);
+    assert_eq!(
+        alerts[0].subject.kind,
+        crate::alerts::Kind::SilentWhileUpdating
+    );
+
+    let mut shared = Fleet::new(Duration::ZERO, QUIET_START);
+    let now = secs(5000);
+    shared.record_in(
+        "web",
+        id("s1"),
+        role("storage"),
+        beat("1.0"),
+        now - SILENT_UPDATE_AFTER,
+    );
+    let read = rows(vec![row("s1", 4000)]);
+    let kept = shared.take_rows(&read, now);
+    assert!(!shared.is_ordered("web", &id("s1"), now), "past the bound");
+    let writes = shared.writes_since(&kept, &std::collections::BTreeMap::new(), now, NOW_UNIX);
+    assert!(
+        writes.ended.is_empty(),
+        "kept while the host is silent: {writes:?}"
+    );
+
+    let mut back = ordered();
+    back.record_in(
+        "web",
+        id("s1"),
+        role("storage"),
+        beat("1.0"),
+        edge + secs(5),
+    );
+    assert!(!held(&back, edge + secs(5)));
+    assert!(
+        silent_updates(&back, &web, edge + secs(5)).is_empty(),
+        "back"
     );
 }
