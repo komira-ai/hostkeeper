@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_daemon::hardware_sources::{HardwareSource, SourceRead, poll};
+use hostkeeper_daemon::health_state::cut;
 use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_daemon::smart::{
@@ -23,6 +24,7 @@ use hostkeeper_launchd::launchctl::OUTPUT_MAX;
 use hostkeeper_launchd::{FakeLaunchctl, LaunchctlError, LaunchctlOutput};
 use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::testing::{FakeClock, RecordingLog};
+use hostkeeper_proto::health::MAX_SOURCE_REASON;
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use support::Scratch;
 
@@ -714,7 +716,10 @@ fn the_keeper_holds_the_records_and_reports_the_state() {
     assert_eq!(source.name(), SOURCE);
     assert_eq!(source.every_secs(), SMART_EVERY_SECS);
     assert_eq!(poll(&mut source, &keeper, &clock), 0);
-    let missing = format!("{} is not installed", host.smartctl().display());
+    let missing = cut(
+        &format!("{} is not installed", host.smartctl().display()),
+        MAX_SOURCE_REASON,
+    );
     assert_eq!(
         keeper.health().sources,
         [pb::SourceState {
@@ -768,7 +773,10 @@ fn disks_renumbered_between_reads_keep_their_state() {
     assert!(read.events.is_empty(), "{:?}", read.events);
     let mark: SmartMark = serde_json::from_str(&after).expect("the mark parses");
     assert_eq!(mark.disks[SATA_KEY].name, "sdb");
-    assert_eq!(mark.disks[SATA_KEY].failing, format!("smart:{SATA_KEY}:failing:{NOW}"));
+    assert_eq!(
+        mark.disks[SATA_KEY].failing,
+        format!("smart:{SATA_KEY}:failing:{NOW}")
+    );
     assert_eq!(mark.disks[NVME_KEY].name, "sda");
 }
 
@@ -800,7 +808,11 @@ fn a_serial_missing_for_one_read_keeps_the_disks_key() {
     host.fake
         .always(&smartctl_args("sda"), answer(24, unnamed.into_bytes()));
     let (read, after) = read(&mut source, Some(&kept), NOW + 3600);
-    assert!(read.events.is_empty(), "no end and no new assertion: {:?}", read.events);
+    assert!(
+        read.events.is_empty(),
+        "no end and no new assertion: {:?}",
+        read.events
+    );
     assert_eq!(after, kept);
 }
 
@@ -828,4 +840,50 @@ fn every_disk_gone_ends_their_assertions_and_the_source_is_unsupported() {
         source.read(Some(&after), NOW + 7200),
         SourceRead::unsupported("no physical disk is listed".to_owned())
     );
+}
+
+#[test]
+fn a_disk_with_no_media_count_keeps_none_and_its_first_count_is_info() {
+    let host = Host::new("smart-no-count");
+    host.disk("sdc");
+    let bare = br#"{"serial_number":"SN-SAS-0001","smart_status":{"passed":true}}"#;
+    host.fake
+        .always(&smartctl_args("sdc"), answer(0, bare.to_vec()));
+    let mut source = host.source();
+    let (first, kept) = read(&mut source, None, NOW);
+    assert_eq!(status(&first), (pb::SourceStatus::Ok, ""));
+    assert!(first.events.is_empty(), "{:?}", first.events);
+    let mark: SmartMark = serde_json::from_str(&kept).expect("the mark parses");
+    assert_eq!(mark.disks[SAS_KEY].media, None);
+    host.says("sdc", 0, "sas_grown");
+    let (counted, _) = read(&mut source, Some(&kept), NOW);
+    assert_eq!(
+        counted.events,
+        [record(
+            &format!("smart:{SAS_KEY}:media:3"),
+            "sdc",
+            pb::HardwareSeverity::Info,
+            pb::HardwareEventState::Event,
+            CODE_MEDIA,
+            "Disk sdc has 3 media errors at its first read",
+            "exit_status=0 passed=true grown_defects=3",
+            "",
+        )]
+    );
+}
+
+#[test]
+fn a_passing_disk_that_is_unplugged_is_forgotten_with_no_record() {
+    let host = Host::new("smart-gone-passing");
+    host.disk("sda");
+    host.disk("sdc");
+    host.says("sda", 0, "sata_pass");
+    host.says("sdc", 0, "sas_grown");
+    let mut source = host.source();
+    let (_, kept) = read(&mut source, None, NOW);
+    host.unplug("sda");
+    let (read, after) = read(&mut source, Some(&kept), NOW + 3600);
+    assert!(read.events.is_empty(), "{:?}", read.events);
+    let mark: SmartMark = serde_json::from_str(&after).expect("the mark parses");
+    assert_eq!(mark.disks.keys().collect::<Vec<_>>(), [SAS_KEY]);
 }

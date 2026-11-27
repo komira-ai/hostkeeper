@@ -49,7 +49,7 @@ use hostkeeper_enroll::{
 use hostkeeper_install::version::Owner;
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{
-    ClockSleeper, LoopFlags, MaintenanceSource, PkiCertSource, Sleeper, StopFlag, ThreadDispatch,
+    ClockSleeper, LoopFlags, MaintenanceSource, PkiCertSource, StopFlag, ThreadDispatch,
 };
 use hostkeeper_observe::ProcessRunner;
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
@@ -433,14 +433,16 @@ async fn start_and_serve(
         major,
         watchdog,
     );
-    if let Some(health) = &links.health {
-        let stop = links.stop.clone();
-        let sleeper = move || -> Box<dyn Sleeper + Send> {
-            Box::new(ClockSleeper::new(Arc::new(host_clock()), stop.clone()))
-        };
-        let (kind, clock) = (platform.kind, &links.clock);
-        crate::hardware_sources::at_host(kind, health, clock, &sleeper, &ThreadDispatch);
-    }
+    let waits: Arc<dyn Clock> = Arc::new(host_clock());
+    let (health, stop) = (links.health.as_ref(), &links.stop);
+    crate::hardware_sources::start_host(
+        platform.kind,
+        health,
+        &links.clock,
+        &waits,
+        stop,
+        &ThreadDispatch,
+    );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;
     Ok(())

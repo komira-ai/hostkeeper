@@ -26,9 +26,9 @@
 //! - **failing**: the SMART health check failed (`smart_status.passed` false, or bit 3), an NVMe
 //!   `critical_warning` is not 0, or an NVMe disk's available spare is under its threshold. A disk
 //!   that becomes failing gives an `asserted` record `disk_failing`, critical; one that passes
-//!   again, or is gone (judged once every disk is read: not read, and its name no longer listed or
-//!   read with another serial; a disk asleep or unreadable under its own name is kept), a `deasserted`
-//!   record about the assertion, critical too, so a queue that folds `info` records never loses
+//!   again, or is gone (judged once every disk is read: not read, and its name no longer listed
+//!   or read with another serial; a disk asleep or unreadable under its own name is kept), a
+//!   `deasserted` record about the assertion, critical too, so a queue that folds `info` records never loses
 //!   the end of a condition.
 //! - **media errors**: an NVMe disk's `media_errors`, an ATA disk's reallocated (attribute 5) plus
 //!   pending (197) sectors, a SCSI disk's grown defects. A count larger than the last read gives
@@ -37,9 +37,9 @@
 //!
 //! The mark ([`SmartMark`], JSON) keeps each disk's name, its assertion's `event_id` and its last
 //! count, so a record is made once per change and a restart of the daemon makes none again. A
-//! record's `event_id` is `smart:<disk>:failing:<second>`, `smart:<disk>:passing:<second>` or
-//! `smart:<disk>:media:<count>`; its `subject` the disk's name; its `raw` the facts it was judged
-//! on, as one line.
+//! record's `event_id` is `smart:<key>:failing:<second>`, `smart:<key>:passing:<second>` or
+//! `smart:<key>:media:<count>`, `<key>` the disk's key above; its `subject` the disk's name; its
+//! `raw` the facts it was judged on, as one line.
 //!
 //! **The source's state**: `unsupported` when [`SMARTCTL`] is not installed (smartmontools comes
 //! with the host group's config package, section 3.3) or no physical disk is listed (a listing
@@ -459,9 +459,7 @@ impl Judge {
                 self.events.push(event);
             }
         }
-        if let Some(entry) = self.mark.disks.get_mut(&key) {
-            entry.media = facts.media;
-        }
+        self.mark.disks.entry(key).or_default().media = facts.media;
     }
 
     /// After every disk is read: a disk not read this time is gone when its name is no longer in

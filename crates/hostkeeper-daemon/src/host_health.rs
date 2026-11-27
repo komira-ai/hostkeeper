@@ -320,7 +320,12 @@ impl HostHealthSource for HealthKeeper {
             clean_previous_shutdown: inner.file.previous_clean,
             sources: inner.states.values().take(MAX_SOURCES).cloned().collect(),
         };
-        while health.encoded_len() > MAX_HEALTH_BYTES && health.events.pop().is_some() {}
+        for keep in (0..=health.events.len()).rev() {
+            health.events.truncate(keep);
+            if health.encoded_len() <= MAX_HEALTH_BYTES {
+                break;
+            }
+        }
         health
     }
 

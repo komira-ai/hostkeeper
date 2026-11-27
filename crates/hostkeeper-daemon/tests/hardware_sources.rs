@@ -13,18 +13,19 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_daemon::hardware_sources::{
-    HardwareSource, SourceRead, at_host, for_host, poll, run, start,
+    HardwareSource, SourceRead, at_host, for_host, poll, run, start, start_host,
 };
 use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper};
-use hostkeeper_link::{HostHealthSource, Sleeper, UnixClock};
+use hostkeeper_link::{HostHealthSource, Sleeper, StopFlag, UnixClock};
 use hostkeeper_proto::health::{
     MAX_CODE, MAX_EVENT_ID, MAX_EVENTS, MAX_MESSAGE, MAX_RAW, MAX_SOURCE, MAX_SOURCE_REASON,
     MAX_SOURCES, MAX_SUBJECT, check_health,
 };
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
+use hostkeeper_steps::Clock;
 use support::Scratch;
 
 /// The second the tests read at.
@@ -121,7 +122,10 @@ fn a_worker_reads_waits_its_period_and_stops_when_told() {
     let clock = FakeClock::new(NOW, 0);
     let (mut source, asked) = Scripted::new(
         "fake",
-        vec![SourceRead::ok("m1".to_owned(), vec![event("a", pb::HardwareSeverity::Warning)])],
+        vec![SourceRead::ok(
+            "m1".to_owned(),
+            vec![event("a", pb::HardwareSeverity::Warning)],
+        )],
     );
     let sleeper = ScriptedSleeper::new(2);
     run(&mut source, &keeper, &clock, &sleeper);
@@ -143,10 +147,8 @@ fn each_source_gets_a_worker_of_its_own() {
     let keeper = keeper(&dir);
     let clock: Arc<dyn UnixClock> = Arc::new(FakeClock::new(NOW, 0));
     let (first, first_asked) = Scripted::new("one", Vec::new());
-    let (second, second_asked) = Scripted::new(
-        "two",
-        vec![SourceRead::unreadable("timed out".to_owned())],
-    );
+    let (second, second_asked) =
+        Scripted::new("two", vec![SourceRead::unreadable("timed out".to_owned())]);
     let dispatch = ManualDispatch::default();
     let sleeper = || -> Box<dyn Sleeper + Send> { Box::new(ScriptedSleeper::new(0)) };
     start(
@@ -173,10 +175,14 @@ fn each_source_gets_a_worker_of_its_own() {
 #[test]
 fn a_linux_host_reads_smart_and_hwmon_and_a_mac_nothing_yet() {
     let names = |kind| -> Vec<&'static str> {
-        for_host(kind, Path::new("/nonexistent"), Path::new("/nonexistent/smartctl"))
-            .iter()
-            .map(|s| s.name())
-            .collect()
+        for_host(
+            kind,
+            Path::new("/nonexistent"),
+            Path::new("/nonexistent/smartctl"),
+        )
+        .iter()
+        .map(|s| s.name())
+        .collect()
     };
     assert_eq!(names(PlatformKind::Linux), ["smart", "hwmon"]);
     assert_eq!(names(PlatformKind::Openrc), ["smart", "hwmon"]);
@@ -221,8 +227,15 @@ fn a_read_with_records_and_no_mark_keeps_the_mark_it_had() {
         ..SourceRead::unreadable("partly".to_owned())
     };
     assert_eq!(keeper.read("fake", fresh.clone(), NOW), 1);
-    assert_eq!(keeper.mark("fake").as_deref(), Some(""), "no mark before: empty");
-    assert_eq!(keeper.read("fake", SourceRead::ok("m7".to_owned(), Vec::new()), NOW), 0);
+    assert_eq!(
+        keeper.mark("fake").as_deref(),
+        Some(""),
+        "no mark before: empty"
+    );
+    assert_eq!(
+        keeper.read("fake", SourceRead::ok("m7".to_owned(), Vec::new()), NOW),
+        0
+    );
     let again = SourceRead {
         events: vec![event("second", pb::HardwareSeverity::Warning)],
         ..fresh
@@ -247,7 +260,11 @@ fn a_source_state_is_cut_to_its_bounds_and_at_most_twelve_are_sent() {
         "cut at a character boundary"
     );
     for n in 0..MAX_SOURCES + 2 {
-        keeper.read(&format!("src{n:02}"), SourceRead::unsupported(String::new()), NOW);
+        keeper.read(
+            &format!("src{n:02}"),
+            SourceRead::unsupported(String::new()),
+            NOW,
+        );
     }
     let sources = keeper.health().sources;
     assert_eq!(sources.len(), MAX_SOURCES);
@@ -287,7 +304,11 @@ fn the_health_carries_fewer_records_when_the_states_would_break_its_bound() {
     }
     let crowded = keeper.health();
     assert_eq!(crowded.sources.len(), MAX_SOURCES);
-    assert!(crowded.events.len() < MAX_EVENTS, "{}", crowded.events.len());
+    assert!(
+        crowded.events.len() < MAX_EVENTS,
+        "{}",
+        crowded.events.len()
+    );
     assert!(!crowded.events.is_empty());
     assert_eq!(check_health(&crowded), Ok(()));
     assert_eq!(
@@ -304,9 +325,35 @@ fn poll_hands_the_read_to_the_keeper_at_the_clocks_second() {
     let clock = FakeClock::new(NOW + 5, 0);
     let (mut source, asked) = Scripted::new(
         "fake",
-        vec![SourceRead::ok("m".to_owned(), vec![event("p", pb::HardwareSeverity::Info)])],
+        vec![SourceRead::ok(
+            "m".to_owned(),
+            vec![event("p", pb::HardwareSeverity::Info)],
+        )],
     );
     assert_eq!(poll(&mut source, &keeper, &clock), 1);
     assert_eq!(*asked.lock().expect("asked"), [(None, NOW + 5)]);
     assert_eq!(keeper.mark("fake").as_deref(), Some("m"));
+}
+
+#[test]
+fn the_daemon_starts_its_host_sources_only_when_it_keeps_a_health_state() {
+    let dir = Scratch::new("sources-start-host");
+    let keeper = keeper(&dir);
+    let fake = Arc::new(FakeClock::new(NOW, 0));
+    let clock: Arc<dyn UnixClock> = fake.clone();
+    let waits: Arc<dyn Clock> = fake;
+    let stop = StopFlag::default();
+    let none = ManualDispatch::default();
+    start_host(PlatformKind::Linux, None, &clock, &waits, &stop, &none);
+    assert_eq!(none.pending(), 0);
+    let linux = ManualDispatch::default();
+    start_host(
+        PlatformKind::Linux,
+        Some(&keeper),
+        &clock,
+        &waits,
+        &stop,
+        &linux,
+    );
+    assert_eq!(linux.pending(), 2, "one worker per source, none run yet");
 }

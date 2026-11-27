@@ -11,15 +11,17 @@
 //!
 //! **The worker** ([`run`]): one read, then a wait of the source's period on the daemon's clock,
 //! until the sleeper says stop. [`start`] gives each source its worker; [`at_host`] starts the
-//! sources of a host of a kind: on Linux (systemd and OpenRC) SMART through `smartctl`
+//! sources of a host of a kind, and [`start_host`] does so for the daemon, when it keeps a health
+//! state, each worker waiting on the daemon's clock until its stop flag is set: on Linux (systemd and OpenRC) SMART through `smartctl`
 //! ([`crate::smart`]) and the hwmon temperatures ([`crate::hwmon`]); none on a Mac yet.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use hostkeeper_launchd::{LaunchctlProcess, PlatformKind};
-use hostkeeper_link::{Dispatch, Sleeper, Tick, UnixClock};
+use hostkeeper_link::{ClockSleeper, Dispatch, Sleeper, StopFlag, Tick, UnixClock};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
+use hostkeeper_steps::Clock;
 
 use crate::host_health::HealthKeeper;
 use crate::hwmon::HwmonSource;
@@ -162,4 +164,25 @@ pub fn at_host(
 ) {
     let sources = for_host(kind, Path::new("/"), Path::new(SMARTCTL));
     start(sources, keeper, clock, sleeper, dispatch);
+}
+
+/// Starts the sources of this host, a host of `kind`, for the daemon ([`at_host`]) when it keeps a
+/// health state (`health`): each worker reads at `clock`'s seconds and waits on `waits`, stopping
+/// at the end of a wait once `stop` is set. With no health state it starts nothing.
+pub fn start_host(
+    kind: PlatformKind,
+    health: Option<&Arc<HealthKeeper>>,
+    clock: &Arc<dyn UnixClock>,
+    waits: &Arc<dyn Clock>,
+    stop: &StopFlag,
+    dispatch: &dyn Dispatch,
+) {
+    let Some(keeper) = health else {
+        return;
+    };
+    let (waits, stop) = (Arc::clone(waits), stop.clone());
+    let sleeper = move || -> Box<dyn Sleeper + Send> {
+        Box::new(ClockSleeper::new(Arc::clone(&waits), stop.clone()))
+    };
+    at_host(kind, keeper, clock, &sleeper, dispatch);
 }

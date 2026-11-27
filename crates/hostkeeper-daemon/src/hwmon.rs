@@ -4,8 +4,9 @@
 //!
 //! **The sensors** are the `temp<n>_input` (`n` from 1 to [`MAX_SENSOR_INDEX`]) of the chips whose
 //! `name` is one of [`DRIVERS`] (`coretemp`, `k10temp`, `nvme`), that have a `temp<n>_crit` of 1 to
-//! 200 °C; a sensor whose `crit` is missing or outside that range has no threshold to be judged by
-//! and is passed over, and one whose `crit` cannot be read or does not parse could not be read. At most [`MAX_CHIPS`] chips are looked at, in the order of their
+//! 200 °C; a sensor whose `crit` is missing or outside that range has no threshold to be judged
+//! by and is passed over, and one whose `crit` cannot be read or does not parse could not be
+//! read. At most [`MAX_CHIPS`] chips are looked at, in the order of their
 //! directories' names. Each file is read to at most [`MAX_FILE_BYTES`] bytes; a value is
 //! millidegrees Celsius, and an input outside -40 to 200 °C, or one that does not parse, is a
 //! sensor that could not be read.

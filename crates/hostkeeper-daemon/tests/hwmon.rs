@@ -15,7 +15,7 @@ use hostkeeper_daemon::hardware_sources::{HardwareSource, SourceRead, poll};
 use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
 use hostkeeper_daemon::hwmon::{
     CODE_THERMAL, HWMON_EVERY_SECS, HwmonMark, HwmonSource, MAX_CHIPS, MAX_MILLI, MIN_MILLI,
-    SOURCE, judge, list,
+    NO_SENSOR, SOURCE, judge, list,
 };
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_link::HostHealthSource;
@@ -457,7 +457,11 @@ fn a_crit_that_cannot_be_read_is_unreadable_and_keeps_the_assertion() {
             r#"coretemp/Core 0: temp1_crit: "x" is not a number"#
         )
     );
-    assert!(read.events.is_empty(), "not taken for gone: {:?}", read.events);
+    assert!(
+        read.events.is_empty(),
+        "not taken for gone: {:?}",
+        read.events
+    );
     assert_eq!(after, kept);
 }
 
@@ -475,8 +479,14 @@ fn the_last_hot_sensor_gone_ends_its_assertion_and_the_source_is_unsupported() {
         (pb::SourceStatus::Unsupported, "sys/class/hwmon is absent")
     );
     assert_eq!(read.events.len(), 1, "{:?}", read.events);
-    assert_eq!(read.events[0].message, "Sensor coretemp/Core 0 is no longer listed");
-    assert_eq!(read.events[0].about, format!("hwmon:coretemp/Core 0:hot:{NOW}"));
+    assert_eq!(
+        read.events[0].message,
+        "Sensor coretemp/Core 0 is no longer listed"
+    );
+    assert_eq!(
+        read.events[0].about,
+        format!("hwmon:coretemp/Core 0:hot:{NOW}")
+    );
     let mark: HwmonMark = serde_json::from_str(&after).expect("the mark parses");
     assert!(mark.hot.is_empty());
     assert_eq!(
@@ -504,4 +514,22 @@ fn a_chip_listing_no_sensor_after_one_was_hot_is_unsupported_with_the_end() {
     );
     assert_eq!(read.events.len(), 1, "{:?}", read.events);
     assert!(read.mark.is_some());
+}
+
+#[test]
+fn an_entry_with_no_name_is_passed_over() {
+    let root = Root::new("hwmon-nameless");
+    let nameless = root.path().join("sys/class/hwmon/hwmon9");
+    fs::create_dir_all(&nameless).expect("make it");
+    sensor(&nameless, 1, "Core 0", 100_000, 100_000);
+    fs::write(root.path().join("sys/class/hwmon/hwmon8"), b"").expect("a plain file");
+    assert_eq!(
+        root.source().read(None, NOW),
+        SourceRead::unsupported(NO_SENSOR.to_owned())
+    );
+    let chip = root.chip(0, "coretemp");
+    sensor(&chip, 1, "Core 1", 40_000, 100_000);
+    let listing = list(root.path()).expect("listed");
+    let subjects: Vec<&str> = listing.sensors.iter().map(|s| s.subject.as_str()).collect();
+    assert_eq!(subjects, ["coretemp/Core 1"]);
 }
