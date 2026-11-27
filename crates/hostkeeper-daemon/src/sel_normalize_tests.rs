@@ -57,7 +57,8 @@ fn the_incident_entry_gives_the_record_of_section_2_2_byte_for_byte() {
 /// sensor whose SDR name is not ASCII, offsets past the tables, and corrected errors counted per
 /// subject and hour (with a known hour and with none). `of_previous_boot` is set for the entries
 /// before the boot (15 seconds in) and for no entry whose time is not known. The conditions not
-/// deasserted stay open in the mark, by sensor and offset.
+/// deasserted stay open in the mark, by sensor and offset; a threshold crossed back toward
+/// normal (a lower one going high) is an `info` event, which opens none.
 #[test]
 fn each_kind_of_entry_is_normalized_whole() {
     let bmc = FakeBmc::holding(KINDS_SEL, KINDS_ERASED);
@@ -94,7 +95,7 @@ fn each_kind_of_entry_is_normalized_whole() {
         (0x29, at(25), false, C::Thermal, "FAN3", Sv::Critical, St::Asserted, "fan_failed", "Fan below its lower non-recoverable threshold on FAN3", l(0x29, 25, "Fan #0x41 FAN3 | Lower Non-recoverable going low | Asserted"), 0),
         (0x2a, at(26), false, C::Thermal, "FAN3", Sv::Warning, St::Asserted, "fan_threshold", "Fan above its upper critical threshold on FAN3", l(0x2a, 26, "Fan #0x41 FAN3 | Upper Critical going high | Asserted"), 0),
         (0x2b, at(27), false, C::Thermal, "FAN3", Sv::Warning, St::Asserted, "fan_threshold", "Fan below its lower non-critical threshold on FAN3", l(0x2b, 27, "Fan #0x41 FAN3 | Lower Non-critical going low | Asserted"), 0),
-        (0x2c, at(28), false, C::Power, "Voltage #0x80", Sv::Info, St::Asserted, "bmc_threshold", "Voltage crossed its lower critical threshold back on Voltage #0x80", l(0x2c, 28, "Voltage #0x80 | Lower Critical going high | Asserted"), 0),
+        (0x2c, at(28), false, C::Power, "Voltage #0x80", Sv::Info, St::Event, "bmc_threshold", "Voltage crossed its lower critical threshold back on Voltage #0x80", l(0x2c, 28, "Voltage #0x80 | Lower Critical going high | Asserted"), 0),
         (0x2d, at(29), false, C::Power, "Voltage #0x80", Sv::Info, St::Asserted, "bmc_threshold", "Voltage threshold event (offset 0x0c) on Voltage #0x80", l(0x2d, 29, "Voltage #0x80 | Threshold offset 0x0c | Asserted"), 0),
         (0x2e, at(30), false, C::Memory, "DIMM D1", Sv::Info, St::Event, "bmc_event", "Memory event (offset 0x0f) on DIMM D1", l(0x2e, 30, "Memory #0x53 DIMM_D1 | Sensor-specific offset 0x0f | Asserted"), 0),
         (0x26, 0, false, C::Cpu, "CPU1 Status", Sv::Info, St::Event, "cpu_corrected_mce", "1 corrected machine check on CPU1 Status", "0026 | Unspecified | Unspecified | Processor #0x31 CPU1 Status | Correctable machine check error | Asserted".to_owned(), 0),
@@ -142,7 +143,6 @@ fn each_kind_of_entry_is_normalized_whole() {
             id(0x29),
             id(0x2a),
             id(0x10),
-            id(0x2c),
             id(0x2d)
         ],
         "the conditions not deasserted, by sensor and offset"

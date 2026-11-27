@@ -55,6 +55,66 @@ fn new_entries_are_read_after_the_last_one() {
     assert_eq!(held[0].event_id, "sel:01a6@1790000000");
     assert_eq!(held[0].code, "cpu_ierr");
     assert_eq!(rig.mark().last_id, Some(0x01a6));
+
+    // An addition with no entry after the last one read: nothing more is asked, nothing held.
+    rig.take_held();
+    bmc.with(|b| b.added += 1);
+    bmc.asked();
+    rig.reader.poll(INCIDENT_READ + 120);
+    assert_eq!(
+        bmc.asked(),
+        [
+            BmcRequest::DeviceId,
+            BmcRequest::SelInfo,
+            BmcRequest::SelEntry(0x01a6)
+        ]
+    );
+    assert!(rig.held().is_empty());
+    assert_eq!(rig.mark().added, INCIDENT_ERASED + 3);
+}
+
+/// Catches a transport error of `Get SEL Info` or of the SDR's reads read as an empty SEL or a
+/// failed read of the SEL: `Get SEL Info` timing out is `unreadable` naming it; the SDR's state
+/// timing out is logged, and the SEL is still read with its sensors named by number.
+#[test]
+fn transport_failures_of_sel_info_and_the_sdr_say_what_failed() {
+    struct Failing(Arc<FakeBmc>, BmcRequest);
+    impl BmcPort for Failing {
+        fn ask(&self, request: BmcRequest) -> io::Result<Vec<u8>> {
+            if request == self.1 {
+                Err(io::Error::from(io::ErrorKind::TimedOut))
+            } else {
+                self.0.ask(request)
+            }
+        }
+    }
+    let bmc = FakeBmc::holding(INCIDENT_SEL, INCIDENT_ERASED);
+    let rig = Rig::new("sel-transport", &bmc, INCIDENT_BOOT);
+    let reader = |fails: BmcRequest| {
+        SelReader::new(
+            Arc::new(Failing(Arc::clone(&bmc), fails)),
+            Arc::clone(&rig.keeper),
+            rig.log.clone(),
+        )
+    };
+    reader(BmcRequest::SelInfo).poll(INCIDENT_READ);
+    assert_eq!(
+        rig.state(),
+        (
+            pb::SourceStatus::Unreadable,
+            "Get SEL Info: timed out".to_owned()
+        )
+    );
+    assert!(rig.held().is_empty());
+    reader(BmcRequest::SdrInfo).poll(INCIDENT_READ);
+    assert_eq!(rig.state(), (pb::SourceStatus::Ok, String::new()));
+    assert_eq!(rig.held()[0].subject, "Memory #0x53");
+    assert!(
+        rig.log.lines().contains(
+            &"error: the BMC's sensor records are not read: Get SDR Repository Info: timed out"
+                .to_owned()
+        )
+    );
 }
 
 /// Catches an erased SEL whose ids start again read as nothing new (its last id read still

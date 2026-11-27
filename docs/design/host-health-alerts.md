@@ -91,7 +91,7 @@ A record is never edited and never removed. A condition's end is a new record (`
 note is a new record (`source` `operator`, `code` `note`, `about` the record or the alert's first record, `message` the note). **Corrected
 errors are coalesced**: the corrected memory errors of one DIMM (rasdaemon's corrected rows, the SEL's corrected ECC entries), the
 correctable errors of one PCIe device and the corrected machine checks of one CPU are one `info` record per subject per hour, its
-`message` carrying the count (`37 corrected errors on DIMM D1 in the hour`), and its `raw` the hour's last line; the rate alert
+`message` carrying the count (`37 corrected ECC errors on DIMM D1 in the hour`, the plural its source's table gives), and its `raw` the hour's last line; the rate alert
 (`memory_corrected_rate`) reads the counts. So a record is at most about 600 bytes, and a failing part writes at most 24 records a day
 of corrected errors. A machine with a few hundred records a year keeps a decade of log in a few megabytes [V: measured on the fleet
 once the log runs].

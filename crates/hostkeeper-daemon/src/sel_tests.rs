@@ -2,7 +2,7 @@
 //! `Get SEL Entry` cut short, the three kinds of SEL time and the boundary between them, the
 //! calendar of the raw line across a leap day, a year's end and a century that is not leap, and an
 //! entry's bytes read field by field. Each entry kind is normalized whole in
-//! `sel_source_tests.rs`, over the fixtures.
+//! `sel_normalize_tests.rs`, over the fixtures.
 
 use super::*;
 

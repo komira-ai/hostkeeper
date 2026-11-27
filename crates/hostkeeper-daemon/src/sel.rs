@@ -376,6 +376,9 @@ fn threshold(sensor_type: u8, offset: u8, type_name: &str) -> Meaning {
     } else {
         format!("{type_name} crossed its {side} {level} threshold back")
     };
+    if !th.outward {
+        return Meaning::info(th.text.to_owned(), phrase, "bmc_threshold", Kind::Event);
+    }
     let serious = th.level != Level::NonCritical;
     let (code, severity) = match sensor_type {
         0x01 if serious => ("thermal_critical", pb::HardwareSeverity::Warning),

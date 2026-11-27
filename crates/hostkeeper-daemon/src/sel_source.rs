@@ -393,8 +393,12 @@ impl SelReader {
                 .line("the BMC's event log was erased; it is read again from its first entry");
             self.flush(&mut mark, &mut events, now, true);
             mark.last_id = None;
+            mark.entries = 0;
             mark.open.clear();
         }
+        // The erase is judged once: a read cut short below goes on from its last entry at the
+        // next read, not from the first.
+        mark.erased = info.erased;
         let start = match mark.last_id {
             _ if info.entries == 0 => None,
             None => Some(FIRST_RECORD),
