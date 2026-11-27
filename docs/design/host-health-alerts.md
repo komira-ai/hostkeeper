@@ -268,8 +268,8 @@ prerequisites report (about 4 KiB) are counted and never dropped (Built: `beat.r
 6 records of at most about 600 bytes (their strings at most 328 bytes and `raw` 256, with tags), 3.6 KiB, and the baseline without its
 memory devices, about 350 bytes. Together the three never-dropped reports are at most 13 of the 16 KiB. When a beat is still over,
 `fit`'s `DROP_ORDER` (Built) gains two groups, dropped first: the memory devices and the `sources`, then the services' `health_body`
-and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in each boot's
-first beats and when they change. A size test with 16 services and every part at its bound shows the beat fits [V].
+and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in every beat that
+has room for them (Built, section 4.3). A size test with 16 services and every part at its bound shows the beat fits [V].
 
 **Expected sources.** Every Linux host is expected to have a BMC (decision 6), rasdaemon, smartmontools and a persistent journal
 (3.3); a Mac the sources of 3.2. An expected source reported `unsupported` or `unreadable` raises `host_not_monitored`.
@@ -303,7 +303,8 @@ less, exactly 16 GiB, one DIMM.
 
 The daemon reports the capacity in every beat (Built, on Linux: `crates/hostkeeper-daemon/src/capacity.rs`, read from `/proc` and
 `/sys` for each heartbeat, the SMBIOS memory devices decoded from `/sys/firmware/dmi/entries/17-*/raw` with no `dmidecode`, sent in
-the first 12 heartbeats after the daemon's start and after they change (`DEVICE_BEATS` of `host_health.rs`), with the source state
+every heartbeat that has room for them (the daemon is not told which heartbeats arrived, so a count of first heartbeats could be
+spent on lost ones), with the source state
 `smbios`: `unsupported` with no entries, `unreadable` when an entry does not decode; on a board of more than 32 slots the populated
 ones go first); the coordinator keeps the baseline per host in its operations store (New: a table of
 both backends; the files-store coordinator keeps its fleet in memory, and the Postgres one only each host's last beat, so a baseline

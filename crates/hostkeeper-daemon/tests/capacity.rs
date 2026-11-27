@@ -3,7 +3,7 @@
 //! recorded files (`tests/fixtures/capacity/workstation.tree`) and the SMBIOS memory devices of
 //! the incident's host, encoded as its firmware's table gives them; the filters of the disks and
 //! network interfaces; the decoder of SMBIOS type 17 entries; the memory devices sent in a boot's
-//! first heartbeats; the health's bound. No real `/proc`, `/sys` or program.
+//! heartbeats; the health's bound. No real `/proc`, `/sys` or program.
 
 mod support;
 
@@ -19,7 +19,7 @@ use hostkeeper_daemon::capacity::{
     PROC_VMCORE, SMBIOS_ENTRIES, SMBIOS_SOURCE, SMT_CONTROL, SmbiosError, parse_cpu_list,
     parse_mem_total, parse_memory_device, serial_digest,
 };
-use hostkeeper_daemon::host_health::{BootFacts, DEVICE_BEATS, HealthKeeper};
+use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
 use hostkeeper_daemon::shutdown_probe::{GoingDown, ShutdownProbe};
 use hostkeeper_link::HostHealthSource;
 use hostkeeper_link::testing::RecordingLog;
@@ -310,7 +310,8 @@ fn virtual_removable_and_usb_block_devices_are_not_disks() {
 /// Proves a disk's serial is read from its device (NVMe, SCSI drivers that give one), from the
 /// disk itself (virtio), or from the SCSI unit serial page after its header (cut to its length,
 /// or the rest when the page says more), trimmed of spaces and zero bytes; a page shorter than
-/// its header, a blank serial and none at all give 0; a size that does not parse gives 0.
+/// its header, a blank serial and none at all give 0 (a blank serial file in front of a page
+/// falls back to the page); a size that does not parse gives 0.
 ///
 /// Catches: the page header hashed with the serial, or a padded serial giving another digest
 /// after a firmware update.
@@ -328,6 +329,7 @@ fn disk_serials_are_read_from_the_device_the_disk_or_the_scsi_page() {
         ("sdc", "device/vpd_pg80", b"\0\x80\0\x40SC".to_vec()),
         ("sdd", "device/vpd_pg80", b"\0\x80\0".to_vec()),
         ("sde", "device/serial", b" \0 \n".to_vec()),
+        ("sdg", "device/serial", b"  \n".to_vec()),
         ("sdf", "device/model", b"no serial here\n".to_vec()),
         ("vda", "serial", b"VIRTIO-0001".to_vec()),
     ];
@@ -337,6 +339,9 @@ fn disk_serials_are_read_from_the_device_the_disk_or_the_scsi_page() {
         file(root, &format!("{BLOCK_DIR}/{name}/size"), b"8\n");
     }
     file(root, &format!("{BLOCK_DIR}/sdf/size"), b"not a number\n");
+    let mut page = vec![0, 0x80, 0, 14];
+    page.extend_from_slice(b"SCSI-PAGE-0001");
+    file(root, &format!("{BLOCK_DIR}/sdg/device/vpd_pg80"), &page);
     assert_eq!(
         read(root).baseline.disks,
         vec![
@@ -346,6 +351,7 @@ fn disk_serials_are_read_from_the_device_the_disk_or_the_scsi_page() {
             disk("sdd", 4096, 0),
             disk("sde", 4096, 0),
             disk("sdf", 0, 0),
+            disk("sdg", 4096, 9_258_804_133_276_289_950),
             disk("vda", 4096, 7_398_366_513_843_897_074),
         ]
     );
@@ -703,13 +709,13 @@ fn keeper_of(state: &Scratch, root: Option<&Path>) -> HealthKeeper {
 }
 
 /// Proves each heartbeat's health carries the host's capacity as read then, with the SMBIOS
-/// source state; the memory devices in the first [`DEVICE_BEATS`] heartbeats only, and again
-/// for as many once they change (D1 found empty); a keeper reading no capacity sends none.
+/// source state and the memory devices in every heartbeat, D1 reported empty in the heartbeat
+/// after it empties; a keeper reading no capacity sends none.
 ///
 /// Catches: a capacity read once at the start, so a module lost later is never reported, or the
-/// devices sent in every heartbeat (the bound) or never again after a change.
+/// devices left out of later heartbeats while the coordinator may never have had them.
 #[test]
-fn heartbeats_carry_the_capacity_and_the_devices_in_their_first_beats() {
+fn heartbeats_carry_the_capacity_and_the_devices_read_then() {
     let state = Scratch::new("capacity-keeper-state");
     let host = workstation("capacity-keeper-host");
     incident_dimms(host.path(), &[]);
@@ -720,10 +726,9 @@ fn heartbeats_carry_the_capacity_and_the_devices_in_their_first_beats() {
         assert_eq!(health.sources, [smbios(pb::SourceStatus::Ok, "")]);
         baseline.memory_devices.len()
     };
-    for _ in 0..DEVICE_BEATS {
+    for _ in 0..20 {
         assert_eq!(with_devices(&keeper.health()), 16);
     }
-    assert_eq!(with_devices(&keeper.health()), 0);
     file(host.path(), MEMINFO, b"MemTotal:       129000000 kB\n");
     assert_eq!(
         keeper.health().baseline.map(|b| b.mem_total_kib),
@@ -740,10 +745,7 @@ fn heartbeats_carry_the_capacity_and_the_devices_in_their_first_beats() {
             .map(|b| b.memory_devices[12].clone()),
         Some(dimm("DIMM D1", 0))
     );
-    for _ in 1..DEVICE_BEATS {
-        assert_eq!(keeper.health().baseline.unwrap().memory_devices.len(), 16);
-    }
-    assert!(keeper.health().baseline.unwrap().memory_devices.is_empty());
+    assert_eq!(keeper.health().baseline.unwrap().memory_devices.len(), 16);
 
     let none = keeper_of(&Scratch::new("capacity-keeper-none"), None).health();
     assert_eq!((none.baseline, none.sources), (None, Vec::new()));
@@ -751,11 +753,11 @@ fn heartbeats_carry_the_capacity_and_the_devices_in_their_first_beats() {
 
 /// Proves six records at their bounds and the capacity of a host at every list's bound keep the
 /// health within 4096 bytes: the memory devices and the source states go first, then the latest
-/// records, which come in the next heartbeat once the first are written; a heartbeat whose
-/// devices were dropped does not count toward [`DEVICE_BEATS`].
+/// records, which come in the next heartbeat once the first are written; once the records are
+/// all written the devices are back.
 ///
 /// Catches: a health over its bound refused by the coordinator, the records lost when they do not
-/// fit, or the devices' first heartbeats spent while they were dropped.
+/// fit, or the devices gone for good once dropped.
 #[test]
 fn records_and_capacity_at_their_bounds_fit_the_health_bound() {
     let state = Scratch::new("capacity-fit-state");
@@ -838,16 +840,10 @@ fn records_and_capacity_at_their_bounds_fit_the_health_bound() {
         next.events.first().map(|e| e.time_unix),
         Some(sent.len() as u64 + 1)
     );
-    let mut beats = 0;
-    let mut health = next;
-    while !health.events.is_empty() {
-        keeper.written(&ids(&health));
-        health = keeper.health();
-    }
-    while !health.baseline.as_ref().unwrap().memory_devices.is_empty() {
-        beats += 1;
-        health = keeper.health();
-    }
-    // The first heartbeat, before the records, carried them; the crowded ones did not count.
-    assert_eq!(beats, DEVICE_BEATS - 1);
+    assert!(next.baseline.as_ref().unwrap().memory_devices.is_empty());
+    keeper.written(&ids(&next));
+    let empty = keeper.health();
+    assert!(empty.events.is_empty());
+    assert_eq!(empty.baseline.unwrap().memory_devices.len(), 32);
+    assert_eq!(empty.sources.len(), 1);
 }

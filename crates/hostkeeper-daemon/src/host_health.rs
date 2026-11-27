@@ -28,13 +28,12 @@
 //!
 //! **Capacity.** On Linux ([`HealthKeeper::reading_capacity`], [`at_host`]) every heartbeat's
 //! health carries the host's capacity as [`crate::capacity::read`] reads it then: `MemTotal`, the
-//! CPUs, the disks and the network interfaces in every heartbeat, and the SMBIOS memory devices
-//! in the first [`DEVICE_BEATS`] heartbeats after the daemon's start and after the devices
-//! change, with the source state of reading them. In a kdump boot it carries none. When the
-//! records and the capacity together would encode past the bound of 4096 bytes, the memory
-//! devices and the source states go first, then the latest records, which wait for the next
-//! heartbeat; a heartbeat whose memory devices were dropped does not count toward
-//! [`DEVICE_BEATS`].
+//! CPUs, the disks, the network interfaces and the SMBIOS memory devices, with the source state
+//! of reading them. In a kdump boot it carries none. When the records and the capacity together
+//! would encode past the bound of 4096 bytes, the memory devices and the source states go first,
+//! then the latest records, which wait for the next heartbeat. The devices go in every heartbeat
+//! that has room for them, not in a count of first ones: the daemon is not told which heartbeats
+//! reached the coordinator, so a count could be spent on heartbeats that never arrived.
 //!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
@@ -49,6 +48,7 @@ use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
+use prost::Message as _;
 
 use crate::capacity;
 use crate::health_state::{self, HEALTH_FILE_ASIDE, HealthFile, Marker, Read, SourceMark, cut};
@@ -62,11 +62,6 @@ pub const HISTORY_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// The start of a history record's message.
 pub const HISTORY_PREFIX: &str = "history: ";
-
-/// How many heartbeats carry the SMBIOS memory devices after the daemon's start and after they
-/// change: at the default 15 seconds between heartbeats, about three minutes, which holds the two
-/// reports at least two minutes apart that the coordinator judges a new boot's memory by.
-pub const DEVICE_BEATS: u32 = 12;
 
 /// Linux's machine id, under the host's root.
 pub const MACHINE_ID: &str = "etc/machine-id";
@@ -139,9 +134,6 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
-    /// The memory devices last read, and how many heartbeats carried them since they were.
-    devices: Vec<pb::MemoryDevice>,
-    devices_sent: u32,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -197,8 +189,6 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
-                devices: Vec::new(),
-                devices_sent: 0,
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -324,20 +314,10 @@ fn fit(health: &mut pb::HostHealth) {
 impl HostHealthSource for HealthKeeper {
     fn health(&self) -> pb::HostHealth {
         let read = self.capacity_root.as_deref().and_then(capacity::read);
-        let mut inner = lock(&self.inner);
-        let (baseline, sources) = match read {
-            None => (None, Vec::new()),
-            Some(mut capacity) => {
-                if capacity.baseline.memory_devices != inner.devices {
-                    inner.devices.clone_from(&capacity.baseline.memory_devices);
-                    inner.devices_sent = 0;
-                }
-                if inner.devices_sent >= DEVICE_BEATS {
-                    capacity.baseline.memory_devices.clear();
-                }
-                (Some(capacity.baseline), vec![capacity.smbios])
-            }
-        };
+        let inner = lock(&self.inner);
+        let (baseline, sources) = read.map_or((None, Vec::new()), |capacity| {
+            (Some(capacity.baseline), vec![capacity.smbios])
+        });
         let mut health = pb::HostHealth {
             events: inner.file.held.to_send(),
             baseline,
@@ -351,13 +331,6 @@ impl HostHealthSource for HealthKeeper {
             sources,
         };
         fit(&mut health);
-        if health
-            .baseline
-            .as_ref()
-            .is_some_and(|b| !b.memory_devices.is_empty())
-        {
-            inner.devices_sent += 1;
-        }
         health
     }
 

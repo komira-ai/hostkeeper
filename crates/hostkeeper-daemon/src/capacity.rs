@@ -389,16 +389,18 @@ fn disk_serial(at: &Path) -> Option<String> {
         let len = usize::from(u16::from_be_bytes([header[2], header[3]]));
         Some(String::from_utf8_lossy(body.get(..len).unwrap_or(body)).into_owned())
     };
-    [at.join("device/serial"), at.join("serial")]
-        .iter()
-        .find_map(|path| fs::read_to_string(path).ok())
-        .or_else(vpd)
-        .map(|serial| {
+    let trimmed = |serial: String| {
+        Some(
             serial
                 .trim_matches(|c: char| c.is_whitespace() || c == '\0')
-                .to_owned()
-        })
+                .to_owned(),
+        )
         .filter(|serial| !serial.is_empty())
+    };
+    [at.join("device/serial"), at.join("serial")]
+        .iter()
+        .find_map(|path| fs::read_to_string(path).ok().and_then(trimmed))
+        .or_else(|| vpd().and_then(trimmed))
 }
 
 /// The first 8 bytes of the SHA-256 of `serial`, as a big-endian integer.
