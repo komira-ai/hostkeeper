@@ -1,0 +1,4 @@
+Panic#1 Part1
+<6>[86397.900000] e1000e 0000:00:1f.6 eno1: NIC Link is Up 1000 Mbps Full Duplex
+<4>[86399.100000] mce: [Hardware Error]: CPU 0: Machine Check Exception: 5 Bank 13: bc00000000010090
+<0>[86399.200000] Kernel panic - not syncing: Fatal machine check

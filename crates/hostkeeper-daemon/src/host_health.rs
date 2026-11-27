@@ -26,9 +26,18 @@
 //! the health within its bound of 4096 bytes encoded (about 3.7 KiB at most). The ones the
 //! coordinator names written ([`HostHealthSource::written`]) are dropped and the file written.
 //!
+//! **Source states.** A source says after each read whether it could read
+//! ([`HealthKeeper::source_state`]): each heartbeat carries the last state of every source, at
+//! most `MAX_SOURCES`, by the source's token, so a source that cannot read is never taken for one
+//! that found nothing. The states are the daemon's of this run, not kept in the state file: a
+//! source says its state again at its first read after a restart. A health over its bound of
+//! `MAX_HEALTH_BYTES` encoded leaves out its last records until it fits; they wait for the next
+//! heartbeat.
+//!
 //! A state file that cannot be written is logged and tried again at the next change; what the
 //! daemon holds in memory is still sent.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -36,9 +45,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_launchd::{Launchctl, LaunchctlProcess, PlatformKind};
 use hostkeeper_link::{HostHealthSource, Log};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
-use hostkeeper_proto::health::{MAX_BOOT_ID, MAX_MESSAGE};
+use hostkeeper_proto::health::{
+    MAX_BOOT_ID, MAX_HEALTH_BYTES, MAX_MESSAGE, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES,
+};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Clock;
+use prost::Message as _;
 
 use crate::health_state::{self, HEALTH_FILE_ASIDE, HealthFile, Marker, Read, SourceMark, cut};
 use crate::mac::TOOL_DEADLINE;
@@ -121,6 +133,8 @@ struct Inner {
     file: HealthFile,
     /// Whether the boot id was read at the start; the file keeps the last one read when not.
     boot_known: bool,
+    /// Each source's last state, by its token.
+    sources: BTreeMap<String, pb::SourceState>,
 }
 
 fn lock(mutex: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -175,6 +189,7 @@ impl HealthKeeper {
             inner: Mutex::new(Inner {
                 file,
                 boot_known: boot.boot_id.is_some(),
+                sources: BTreeMap::new(),
             }),
         };
         keeper.save(&lock(&keeper.inner).file);
@@ -254,6 +269,35 @@ impl HealthKeeper {
             .map(|mark| mark.mark.clone())
     }
 
+    /// The boot id read at the start; none when it could not be read.
+    #[must_use]
+    pub fn boot_id(&self) -> Option<String> {
+        let inner = lock(&self.inner);
+        inner.boot_known.then(|| inner.file.boot_id.clone())
+    }
+
+    /// When the boot began, Unix seconds, as read at the start; 0 when not read.
+    #[must_use]
+    pub fn boot_unix(&self) -> u64 {
+        lock(&self.inner).file.boot_unix
+    }
+
+    /// Keeps `state` as the last state of its source, its texts cut to their bounds, which every
+    /// heartbeat carries from now on; whether it differs from the state kept before. Past
+    /// `MAX_SOURCES` sources, a source not yet kept is passed over.
+    pub fn source_state(&self, state: pb::SourceState) -> bool {
+        let state = pb::SourceState {
+            source: cut(&state.source, MAX_SOURCE),
+            status: state.status,
+            reason: cut(&state.reason, MAX_SOURCE_REASON),
+        };
+        let mut inner = lock(&self.inner);
+        if !inner.sources.contains_key(&state.source) && inner.sources.len() >= MAX_SOURCES {
+            return false;
+        }
+        inner.sources.insert(state.source.clone(), state.clone()) != Some(state)
+    }
+
     fn save(&self, file: &HealthFile) {
         if let Err(e) = health_state::write(&self.state_dir, file, &|_| false) {
             self.log
@@ -271,7 +315,7 @@ fn is_history(event: &pb::HardwareEvent, now_unix: u64) -> bool {
 impl HostHealthSource for HealthKeeper {
     fn health(&self) -> pb::HostHealth {
         let inner = lock(&self.inner);
-        pb::HostHealth {
+        let mut health = pb::HostHealth {
             events: inner.file.held.to_send(),
             baseline: None,
             boot_id: if inner.boot_known {
@@ -281,8 +325,10 @@ impl HostHealthSource for HealthKeeper {
             },
             boot_unix: inner.file.boot_unix,
             clean_previous_shutdown: inner.file.previous_clean,
-            sources: Vec::new(),
-        }
+            sources: inner.sources.values().cloned().collect(),
+        };
+        while health.encoded_len() > MAX_HEALTH_BYTES && health.events.pop().is_some() {}
+        health
     }
 
     fn written(&self, event_ids: &[String]) {

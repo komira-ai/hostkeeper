@@ -433,6 +433,17 @@ async fn start_and_serve(
         major,
         watchdog,
     );
+    crate::kernel_sources::start(
+        platform.kind,
+        links.health.clone(),
+        || crate::kernel_sources::at_host(Arc::clone(&links.log)),
+        Arc::clone(&links.clock),
+        Box::new(ClockSleeper::new(
+            Arc::clone(&started.daemon().ctx().clock),
+            links.stop.clone(),
+        )),
+        links.dispatch.as_ref(),
+    );
     let terminated = crate::terminate::sigterm(links.log.as_ref());
     start::serve_until(started, links, terminated).await;
     Ok(())
