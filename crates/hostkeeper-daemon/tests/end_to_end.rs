@@ -226,6 +226,7 @@ fn without_executor(daemon: &Arc<Daemon>, links: &Links) -> Heartbeater {
             maintain: None,
             bmc: None,
             serial_console: None,
+            health: None,
         },
     )
 }

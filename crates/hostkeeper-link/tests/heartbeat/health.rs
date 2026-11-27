@@ -2,8 +2,8 @@
 //! `health`, with a service's health reason, body and restarts beside its other facts; the two
 //! groups [`fit`] drops first (the memory devices and source states, then the services' health
 //! bodies and restarts) and the records it gives up last; and nothing announced or sent by a
-//! daemon of this release, whatever the coordinator advertises. Its mapping onto the gRPC request
-//! is tested in `proto_map`.
+//! daemon that reads no health, whatever the coordinator advertises (`host_health_source` tests
+//! one that reads it). Its mapping onto the gRPC request is tested in `proto_map`.
 
 use hostkeeper_link::beat::DROP_ORDER;
 use hostkeeper_link::{
@@ -454,10 +454,11 @@ fn a_heartbeat_with_every_health_fact_at_its_bound_fits_whole() {
     );
 }
 
-/// Proves a daemon of this release announces no `host-health-v1` and sends no health, before
-/// any reply and after one that advertises it and names records written, and keeps beating.
+/// Proves a daemon with no health source announces no `host-health-v1` and sends no health,
+/// before any reply and after one that advertises it and names records written, and keeps
+/// beating.
 ///
-/// Catches: the name announced, or health sent, before the daemon reads its host's health.
+/// Catches: the name announced, or health sent, by a daemon that does not read its host's health.
 #[test]
 fn nothing_is_announced_or_sent_whatever_the_coordinator_advertises() {
     let rig = Rig::new("health-none");

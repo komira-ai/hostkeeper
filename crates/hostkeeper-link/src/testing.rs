@@ -17,9 +17,10 @@ use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFac
 use crate::bmc::BmcReport;
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
 use crate::host_facts::PushedFacts;
+use crate::host_health::HostHealthSource;
 use crate::host_ssh::{PushedSsh, SshReport};
 use crate::operator_keys::{KeysReport, PushedKeys};
-use crate::order::{MaintainOrder, Order, OrderRef, OrderResult, Outcome, Reply};
+use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::SerialConsoleSource;
 use crate::ports::{
     BmcSource, CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink,
@@ -31,11 +32,16 @@ use crate::ports::{
 use crate::prerequisites::{PrerequisitesReport, PushedPrerequisites};
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::{PushedSet, RepositoriesReport};
+pub use health::FakeHostHealth;
+pub use maintenance::{FakeMaintain, FakeMaintenance};
 pub use serial_console::FakeSerialConsole;
 
+#[path = "testing_health.rs"]
+mod health;
+#[path = "testing_maintenance.rs"]
+mod maintenance;
 #[path = "testing_serial_console.rs"]
 mod serial_console;
-use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -533,52 +539,6 @@ impl BmcSource for FakeBmc {
     }
 }
 
-/// The host's maintenance facts, as a test sets them: it holds the report a test gives it and
-/// counts how often it was asked.
-#[derive(Default)]
-pub struct FakeMaintenance {
-    report: Mutex<pb::MaintenanceReport>,
-    asked: Mutex<usize>,
-}
-
-impl FakeMaintenance {
-    /// Sets the report the next asks give.
-    pub fn set(&self, report: pb::MaintenanceReport) {
-        *lock(&self.report) = report;
-    }
-
-    /// How many times the loop asked for the report.
-    pub fn asked(&self) -> usize {
-        *lock(&self.asked)
-    }
-}
-
-impl MaintenanceSource for FakeMaintenance {
-    fn report(&self) -> pb::MaintenanceReport {
-        *lock(&self.asked) += 1;
-        lock(&self.report).clone()
-    }
-}
-
-/// The daemon's runner of `maintain` orders, as a test sees it: it records every order it is given.
-#[derive(Default)]
-pub struct FakeMaintain {
-    given: Mutex<Vec<MaintainOrder>>,
-}
-
-impl FakeMaintain {
-    /// The orders the loop gave, oldest first.
-    pub fn given(&self) -> Vec<MaintainOrder> {
-        lock(&self.given).clone()
-    }
-}
-
-impl MaintainSink for FakeMaintain {
-    fn maintain(&self, order: &MaintainOrder) {
-        lock(&self.given).push(order.clone());
-    }
-}
-
 /// The host's repository configuration, as a test sets it: it holds the report a test gives it,
 /// records every set it is given, and lists the installers a test gives it.
 #[derive(Default)]
@@ -821,6 +781,9 @@ pub struct World {
     pub maintenance: Arc<FakeMaintenance>,
     pub maintain: Arc<FakeMaintain>,
     keeping_maintenance: bool,
+    /// The host's hardware health; the ports hold it only after [`World::reading_health`].
+    pub health: Arc<FakeHostHealth>,
+    reading_health: bool,
 }
 
 impl Default for World {
@@ -863,6 +826,8 @@ impl World {
             maintenance: Arc::default(),
             maintain: Arc::default(),
             keeping_maintenance: false,
+            health: Arc::default(),
+            reading_health: false,
         }
     }
 
@@ -915,6 +880,13 @@ impl World {
         self
     }
 
+    /// The world of a host that reads its hardware health: its ports hold [`World::health`], and
+    /// it announces `host-health-v1` to a coordinator that advertises it.
+    pub fn reading_health(mut self) -> World {
+        self.reading_health = true;
+        self
+    }
+
     /// The loop announces `private-repository-v1` though the world holds no repository
     /// configuration: a daemon that reads private repositories another way (a Mac).
     pub fn reading_private_repositories(mut self) -> World {
@@ -963,6 +935,9 @@ impl World {
             maintain: self
                 .keeping_maintenance
                 .then(|| Arc::clone(&self.maintain) as Arc<dyn MaintainSink>),
+            health: self
+                .reading_health
+                .then(|| Arc::clone(&self.health) as Arc<dyn HostHealthSource>),
         }
     }
 

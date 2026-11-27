@@ -137,8 +137,8 @@ pub enum Feature {
     /// `host-health-v1`: the daemon reports its host's hardware health ([`Heartbeat::health`])
     /// and drops the records the coordinator names written (`HeartbeatResponse.health_written`,
     /// [`crate::Reply::health_written`]). Announced, like `maintenance-v1`, only once the
-    /// coordinator advertised it, by a daemon that reads its host's health; no daemon of this
-    /// release does, and no coordinator of it advertises it. Not in [`ANNOUNCED`].
+    /// coordinator advertised it, by a daemon with a [`crate::HostHealthSource`]; no coordinator
+    /// of this release advertises it. Not in [`ANNOUNCED`].
     HostHealthV1,
 }
 
