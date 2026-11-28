@@ -12,6 +12,8 @@
 //!   the host's repository entries, stage, activate, rollback, remove and drift.
 //! - [`tools`]: the tools an installer runs by absolute path, behind the [`Tools`] port.
 //! - [`host`]: the host's file system under a root, and the accounts its checks trust.
+//! - [`kept`]: the files nobody owned that a first install landed on, kept and put back at the
+//!   service's removal.
 //! - [`lock`]: the host-wide installer lock.
 //! - [`outcome`]: a step's failure, its class and its reason.
 //! - [`version`]: the sealed version directory of a package on the host, published from a staging
@@ -28,6 +30,7 @@
 pub mod announce;
 pub mod host;
 pub mod installer;
+pub mod kept;
 pub mod lock;
 pub mod mac_verify;
 pub mod macos_pkg;

@@ -18,6 +18,8 @@ mod drift;
 mod harness;
 #[path = "apt/io.rs"]
 mod io;
+#[path = "apt/kept.rs"]
+mod kept;
 #[path = "apt/loaded.rs"]
 mod loaded;
 #[path = "apt/lock_wait.rs"]

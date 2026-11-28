@@ -1,6 +1,7 @@
 //! `activate` (packages-repositories.md sections 4.3 and 4.4): the install of a staged
 //! version from its own copy of the index and the package, with no fetch. An update, a rollback
-//! (the kept previous version's directory) and a repair of drift are all this one step.
+//! (the kept previous version's directory) and a repair of drift are all this one step. A first
+//! install first keeps the files it is about to replace that no package owns ([`crate::kept`]).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -11,7 +12,10 @@ use super::policy;
 use super::record::PackageRecord;
 use super::stage::TREE;
 use super::tools::{Run, Tool};
-use super::{Activated, Drift, Order, RepositoryInstaller, io_failure, record_failure};
+use super::{
+    Activated, Drift, Order, RepositoryInstaller, io_failure, kept_failure, record_failure,
+};
+use crate::kept::unowned;
 
 impl RepositoryInstaller<'_> {
     /// Makes the version of `order`, staged in `dir`, the installed one. Idempotent: run again
@@ -24,6 +28,9 @@ impl RepositoryInstaller<'_> {
             .hold()
             .map_err(|e| io_failure("the installer lock", e))?;
         let record = self.records.load(&order.service).map_err(record_failure)?;
+        if record.is_none() {
+            self.keep_unowned(order, dir)?;
+        }
         let installed = backend.installed(tools, package, bound)?;
         let drift = drift_of(record.as_ref(), installed.as_ref().map(|i| &i.version));
         let work = self.fresh_work(&order.service)?;
@@ -86,6 +93,27 @@ impl RepositoryInstaller<'_> {
             .save(&order.service, &next)
             .map_err(record_failure)?;
         Ok(Activated { drift })
+    }
+
+    /// At a first install (no record of the service yet, so nothing of it is installed), the
+    /// files the package is about to replace that no package owns, kept ([`crate::kept`]), in
+    /// place of any set an earlier try kept: the payload's paths where the host has a regular
+    /// file, less those the package manager's database names. Kept before the pending record is
+    /// written, so a try run again after a crash finds no record and keeps the same files again.
+    fn keep_unowned(&self, order: &Order, dir: &Path) -> Result<(), Failure> {
+        let kept = self.kept();
+        let candidates = kept
+            .candidates(&dir.join(TREE))
+            .map_err(|e| io_failure("the payload's paths on the host", e))?;
+        let owned = match candidates.is_empty() {
+            true => BTreeSet::new(),
+            false => {
+                self.backend
+                    .owned(self.tools, &candidates, order.bounds.activate)?
+            }
+        };
+        kept.keep(&order.service, &order.package, &unowned(&candidates, &owned))
+            .map_err(kept_failure)
     }
 
     /// Reloads the service manager after the units or their links changed.

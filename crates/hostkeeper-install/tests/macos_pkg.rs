@@ -10,6 +10,8 @@ mod drift;
 mod host_errors;
 #[path = "macos_pkg/jobs.rs"]
 mod jobs;
+#[path = "macos_pkg/kept.rs"]
+mod kept;
 #[path = "macos_pkg/own.rs"]
 mod own;
 #[path = "macos_pkg/remove.rs"]

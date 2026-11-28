@@ -34,6 +34,7 @@
 pub mod parse;
 pub mod version;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -55,6 +56,9 @@ pub const PARTIAL: &str = "partial";
 
 /// What apt keeps in its lists directory beside the indexes, which is not copied.
 pub const NOT_KEPT: [&str; 3] = ["lock", "partial", "auxfiles"];
+
+/// The most paths one `dpkg-query --search` is asked about.
+pub const SEARCH_PATHS: usize = 256;
 
 /// The `apt` backend.
 #[derive(Clone, Copy, Debug, Default)]
@@ -416,6 +420,22 @@ impl Backend for Apt {
         ];
         let call = Run::offline(Tool::DpkgQuery, args, bound).writing(Vec::new());
         parse::installed(&run(tools, &call)?)
+    }
+
+    fn owned(
+        &self,
+        tools: &dyn Tools,
+        paths: &[String],
+        bound: u64,
+    ) -> Result<BTreeSet<String>, Failure> {
+        let mut owned = BTreeSet::new();
+        for some in paths.chunks(SEARCH_PATHS) {
+            let mut args = vec!["--search".to_owned()];
+            args.extend(some.iter().cloned());
+            let call = Run::offline(Tool::DpkgQuery, args, bound).writing(Vec::new());
+            owned.extend(parse::owned(&run(tools, &call)?, some)?);
+        }
+        Ok(owned)
     }
 
     fn hold(

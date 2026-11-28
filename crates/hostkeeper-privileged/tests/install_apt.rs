@@ -14,7 +14,8 @@
 //! showhold`, `systemctl is-enabled`, the files of the package and the link.
 //!
 //! One test runs the daemon's own order path over the same host (`install_apt/daemon.rs`): the
-//! orders a coordinator sends, from the announcement of `apt` to the uninstall.
+//! orders a coordinator sends, from the announcement of `apt` to the uninstall. The tests of
+//! `install_apt/kept.rs` run it over a file an operator placed by hand at a payload path.
 //!
 //! The last test runs the backend's `apt-get update` and simulation in a container of each deb
 //! release of `linux-releases.toml` (`install_apt/containers.rs`), so that what the readers of
@@ -27,6 +28,8 @@ mod anything;
 mod containers;
 #[path = "install_apt/daemon.rs"]
 mod daemon;
+#[path = "install_apt/kept.rs"]
+mod kept;
 #[path = "shared/other_user.rs"]
 mod other_user;
 #[path = "install_apt/repo.rs"]

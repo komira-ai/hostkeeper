@@ -7,9 +7,9 @@
 //! | Step       | Does | Network |
 //! |------------|------|---------|
 //! | `stage`    | Refuses a package another service records; finds the order's repository in the host's configuration; makes the work directory see it alone; fetches and verifies the index; reads the version's stanza and checks its digest against the pin and its size against `max_package_bytes`; the dependency check (under the installer lock); downloads the package and hashes it against the pin; checks its control fields, extracts it with no script run, and checks that the manifest's hook program, if any, is an executable file of the tree; keeps the index and the package in the version directory | The update and the download only |
-//! | `activate` | Under the installer lock: fills the work directory from the version directory, reads what is installed (a version hostkeeper did not set is drift), records the version pending, installs it with no download (a downgrade for a rollback, apt waiting up to `lock_wait_secs` for the package manager's lock) while the policy file [`policy`] keeps its scripts from starting units, checks the database shows it, holds it (tried again while the lock is held, [`wait`]), enables the `run` units that ask for it, reloads the service manager, records it done | None |
+//! | `activate` | Under the installer lock: at a first install (no record), keeps a copy of each payload file already on the host that `dpkg-query --search` names no package for ([`crate::kept`]); fills the work directory from the version directory, reads what is installed (a version hostkeeper did not set is drift), records the version pending, installs it with no download (a downgrade for a rollback, apt waiting up to `lock_wait_secs` for the package manager's lock) while the policy file [`policy`] keeps its scripts from starting units, checks the database shows it, holds it (tried again while the lock is held, [`wait`]), enables the `run` units that ask for it, reloads the service manager, records it done | None |
 //! | `retire`   | Deletes a version directory that is neither `current` nor `previous`; runs no tool | None |
-//! | `remove`   | Under the installer lock: releases the hold, purges the package whatever version is installed (each tried again while the lock is held, for up to `lock_wait_secs`, [`wait`]; the purge under the policy file), takes away the recorded links, reloads, drops the record | None |
+//! | `remove`   | Under the installer lock: releases the hold, purges the package whatever version is installed (each tried again while the lock is held, for up to `lock_wait_secs`, [`wait`]; the purge under the policy file), takes away the recorded links, reloads, puts back the files the first install kept ([`crate::kept`]), drops the record, then drops the copies | None |
 //!
 //! The version directory is the core's (packages-lifecycle.md section 6.1): `stage` writes
 //! `tree/` and the backend's directory (`apt/`) into the empty staging directory it is given,
@@ -55,6 +55,8 @@ use std::path::{Path, PathBuf};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
+
+use crate::kept::{Kept, Lost};
 
 pub use backend::Backend;
 pub use config::{Repositories, Repository};
@@ -240,6 +242,9 @@ pub struct HostDirs {
     /// The mirrors' parent, `/var/lib/hostkeeper/mirror/` on a host: one directory per private
     /// repository, which an entry whose URI is `file:<mirror>/<name>` is read from.
     pub mirror: PathBuf,
+    /// The store of the files a first install landed on that no package owned
+    /// ([`crate::kept`]), `/var/lib/hostkeeper/kept/` on a host.
+    pub kept: PathBuf,
 }
 
 /// A version `stage` made in its staging directory.
@@ -273,6 +278,9 @@ pub struct Removed {
     /// The drift it found: the package was at a version the record did not name, and was
     /// purged all the same.
     pub drift: Option<Drift>,
+    /// The kept files of the service's first install that could not be put back: each path
+    /// stays as the purge left it, and the daemon raises an alert naming it.
+    pub lost: Vec<Lost>,
 }
 
 /// The repository installer of one backend, with the host's ports.
@@ -297,12 +305,22 @@ fn io_failure(what: &str, error: impl std::fmt::Display) -> Failure {
     Failure::new(Reason::IoError, format!("{what}: {error}"))
 }
 
+/// A failure of the kept files' store.
+fn kept_failure(error: crate::kept::KeptError) -> Failure {
+    Failure::new(Reason::IoError, error.to_string())
+}
+
 /// A failure of the record's port.
 fn record_failure(error: RecordError) -> Failure {
     Failure::new(Reason::IoError, error.to_string())
 }
 
 impl RepositoryInstaller<'_> {
+    /// The store of the files a first install kept, over the host's root.
+    fn kept(&self) -> Kept {
+        Kept::new(&self.dirs.kept, &self.dirs.root)
+    }
+
     /// The work directory of `service`, emptied and made again, mode 0700 like the work
     /// directories' parent, which is made 0700 when it is missing and set so when it is not (an
     /// earlier release left both 0755): a download is a package's bytes, root's alone.

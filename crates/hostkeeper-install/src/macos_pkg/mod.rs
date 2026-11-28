@@ -11,7 +11,7 @@
 //! | Step | Here |
 //! |---|---|
 //! | [`MacosPkg::stage`] | The identifier no other service records; `pkgutil --check-signature` against the host's [`signers`]; `pkgutil --expand-full`; the [`shape`] of the expansion (its `Distribution` rules and its `PackageInfo`'s identifier, version, location and bundles; a `Scripts` directory and the `PackageInfo`'s script elements are accepted); the `Bom` against the payload, and the jobs ([`payload`]); the manifest's hook program, an executable regular file of the payload ([`crate::program`]); `artifact`, `tree/` and `macos-pkg/{PackageInfo,Bom,artifact.pkg}` in the staging directory |
-//! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /` (which runs the package's scripts), the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and each label the replaced version's `run` named that this one's does not, and whose plist this one does not ship, disabled (a job a payload ships but no `run` names is never touched), the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
+//! | [`MacosPkg::activate`] | Under the [`InstallerLock`]: the parents of the payload paths safe, no payload file another receipt lists, at a first install (no record, no version replaced) a copy kept of each payload file already on the host that no receipt lists ([`crate::kept`]), the record pending, `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /` (which runs the package's scripts), the receipt's version and every installed file proved against `tree/`, the files of the version it replaces that this one does not list deleted, then the created directories left empty, the `run` labels enabled and each label the replaced version's `run` named that this one's does not, and whose plist this one does not ship, disabled (a job a payload ships but no `run` names is never touched), the record done. A rollback is the `activate` of the kept previous version. Drift found on the way is reported, and repaired by the install |
 //! | [`MacosPkg::retire`] | The version directory and its seal deleted; no tool runs |
 //! | [`MacosPkg::remove`] | Under the lock: every file and link the receipt or a kept version's `Bom` lists, changed or not, but one another receipt lists or one under a linked parent; the created directories left empty, deepest first; `pkgutil --forget` |
 //!
@@ -39,6 +39,7 @@ use hostkeeper_proto::hostkeeper::release::v1::Manifest;
 
 use crate::host::Host;
 use crate::installer::StageOrder;
+use crate::kept::Kept;
 use crate::lock::InstallerLock;
 use crate::outcome::{Failure, Reason};
 use crate::tools::{Tool, ToolOutput, Tools};
@@ -168,13 +169,17 @@ pub fn announces(host: &Host, signers: Option<&Signers>) -> bool {
     signers.is_some() & present(Tool::Installer) & present(Tool::Pkgutil)
 }
 
-/// The installer, over the host's tools, file system, records, lock and signers.
+/// The installer, over the host's tools, file system, records, lock and signers, and the store
+/// of the files a first install kept.
 pub struct MacosPkg<'a> {
     pub tools: &'a dyn Tools,
     pub host: &'a Host,
     pub records: &'a dyn Records,
     pub lock: &'a InstallerLock,
     pub signers: &'a Signers,
+    /// Where a first install keeps the payload files it lands on that no receipt lists; the
+    /// daemon puts them back once the service's removal and its record's drop are done.
+    pub kept: &'a Kept,
 }
 
 impl MacosPkg<'_> {

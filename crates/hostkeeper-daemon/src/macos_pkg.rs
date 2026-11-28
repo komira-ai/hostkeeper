@@ -21,7 +21,7 @@
 //! | the update's `prepare` ([`Repository::stage_pkg`]) | The order of the entry ([`Order::of`]); the `.pkg` fetched by its pin alone (a `macos-pkg` entry carries no attestation: [`crate::packages::Packages::pinned`]), then the installer's `stage`: the signature checked against the host's signers before anything is expanded, so an unsigned package, or one whose leaf is no signer, is `Failed`, `environment`, `signature`, with nothing staged; then sealed and published with `target.json` as an `apt` version is ([`Repository::fill_sealed`]) |
 //! | the switch before `cutover` ([`Repository::activate_pkg`]) | The installer's `activate` of the version, `from` the `macos-pkg` version `current` names when it is another (its directory and the `run` labels of its sealed manifest, the jobs it ran), then, for hostkeeper's own package, `launchctl enable` of the daemon's job, then `current` switched |
 //! | the switch before `rollback` | The previous version activated again from its sealed directory (`from` the one rolled back from); for a first install, its `run` jobs stopped, the package removed ([`Repository::remove_pkg`]) and `current` taken away |
-//! | the uninstall's step 5 ([`Repository::remove_pkg`]) | The installer's `remove` over the versions the host keeps, then the record dropped |
+//! | the uninstall's step 5 ([`Repository::remove_pkg`]) | The installer's `remove` over the versions the host keeps, then the files its first install kept put back ([`hostkeeper_install::kept`]), then the record dropped, then the kept copies dropped |
 //! | each heartbeat ([`Repository::drift_pkg`]) | The receipt and the recorded version's files against the record ([`observe`]), one [`Seen`] per service kept between heartbeats |
 //!
 //! A step's failure is reported as the repository installer's ([`Failure::from`]): the same
@@ -36,6 +36,7 @@ use std::time::Duration;
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::host::Host;
+use hostkeeper_install::kept::{Kept, Lost};
 use hostkeeper_install::lock::InstallerLock as PkgLock;
 use hostkeeper_install::macos_pkg::drift::{Seen, observe};
 use hostkeeper_install::macos_pkg::record::{INSTALLER, PkgRecord, RecordError, Records};
@@ -174,6 +175,11 @@ impl Repository {
             .ok_or_else(|| Failure::new(Reason::IoError, NO_MACOS_PKG))
     }
 
+    /// The store of the files a first install kept, over the Mac's host.
+    fn pkg_kept(&self, ports: &MacosPkgPorts) -> Kept {
+        Kept::new(&self.ports.dirs.kept, ports.host.root())
+    }
+
     /// Runs `step` with the `macos-pkg` installer over the daemon's ports.
     fn with_pkg<R>(
         &self,
@@ -182,12 +188,14 @@ impl Repository {
         let ports = self.pkg_ports()?;
         let records = self.records();
         let lock = PkgLock::new(&self.ports.lock);
+        let kept = self.pkg_kept(ports);
         step(&MacosPkg {
             tools: &*ports.tools,
             host: &ports.host,
             records: &records,
             lock: &lock,
             signers: &ports.signers,
+            kept: &kept,
         })
         .map_err(Failure::from)
     }
@@ -369,16 +377,31 @@ impl Repository {
     }
 
     /// The installer's `remove` of `service`, installed from the `macos-pkg` entry `entry`,
-    /// over the versions the host keeps, then its record dropped.
-    pub(crate) fn remove_pkg(&self, service: &ServiceName, entry: &Target) -> Result<(), Failure> {
+    /// over the versions the host keeps, then the files its first install kept put back
+    /// ([`Kept::put_back`]), then its record dropped, then those files' copies dropped. They are
+    /// put back after the installer's `remove`, which deletes every file a kept version's `Bom`
+    /// lists, and before the record goes, so a removal run again after a crash puts them back
+    /// again; without a record, copies are only dropped. Answers the files not put back.
+    pub(crate) fn remove_pkg(
+        &self,
+        service: &ServiceName,
+        entry: &Target,
+    ) -> Result<Vec<Lost>, Failure> {
         let Some(order) = self.removal_order(service, entry)? else {
-            return Ok(());
+            self.drop_kept(service)?;
+            return Ok(Vec::new());
         };
-        let kept = self.kept(service)?;
-        let kept: Vec<&Path> = kept.iter().map(PathBuf::as_path).collect();
-        self.with_pkg(|pkg| pkg.remove(&order, &kept))?;
+        let versions = self.kept(service)?;
+        let versions: Vec<&Path> = versions.iter().map(PathBuf::as_path).collect();
+        self.with_pkg(|pkg| pkg.remove(&order, &versions))?;
+        let lost = self
+            .pkg_kept(self.pkg_ports()?)
+            .put_back(service)
+            .map_err(io)?;
         <PlacedRecords as hostkeeper_install::repository::Records>::clear(&self.records(), service)
-            .map_err(io)
+            .map_err(io)?;
+        self.drop_kept(service)?;
+        Ok(lost)
     }
 
     /// The drift of `service`, whose `current` version holds the `macos-pkg` entry `entry`, at

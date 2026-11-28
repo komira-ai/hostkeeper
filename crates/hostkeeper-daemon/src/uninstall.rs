@@ -15,11 +15,13 @@
 //!    (`halted`), and nothing more of the uninstall runs;
 //! 5. the `remove` of the service's installer ([`crate::installers`]): for a repository
 //!    installer, the package unheld and purged, its enablement links removed and `daemon-reload`
-//!    run, and the record dropped ([`crate::repository::Repository::remove`]); a service with no installer
-//!    recorded has nothing to remove here;
+//!    run, the files its first install kept put back ([`hostkeeper_install::kept`]; one not put
+//!    back is an alert), and the record dropped ([`crate::repository::Repository::remove`]); a
+//!    service with no installer recorded has nothing to remove here;
 //! 6. last, in this order: `current`, `previous`, the seals, the version directories and what
 //!    else is in the package directory, then the step record, the params file and the rest of
-//!    the service's state directory; then the tombstone.
+//!    the service's state directory, and any kept copy a removal cut short left; then the
+//!    tombstone.
 //!
 //! The position is read from disk only: no tombstone is step 1; a tombstone is step 3, or step 5
 //! once it says `hook_done`. Every step is idempotent, so a crash anywhere resumes, at the next
@@ -399,7 +401,13 @@ fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
     // directory, which is no placed path, as this process sees it.
     let packages = ctx.placement.roots.packages().dir();
     let removed = remove_package(&*ctx.placement.fs, packages, service)
-        .and_then(|()| remove_records(&RealFs::new(Path::new("/")), &ctx.dirs.state, service));
+        .and_then(|()| remove_records(&RealFs::new(Path::new("/")), &ctx.dirs.state, service))
+        .and_then(|()| {
+            // Copies a removal cut short after the record went left: their files are back.
+            ctx.repository()
+                .drop_kept(service)
+                .map_err(|failure| io::Error::other(failure.detail().to_owned()))
+        });
     if let Err(error) = removed {
         return link_failed(format!(
             "the files of {service} could not be removed: {error}"

@@ -154,7 +154,7 @@ Every item is **Built** at the path given.
 - **Placement.** The daemon links each file of `units/` and each `[[files]]` entry to its system path, pointing into
   `current`, and records every path in `/var/lib/hostkeeper/placed.json` (`crates/hostkeeper-placed`). Removal removes
   only a path the record lists and only while it is still the link recorded (`remove.rs`). That is what this design
-  calls **closed-world removal**: hostkeeper removes what it put on the host, all of it, and nothing else.
+  calls **closed-world removal**: hostkeeper removes what it put on the host, all of it, and nothing else. A file an operator placed by hand at a payload path before a package's first install was not put there by hostkeeper, so the removal of that install puts it back rather than leaving the path empty: the first install keeps a copy of a file no package owns, and its removal, a failed first install's rollback or an uninstall, writes the copy back once the package is gone (packages-lifecycle.md section 6.5, "A file nobody owns is kept at a first install").
 - **The hook.** A program of the package, named by `[hook] command`, run as root in a bounded transient unit
   (`crates/hostkeeper-steps/src/systemd.rs`): `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, and the additive
   `uninstall`, `boot`, `drain` and `resume` (`crates/hostkeeper-hook`). Before `cutover` the daemon switches `current` and relinks

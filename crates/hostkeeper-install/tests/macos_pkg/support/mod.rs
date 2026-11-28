@@ -22,6 +22,7 @@ use std::time::Duration;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::Failure;
 use hostkeeper_install::host::{Host, Ids};
+use hostkeeper_install::kept::Kept;
 use hostkeeper_install::lock::InstallerLock;
 use hostkeeper_install::macos_pkg::record::{PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
@@ -192,6 +193,8 @@ pub struct Rig {
     pub records: MemRecords,
     pub lock: InstallerLock,
     pub signers: Signers,
+    /// The store of the files a first install kept, `kept/` beside the host root.
+    pub kept: Kept,
     staged: AtomicU32,
 }
 
@@ -228,6 +231,7 @@ impl Rig {
             records: MemRecords::default(),
             lock: InstallerLock::new(&lock_path),
             signers,
+            kept: Kept::new(&base.join("kept"), &root),
             staged: AtomicU32::new(0),
             scratch,
             root,
@@ -252,6 +256,7 @@ impl Rig {
             records: &self.records,
             lock: &self.lock,
             signers: &self.signers,
+            kept: &self.kept,
         }
     }
 

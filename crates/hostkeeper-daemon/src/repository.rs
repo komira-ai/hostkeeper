@@ -12,7 +12,7 @@
 //! | an `install` of an installed package (`adopt.rs`) | The package the host already has, which hostkeeper did not install, is staged as a version of the service, held and recorded, and `current` names it: the order replaces it as an update does, and its rollback puts it back instead of purging it (packages-lifecycle.md section 6.1) |
 //! | the switch before `cutover` ([`Repository::activate`]) | The installer's `activate` of the version, from its own copy of the index and the package, then `current` switched to it |
 //! | the switch before `rollback` ([`Repository::back`]) | The installer's `activate` of the previous version from its sealed directory, no fetch, then `current` switched back; for a first install, the `run` units stopped and the package removed, then `current` |
-//! | the uninstall's step 5 ([`Repository::remove`]) | The installer's `remove`, within the `remove_secs` of the version `current` names |
+//! | the uninstall's step 5 ([`Repository::remove`]) | The installer's `remove`, within the `remove_secs` of the version `current` names; a file its first install kept that it could not put back is an alert ([`ALERT_KEPT_FILE_LOST`]) |
 //! | each heartbeat ([`Repository::drift`]) | The installed version against the recorded one: drift, reported as `ServiceBeat.drift` |
 //!
 //! A step's [`Failure`] keeps its outcome, class and reason (section 4.5). Before the runner it is
@@ -41,6 +41,7 @@ use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class as HookClass, Phase, Verdict};
 use hostkeeper_install::backend_of;
+use hostkeeper_install::kept::{Kept, Lost};
 use hostkeeper_install::repository::launcher::LauncherTools;
 use hostkeeper_install::repository::loaded;
 use hostkeeper_install::repository::{
@@ -88,6 +89,9 @@ pub const WORK_DIR: &str = "apt";
 pub const LOCK_FILE: &str = "installer.lock";
 /// The mirrors' parent, beside the packages directory (`/var/lib/hostkeeper/mirror`).
 pub const MIRROR_ROOT: &str = "mirror";
+/// The store of the files a first install kept, beside the packages directory
+/// (`/var/lib/hostkeeper/kept`, [`hostkeeper_install::kept`]).
+pub const KEPT_DIR: &str = "kept";
 
 /// What the repository installer works with on the host, besides the step launcher and the
 /// clock: the host's repository entries, read at the start and replaced by each set the
@@ -125,7 +129,8 @@ impl RepositoryPorts {
     /// The ports of the host whose root is `root` and whose packages directory is
     /// `packages_dir`, everything staged given to `owner`: the work directories in
     /// `<packages_dir>/../apt`, the lock `<packages_dir>/../installer.lock`, the mirrors
-    /// `<packages_dir>/../mirror`; the lock waited for the default of `--package-lock-wait-secs`.
+    /// `<packages_dir>/../mirror`, the kept files `<packages_dir>/../kept`; the lock waited for the
+    /// default of `--package-lock-wait-secs`.
     pub fn new(
         packages_dir: &Path,
         root: &Path,
@@ -142,6 +147,7 @@ impl RepositoryPorts {
                 root: root.to_path_buf(),
                 work: state.join(WORK_DIR),
                 mirror: state.join(MIRROR_ROOT),
+                kept: state.join(KEPT_DIR),
             },
             lock: state.join(LOCK_FILE),
             macos_pkg: None,
@@ -333,6 +339,12 @@ pub struct Repository {
 /// The alert of a stage that failed or deferred, with the failure's reason and detail (apt's
 /// own last line): at error level for a failure, at warn level for a deferral.
 pub const ALERT_STAGE_FAILED: &str = "stage_failed";
+
+/// The alert of a file a first install kept that its service's removal could not put back
+/// ([`hostkeeper_install::kept::Lost`]): the removal completed and the path stays as it left it,
+/// so the operator's file must be put there by hand, from its copy when the line names one (set
+/// aside in `<kept>/.lost-<service>/`). At error level, one line per path.
+pub const ALERT_KEPT_FILE_LOST: &str = "kept_file_lost";
 
 /// The first number of the daemon's tool units: its process id in the high half, so that a
 /// daemon started again never names a unit a run of the one before it may still hold.
@@ -843,22 +855,49 @@ impl Repository {
             .map_err(|e| failed(e.to_string()))
     }
 
-    /// The installer's `remove` of `service`, installed from `entry`, within its `remove_secs`.
+    /// The installer's `remove` of `service`, installed from `entry`, within its `remove_secs`:
+    /// each file its first install kept that could not be put back is said by an alert
+    /// ([`ALERT_KEPT_FILE_LOST`]), and the removal is done all the same.
     pub fn remove(&self, service: &ServiceName, entry: &Target) -> Result<(), Failure> {
-        if let Some(Native::MacosPkg) = native_of_entry(entry) {
-            return self.remove_pkg(service, entry);
+        let lost = match native_of_entry(entry) {
+            Some(Native::MacosPkg) => self.remove_pkg(service, entry)?,
+            _ => {
+                let remove_secs = entry
+                    .manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.installer_bounds)
+                    .map_or(REMOVE_SECS_WITHOUT_BOUNDS, |bounds| bounds.remove_secs);
+                let backend = backend_of_entry(entry).ok_or_else(|| {
+                    Failure::new(Reason::OrderInvalid, no_backend(&entry.installer))
+                })?;
+                self.with(backend, service, |installer| {
+                    installer.remove(service, remove_secs)
+                })?
+                .lost
+            }
+        };
+        for Lost { path, why, copy } in &lost {
+            let left = match copy {
+                Some(copy) => format!("its copy is at {}", copy.display()),
+                None => "no copy of it is left".to_owned(),
+            };
+            (self.log)(&crate::boot::alert_line(
+                ALERT_KEPT_FILE_LOST,
+                &format!(
+                    "service={service} path={path}: the file kept at its first install was not \
+                     put back: {why}; {left}"
+                ),
+            ));
         }
-        let remove_secs = entry
-            .manifest
-            .as_ref()
-            .and_then(|manifest| manifest.installer_bounds)
-            .map_or(REMOVE_SECS_WITHOUT_BOUNDS, |bounds| bounds.remove_secs);
-        let backend = backend_of_entry(entry)
-            .ok_or_else(|| Failure::new(Reason::OrderInvalid, no_backend(&entry.installer)))?;
-        self.with(backend, service, |installer| {
-            installer.remove(service, remove_secs)
-        })
-        .map(drop)
+        Ok(())
+    }
+
+    /// Drops the files `service`'s first install kept, putting none back: the uninstall's last
+    /// step, for a removal whose record was already dropped.
+    pub fn drop_kept(&self, service: &ServiceName) -> Result<(), Failure> {
+        Kept::new(&self.ports.dirs.kept, &self.ports.dirs.root)
+            .drop_set(service)
+            .map_err(|e| Failure::new(Reason::IoError, e.to_string()))
     }
 
     /// The drift of `service`, whose `current` version holds `entry`, at this heartbeat: `None`

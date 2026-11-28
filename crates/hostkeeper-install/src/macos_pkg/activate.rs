@@ -96,7 +96,12 @@ impl MacosPkg<'_> {
         }
 
         self.check_parents(&tree)?;
-        self.check_owners(order, &tree, deadline)?;
+        let unowned = self.check_owners(order, &tree, deadline)?;
+        if record.is_none() && from.is_none() {
+            self.kept
+                .keep(&order.service, &order.identifier, &unowned)
+                .map_err(|e| Failure::new(Reason::IoError, e.to_string()))?;
+        }
         let mut created = record
             .as_ref()
             .map(|r| r.created_dirs.clone())
@@ -236,28 +241,31 @@ impl MacosPkg<'_> {
 
     /// No payload file already on the host is listed by the receipt of another identifier
     /// (`package_conflict`); one no receipt lists is replaced, and is the package's from then.
+    /// The payload paths already on the host that no receipt lists: those a first install keeps
+    /// ([`crate::kept`]).
     fn check_owners(
         &self,
         order: &Order,
         tree: &BTreeMap<String, Meta>,
         deadline: Duration,
-    ) -> Result<(), Failure> {
+    ) -> Result<Vec<String>, Failure> {
+        let mut unowned = Vec::new();
         for path in files_of(tree) {
             if self.host.meta(&path).map_err(|e| io(&path, e))?.is_none() {
                 continue;
             }
-            let other = self
-                .owners(&path, deadline)?
-                .into_iter()
-                .find(|owner| *owner != order.identifier);
-            if let Some(other) = other {
+            let owners = self.owners(&path, deadline)?;
+            if let Some(other) = owners.iter().find(|owner| **owner != order.identifier) {
                 return Err(Failure::new(
                     Reason::PackageConflict,
                     format!("{path} is a file of the package {other}"),
                 ));
             }
+            if owners.is_empty() {
+                unowned.push(path);
+            }
         }
-        Ok(())
+        Ok(unowned)
     }
 
     /// `installer -allowUntrusted -pkg <dir>/macos-pkg/artifact.pkg -target /`: the kept package

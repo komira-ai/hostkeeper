@@ -164,6 +164,33 @@ service's data under `/var/lib/<service>`, which is the hook's business, never t
 removal scripts may delete what they made; that is the service's packaging choice. The device tests of section 12 (packages-tests.md) show
 the fixture packages leave nothing behind.
 
+**A file nobody owns is kept at a first install** (**Built**: `crates/hostkeeper-install/src/kept.rs`, called by the
+`activate` of `apt` and `macos-pkg` and by their removal). A first install, one with no record of the service yet, can
+land on a file an operator placed by hand at one of the package's payload paths, such as a flags file written when the
+node was set up. Before the package manager replaces it, the installer's `activate` keeps an exact copy of each such
+file, its bytes, mode, owner and group, and those of its parent directories, in hostkeeper's own root-only store,
+`/var/lib/hostkeeper/kept/<service>/` (0700, each copy 0600, beside `kept.toml`, which names the package and each
+file's path and SHA-256). A file is kept only when no package owns it: `dpkg-query --search` names no package for
+the path on `apt`, and no receipt lists it on `macos-pkg` (`pkgutil --file-info-plist`, already asked of every
+payload path on the host). A file another package owns is not kept, and the install is refused as it was before
+this store: dpkg refuses to overwrite another package's file (`dpkg_error`), and `macos-pkg` refuses it
+(`package_conflict`). A path with nothing on it, a link or a directory is not kept either. The copies are made before
+the pending record is written, so an `activate` run again after a crash finds no record and keeps the same files again;
+one run again after its install failed finds the pending record and keeps nothing new. An update keeps nothing new
+and leaves the first install's copies as they are: the file is still the operator's if the package is ever removed.
+The removal of the service, however it comes (a failed first install's rollback, after the hook's `rollback`, or an
+uninstall), puts each copy back at its path once the package manager has removed the package (after the purge on
+`apt`; after the receipt's files are deleted and the receipt forgotten on `macos-pkg`), making again any parent
+directory the removal took away, as it was, and only then drops the service's record; the copies are dropped after the
+record. A removal run again after a crash between the two puts the files back again; one with no record only drops
+the copies, since either the install they were kept for never ran or a removal already put them back. A copy that
+cannot be put back (missing, unreadable, its bytes no longer its recorded SHA-256, or its path unwritable) is, on
+purpose, neither a silent loss nor a failed removal that would leave the package half there: the removal completes,
+the path stays as the removal left it, the service's copies are set aside in `/var/lib/hostkeeper/kept/.lost-<service>/`
+(still root's alone; a later loss of the same service replaces them), and the daemon logs an alert naming the path and
+where its copy is, or that none is left (`alert=kept_file_lost`, at error level, one line per path), so the operator
+can put the file back by hand.
+
 ### 6.6 Observation
 
 The observer finds the first `run` unit's main program, as today, and hashes the running process's executable against

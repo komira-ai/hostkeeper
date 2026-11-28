@@ -24,6 +24,8 @@ use hostkeeper_install::repository::tools::ToolError;
 use hostkeeper_install::repository::{Run, Tool, ToolOutput, Tools};
 use sha2::{Digest, Sha256};
 
+#[path = "apt_fake_files.rs"]
+mod files;
 #[path = "apt_fake_lock.rs"]
 mod lock;
 #[path = "apt_fake_units.rs"]
@@ -329,6 +331,10 @@ pub struct State {
     pub installed: BTreeMap<String, Inst>,
     pub calls: Vec<Call>,
     pub faults: Faults,
+    /// The host root an install writes its package's files under ([`FakeHost::place_files`]).
+    pub files: Option<PathBuf>,
+    /// The packages a test says own a logical path, beside the installed ones.
+    pub owners: BTreeMap<String, String>,
     rules: Vec<Rule>,
 }
 
@@ -461,6 +467,11 @@ impl FakeHost {
     /// Makes `systemctl show` read the unit directory the host names `spelled`, at `disk`.
     pub fn watch_units(&self, disk: &Path, spelled: &str) {
         *self.units.lock().expect("the units") = Some((disk.to_path_buf(), spelled.to_owned()));
+    }
+
+    /// Makes an install write its package's files under `root`, and a purge delete them.
+    pub fn place_files(&self, root: &Path) {
+        self.edit(|s| s.files = Some(root.to_path_buf()));
     }
 
     /// Makes each call record the policy file under `root`.
@@ -616,6 +627,9 @@ impl Tools for FakeHost {
             "apt-get install" => install(&mut s, run),
             "dpkg --print-architecture" => out(0, "amd64\n", ""),
             "dpkg --purge" => purge(&mut s, run),
+            "dpkg-query" if run.args.first().is_some_and(|a| a == "--search") => {
+                files::search(&s, run)
+            }
             "dpkg-query" => query(&s, run),
             "apt-mark hold" | "apt-mark unhold" => mark(&mut s, run),
             "dpkg-deb --field" => deb_field(&s, run),
@@ -842,6 +856,9 @@ fn install(s: &mut State, run: &Run) -> ToolOutput {
             "E: Can't download packages: --no-download is set and the archive is not there\n",
         );
     }
+    if let Err(refused) = files::unpack(s, &package, &version) {
+        return refused;
+    }
     let held = s.installed.get(&package).is_some_and(|i| i.held);
     let mut set = |version: &str, state: char| {
         s.installed.insert(
@@ -892,6 +909,7 @@ fn purge(s: &mut State, run: &Run) -> ToolOutput {
             ),
         );
     }
+    files::purge(s, &package);
     s.installed.remove(&package);
     out(0, "(Reading database ...)\n", "")
 }

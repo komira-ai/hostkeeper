@@ -61,6 +61,7 @@ use std::time::Duration;
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::host::Host;
+use hostkeeper_install::kept::Kept;
 use hostkeeper_install::lock::InstallerLock;
 use hostkeeper_install::macos_pkg::record::{PkgRecord, RecordError, Records};
 use hostkeeper_install::macos_pkg::signers::{Fingerprint, Signers};
@@ -407,6 +408,7 @@ struct Rig {
     tools: Signed,
     records: Memory,
     lock: InstallerLock,
+    kept: Kept,
     packages: PathBuf,
 }
 
@@ -419,6 +421,7 @@ impl Rig {
             tools: Signed::default(),
             records: Memory::default(),
             lock: InstallerLock::new(&dir.join("installer.lock")),
+            kept: Kept::new(&dir.join("kept"), Path::new("/")),
             packages,
         }
     }
@@ -430,6 +433,7 @@ impl Rig {
             records: &self.records,
             lock: &self.lock,
             signers,
+            kept: &self.kept,
         }
     }
 

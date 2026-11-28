@@ -4,6 +4,8 @@
 //! below where they differ: apt before 3.0 verifies with gpgv and names gpg's status tokens,
 //! apt 3.0 and later with sqv, whose words differ; both end in the same `E:` line).
 
+use std::collections::BTreeSet;
+
 use crate::repository::backend::{Fields, Installed, Stanza};
 use crate::repository::outcome::{Failure, Reason};
 use crate::repository::tools::ToolOutput;
@@ -266,6 +268,27 @@ pub fn installed(output: &ToolOutput) -> Result<Option<Installed>, Failure> {
             complete: state == b'i',
         })),
     }
+}
+
+/// The paths of `asked` that `dpkg-query --search`'s answer names: each line of its standard
+/// output is `<packages>: <path>` or a diversion's `diversion by <package> from: <path>` (a
+/// multiarch package's `name:arch` has no space after its colon). It exits 0 when it found every
+/// path and 1 when it found none for some (`no path found matching pattern`); any other end, or
+/// an answer cut short, is the host's failure.
+pub fn owned(output: &ToolOutput, asked: &[String]) -> Result<BTreeSet<String>, Failure> {
+    if let Some(failure) = stopped("dpkg-query --search", output) {
+        return Err(failure);
+    }
+    if !matches!(output.code, Some(0 | 1)) | output.cut {
+        return Err(failed(Reason::IoError, "dpkg-query --search", output));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text
+        .lines()
+        .filter_map(|line| line.split_once(": ").map(|(_, path)| path))
+        .filter(|path| asked.iter().any(|one| one == path))
+        .map(str::to_owned)
+        .collect())
 }
 
 /// The install's outcome (`apt-get install --no-download`): its failure is the release's

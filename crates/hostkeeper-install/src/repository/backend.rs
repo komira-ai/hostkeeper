@@ -6,6 +6,7 @@
 //! manager; [`super::apt::Apt`] is the backend designed here, and a `dnf` backend (A8) is the
 //! next.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -147,6 +148,16 @@ pub trait Backend: Send + Sync {
         package: &str,
         bound: u64,
     ) -> Result<Option<Installed>, Failure>;
+
+    /// The paths of `paths` (absolute, as a package spells them) that an installed package
+    /// owns or a diversion names, as the package manager's database shows them: a path not in
+    /// the answer is no package's.
+    fn owned(
+        &self,
+        tools: &dyn Tools,
+        paths: &[String],
+        bound: u64,
+    ) -> Result<BTreeSet<String>, Failure>;
 
     /// Holds (`true`) or releases (`false`) `package`, so nothing else upgrades it: one try, a
     /// lock held being `package_manager_busy` (the installer waits, [`super::wait`]).

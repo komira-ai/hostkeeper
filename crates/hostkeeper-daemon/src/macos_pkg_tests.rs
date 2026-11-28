@@ -228,7 +228,7 @@ fn a_removal_takes_its_order_from_the_record() {
     let root = scratch.path().join("mac");
     fs::create_dir(&root).expect("the Mac's root");
     let repository = repository(&scratch, Some(mac_ports(&root)));
-    assert_eq!(repository.remove_pkg(&hello(), &entry()), Ok(()));
+    assert_eq!(repository.remove_pkg(&hello(), &entry()), Ok(Vec::new()));
     assert_eq!(repository.removal_order(&hello(), &entry()), Ok(None));
 
     let mut record = PkgRecord::new("dev.hostkeeper.hello", "1.2.0");

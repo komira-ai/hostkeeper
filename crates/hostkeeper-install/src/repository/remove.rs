@@ -1,7 +1,7 @@
 //! `remove` and the observer's drift check (packages-repositories.md section 4.4): the package
 //! is released and purged whatever version is installed, and a version hostkeeper did not set
 //! is reported, never refused. The release and the purge wait for the package manager's lock
-//! ([`super::wait`]).
+//! ([`super::wait`]). The files its first install kept are put back once it is gone.
 
 use hostkeeper_config::names::ServiceName;
 
@@ -12,35 +12,43 @@ use super::outcome::Failure;
 use super::policy;
 use super::tools::Tool;
 use super::wait::Try;
-use super::{Drift, Removed, RepositoryInstaller, io_failure, record_failure};
+use super::{Drift, Removed, RepositoryInstaller, io_failure, kept_failure, record_failure};
 
 impl RepositoryInstaller<'_> {
     /// Takes `service`'s package off the host, as its record names it, each tool run within
-    /// `remove_secs` and each wait for the lock within `lock_wait_secs`. Nothing to do without a
-    /// record: nothing was installed.
+    /// `remove_secs` and each wait for the lock within `lock_wait_secs`; puts back the files its
+    /// first install kept ([`crate::kept`]) once the package is gone and before the record is
+    /// dropped, and drops their copies after it. Without a record nothing was installed, and
+    /// copies kept for an install that never ran (or put back by a removal cut short after the
+    /// record went) are only dropped.
     pub fn remove(&self, service: &ServiceName, remove_secs: u64) -> Result<Removed, Failure> {
         let (backend, tools) = (self.backend, self.tools);
         let _held = self
             .lock
             .hold()
             .map_err(|e| io_failure("the installer lock", e))?;
-        let Some(record) = self.records.load(service).map_err(record_failure)? else {
-            return Ok(Removed { drift: None });
+        let mut removed = Removed {
+            drift: None,
+            lost: Vec::new(),
         };
-        let package = record.package.as_str();
-        let installed = backend.installed(tools, package, remove_secs)?;
-        let drift = drift_of(Some(&record), installed.as_ref().map(|i| &i.version));
-        if installed.is_some() {
-            self.hold_waiting(package, false, remove_secs)?;
+        if let Some(record) = self.records.load(service).map_err(record_failure)? {
+            let package = record.package.as_str();
+            let installed = backend.installed(tools, package, remove_secs)?;
+            removed.drift = drift_of(Some(&record), installed.as_ref().map(|i| &i.version));
+            if installed.is_some() {
+                self.hold_waiting(package, false, remove_secs)?;
+            }
+            self.purge_or_hold(package, remove_secs, installed.is_some())?;
+            for link in &links_of(Some(&record)) {
+                enable::remove_link(&self.dirs.root, link)
+                    .map_err(|e| io_failure("the units' enablement links", e))?;
+            }
+            self.reload(remove_secs)?;
+            removed.lost = self.kept().put_back(service).map_err(kept_failure)?;
+            self.records.clear(service).map_err(record_failure)?;
         }
-        self.purge_or_hold(package, remove_secs, installed.is_some())?;
-        for link in &links_of(Some(&record)) {
-            enable::remove_link(&self.dirs.root, link)
-                .map_err(|e| io_failure("the units' enablement links", e))?;
-        }
-        self.reload(remove_secs)?;
-        self.records.clear(service).map_err(record_failure)?;
-        Ok(Removed { drift })
+        self.kept().drop_set(service).map_err(kept_failure)?;
+        Ok(removed)
     }
 
     /// Purges `package`, tried again while the lock is held. A purge that fails leaves the

@@ -196,7 +196,7 @@ impl Env {
         let scratch = Scratch::new(name);
         let base = scratch.path().to_path_buf();
         let (root, work, keys) = (base.join("host"), base.join("work"), base.join("keys"));
-        let mirror = base.join("mirror");
+        let (mirror, kept) = (base.join("mirror"), base.join("kept"));
         for dir in [&root, &work, &keys] {
             fs::create_dir_all(dir).expect("a directory");
         }
@@ -219,7 +219,12 @@ impl Env {
             lock_wait_secs: LOCK_WAIT_SECS,
             lock: InstallerLock::new(&lock_path),
             repositories: Repositories::new(vec![entry]),
-            dirs: HostDirs { root, work, mirror },
+            dirs: HostDirs {
+                root,
+                work,
+                mirror,
+                kept,
+            },
             mirror: None,
             events,
             scratch,

@@ -264,6 +264,7 @@ impl Rig {
                 root: PathBuf::from("/"),
                 work: work.clone(),
                 mirror: base.join("mirror"),
+                kept: base.join("kept"),
             },
             world: world.clone(),
             scratch_path: base,
