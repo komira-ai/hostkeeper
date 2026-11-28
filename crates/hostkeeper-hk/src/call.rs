@@ -213,7 +213,7 @@ fn oidc(w: &mut World<'_>, audience: &[u8], timeout: u32) -> Flow<String> {
 
 /// The bearer token, from exactly one of `--token-file`, `--token-stdin` and
 /// `--github-oidc-audience`.
-fn credential(w: &mut World<'_>, globals: &Globals) -> Flow<String> {
+pub(crate) fn credential(w: &mut World<'_>, globals: &Globals) -> Flow<String> {
     let given = usize::from(globals.token_file.is_some())
         + usize::from(globals.token_stdin)
         + usize::from(globals.audience.is_some());
@@ -295,7 +295,7 @@ fn older(w: &mut World<'_>, endpoint: &str, roots: &[Certificate<'static>], time
 }
 
 /// Prints the gateway's answer to stdout, or writes it to `--response-file`.
-fn deliver(w: &mut World<'_>, body: &[u8], response_file: Option<&[u8]>) -> Flow<()> {
+pub(crate) fn deliver(w: &mut World<'_>, body: &[u8], response_file: Option<&[u8]>) -> Flow<()> {
     let mut text = body.to_vec();
     text.push(b'\n');
     if let Some(path) = response_file {
@@ -325,6 +325,7 @@ pub(crate) fn call(
 
 /// What the gateway refused a call with: its code and reason as it wrote them, and the exit code
 /// the code maps to.
+#[derive(Debug)]
 pub(crate) struct Refused {
     pub(crate) code: Vec<u8>,
     pub(crate) reason: Vec<u8>,
@@ -332,7 +333,7 @@ pub(crate) struct Refused {
 }
 
 /// `--endpoint` as `https://<host>[:<port>]` with no `/` at the end, and the bytes of `--ca-file`.
-fn target_of(globals: &Globals) -> Flow<(String, Vec<u8>)> {
+pub(crate) fn target_of(globals: &Globals) -> Flow<(String, Vec<u8>)> {
     let Some(endpoint) = &globals.endpoint else {
         return Err(Stop::usage("a call needs --endpoint"));
     };
@@ -354,7 +355,7 @@ fn target_of(globals: &Globals) -> Flow<(String, Vec<u8>)> {
 
 /// The one POST of `body` to `path` of the gateway at `endpoint`: the body of its `200`, or what
 /// it refused the call with. An answer that is neither is a failure.
-fn post(
+pub(crate) fn post(
     endpoint: &str,
     path: &str,
     body: &[u8],
@@ -428,10 +429,22 @@ pub(crate) fn exchange(
         total: Duration::from_secs(total_secs(timeout, &hold_text)),
     };
     let roots = certificates(&ca);
-    let refused = match post(&endpoint, command.path, &bytes, &token, &roots, limits)? {
-        Ok(body) => return Ok(body),
-        Err(refused) => refused,
-    };
+    match post(&endpoint, command.path, &bytes, &token, &roots, limits)? {
+        Ok(body) => Ok(body),
+        Err(refused) => Err(said_refused(w, &endpoint, &roots, timeout, refused)),
+    }
+}
+
+/// Says on stderr what the coordinator at `endpoint` refused a call with, as every call says it:
+/// its code, and its reason (`coordinator_older` for an `invalid_request` of a coordinator older
+/// than this `hk`); the stop is the exit code the code maps to.
+pub(crate) fn said_refused(
+    w: &mut World<'_>,
+    endpoint: &str,
+    roots: &[Certificate<'static>],
+    timeout: u32,
+    refused: Refused,
+) -> Stop {
     let name = crate::PROGRAM;
     let _ = writeln!(
         w.stderr,
@@ -439,11 +452,11 @@ pub(crate) fn exchange(
         String::from_utf8_lossy(&refused.code)
     );
     let mut reason = refused.reason;
-    if reason == b"invalid_request" && older(w, &endpoint, &roots, timeout) {
+    if reason == b"invalid_request" && older(w, endpoint, roots, timeout) {
         reason = b"coordinator_older".to_vec();
     }
     if is_reason(&reason) {
         let _ = writeln!(w.stderr, "refused: {}", String::from_utf8_lossy(&reason));
     }
-    Err(Stop::Exit(refused.status))
+    Stop::Exit(refused.status)
 }

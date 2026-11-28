@@ -651,6 +651,7 @@ impl Rig {
             tailscale: self.path("no-tailscale"),
             limit: std::time::Duration::from_secs(3600),
             wait: &|_| {},
+            now: &|| std::time::Duration::ZERO,
         };
         let tailnet = opts.tailnet.unwrap_or(&default_tailnet);
         let own = std::fs::metadata(self.path("")).expect("the scratch").uid();

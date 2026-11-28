@@ -132,6 +132,7 @@ fn a_wait_round_trips_and_its_convergence_is_the_one_the_release_before_reads() 
     let answer = op::WaitConvergedResponse {
         outcome: op::WaitOutcome::Converged as i32,
         convergence: Some(convergence.clone()),
+        not_yet: None,
     };
     let bytes = answer.encode_to_vec();
     assert_eq!(
@@ -166,6 +167,7 @@ fn a_wait_round_trips_and_its_convergence_is_the_one_the_release_before_reads() 
     let later = op::WaitConvergedResponse {
         outcome: 9,
         convergence: None,
+        not_yet: None,
     };
     let read = op::WaitConvergedResponse::decode(later.encode_to_vec().as_slice()).expect("reads");
     assert_eq!(read.outcome, 9);

@@ -1157,6 +1157,17 @@ token, and answers either for any service.
 | `--version` | STRING | The version, as it was set. |
 | `--host-group` | STRING | The host group. From a coordinator that holds host groups: a named group must list the service (`not_in_host_group`); empty for none. |
 
+#### `hk releases wait`
+
+Waits, for at most --wait-secs, for the fleet to converge on a version of a service, in held calls of Releases.WaitConverged of at most 60 seconds each, each with a token of its own, so that no wait rides on one connection for longer. An answer DEADLINE is not yet and the next call is made; when what it waits on changed, it is printed on stderr: each host not settled on the version, its state (updating, failed, excluded, silent, not ordered yet, settling) and since when, and why each plan waits. Any other outcome ends the wait with that answer. A call with no answer (a cut connection, no token, an answer that is not the gateway's) is said on stderr and asked again 10 seconds later; a refusal ends the wait as `hk releases wait-converged`'s does. When --wait-secs have passed, the last answer is the answer, and what it still waits on is printed; with no answer at all, hk exits 1. The answer is written as `hk releases wait-converged` writes it, and an answer exits 0. `hk releases wait --help` says each step.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | NAME | The service. |
+| `--version` | VERSION | The version waited for; another desired version ends the wait. |
+| `--wait-secs` | N | How long to wait in all, 1 to 1800 seconds. |
+| `--host-group` | GROUP | The host group; none: every group that lists the service. |
+
 ### `repositories`
 
 The service `Repositories` of the package `hostkeeper.operator.v1`. The coordinator's registry of package repositories.

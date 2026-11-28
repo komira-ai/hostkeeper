@@ -39,6 +39,9 @@
 //! - `xcode_verify_checks`: its verdict, check by check;
 //! - `tailnet_wait`: `hk tailnet-wait`, its probe of a loopback server, its recorded waits and its
 //!   rejoin through a stand-in `tailscale`;
+//! - `releases_wait`: `hk releases wait` against a stand-in coordinator on a simulated clock: a
+//!   fleet that converges late, a host stuck updating at the bound, a connection cut in mid-wait,
+//!   no answer, a refusal, the flags, and the real gateway's answer;
 //! - `farm_rig`: what the next five share, a fake coordinator that answers the maintenance run, the
 //!   host's probe and the removal of the check on a farm Mac from a script, whose answers are the
 //!   real messages written as the gateway writes them, and a wait that records what it is asked;
@@ -64,6 +67,7 @@ mod methods;
 mod oidc;
 mod older;
 mod process;
+mod releases_wait;
 mod rig;
 mod secrets;
 mod settings;

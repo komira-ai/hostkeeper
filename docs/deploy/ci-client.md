@@ -41,10 +41,11 @@ the one step that reads it.
     ([The calls](#the-calls)). hk asks the runner for a fresh OIDC token for `audience` and
     sends it to the coordinator in the request's header: no file holds it, no argument list and no
     other step's environment.
-11. Only when `wait` is true and the set succeeded: wait for the fleet, `hk releases
-    wait-converged`, one call the coordinator holds until the fleet has converged on the
-    version, the service is halted, another version is set, or `max_polls` times 10 seconds have
-    passed. It asks for a token of its own.
+11. Only when `wait` is true and the set succeeded: wait for the fleet, `hk releases wait`,
+    until the fleet has converged on the version, the service is halted, another version is set,
+    or `max_polls` times 10 seconds have passed, in held calls of `Releases.WaitConverged` of at
+    most 60 seconds each, each with a token of its own ([The calls](#the-calls)). The step's log
+    shows what the wait waits on each time it changes.
 12. Whatever happened before it: write the job's outputs from what the two calls left
     ([Outputs](#outputs)), and fail the job unless the reason is `converged` or `not_waited`.
 
@@ -286,7 +287,7 @@ in order lands when that pin moves to a revision that has the input, and the cal
 | `coordinator_ca` | string | yes |  | The PEM certificates of the CA the coordinator's certificate must chain to. No other root is trusted. |
 | `audience` | string | yes |  | The audience of the OIDC token, as the coordinator's allow-list entry for the calling repository names it. |
 | `wait` | boolean | no | `true` | Whether to wait for the fleet to converge on the version. |
-| `max_polls` | number | no | `180` | How long to wait for the fleet, in tens of seconds, from 1 to 180: the wait is one call the coordinator holds for at most this many times 10 seconds, so the default waits half an hour. A value above 180 (more than the coordinator's 1800 seconds) ends the job with the reason `invalid_wait`, after the version is set. |
+| `max_polls` | number | no | `180` | How long to wait for the fleet, in tens of seconds, from 1 to 180: `hk releases wait` waits for at most this many times 10 seconds, in held calls of at most 60 seconds, so the default waits half an hour. A value above 180 (more than the coordinator's 1800 seconds of one held call) ends the job with the reason `invalid_wait`, after the version is set: hk refuses it with the coordinator's token. |
 | `join_tailnet` | boolean | no | `false` | Whether to join the tailnet after the verification, so that a GitHub-hosted runner can reach a `coordinator_url` on it ([Reaching the coordinator](#reaching-the-coordinator)). |
 | `tailnet_client_id` | string | no |  | The client ID of the tailnet's federated identity for the calling repository. Not a secret. Needed when `join_tailnet` is true. |
 | `tailnet_audience` | string | no |  | The audience of that federated identity. Not a secret. Needed when `join_tailnet` is true. |
@@ -322,7 +323,29 @@ an answer reaches the outputs. The first row that holds, in order:
 | outcome `WAIT_OUTCOME_DEADLINE` | `not_converged` | `false` | the requested version |
 
 The job succeeds only with `converged` or `not_waited`; otherwise the step prints one `::error::`
-line that says whether the version is set, followed by the failed call's diagnostics.
+line that says whether the version is set, followed by the failed call's diagnostics, or, for a
+wait that ran, the wait's: each table of what it waited on as it changed, and last what it still
+waited on when it ended. A wait that ended `not_converged` after half an hour of a Mac stuck in
+its update ends, for example:
+
+```text
+::error::the version 0.3.212 of tierstore is set; the wait ended with not_converged
+hk: releases wait: tierstore 0.3.212 in mac-build: not converged after 1m00s of 30m00s:
+  state: in progress
+  mac-2 (mac-build): updating to 0.3.212, step verify (try 1), on 0.3.211, seen so since 2026-11-28T04:53:14Z
+  the plan of mac-build waits: updating
+hk: releases wait: tierstore 0.3.212 in mac-build: did not converge within 30m00s; it still waits on:
+  state: in progress
+  mac-2 (mac-build): updating to 0.3.212, step verify (try 1), on 0.3.211, seen so since 2026-11-28T04:53:14Z
+  the plan of mac-build waits: updating
+```
+
+A host's line says its state: `updating to <version>` (with the step and its try), `failed
+(<reason>)` (with when the update started, by the host's clock), `excluded (<the operator's
+reason>)`, `silent since <its last heartbeat>`, `not ordered yet (<the rollout gate's reason>)`, or
+`settling (<promotion_pending or baking>)`; and since when, the coordinator's time when it keeps
+one, else `seen so since` the first answer of this wait that showed the host in that state. From a
+coordinator before the listing, the table is each role's counts.
 
 ## Pinning hostkeeper
 
@@ -520,7 +543,7 @@ Then the wait, with `--wait-secs` ten times `max_polls`:
 ```sh
 hk --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
   --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hk-wait.json" \
-  releases wait-converged --service "$SERVICE" --version "$VERSION" --wait-secs 1800 \
+  releases wait --service "$SERVICE" --version "$VERSION" --wait-secs 1800 \
   --host-group web
 ```
 
@@ -530,10 +553,18 @@ expands to nothing when `host_group` is empty and to the one argument `--host-gr
 an empty `host_group` sends no flag, so the request has no host group field and an older
 coordinator takes it as it always did.
 
-The coordinator answers at once when the wait is over already, and otherwise after the change
-that ends it; hk gives the call a time limit of the wait plus its own timeout. A wait cut by a
-restart of the coordinator or by the network ends with no answer (`no_answer`): the version is
-set and the roll goes on, and the job can be run again.
+`hk releases wait` makes held calls of `Releases.WaitConverged` of at most 60 seconds each, each
+with a token of its own, until `--wait-secs` have passed. The coordinator answers each at once
+when the wait is over already, and otherwise after the change that ends it or after the call's
+seconds (`WAIT_OUTCOME_DEADLINE`, which is not yet: hk makes the next call); hk gives each call a
+time limit of its seconds plus its own timeout. No call rides on one connection for longer than
+60 seconds, well under the four minutes after which a path from a hosted runner may drop a
+connection it has seen no byte on: a held call sends none until it ends, and a half-hour call was
+cut so. A call cut by a restart of the coordinator or by the network is said in the step's log and
+asked again 10 seconds later, inside the same `--wait-secs`; only when no call at all was
+answered does the wait end with no answer (`no_answer`). When `--wait-secs` have passed, the last
+answer is the answer (`not_converged`) and what it still waits on is printed. The version is set
+either way and the roll goes on, and the job can be run again.
 
 ## Targets
 
@@ -626,7 +657,7 @@ them.
 | Wait for the coordinator on the tailnet | Only with `join_tailnet`. The coordinator gave no HTTP answer at `coordinator_url` in either round, before and after the rejoin, or the rejoin itself failed (`tailscale down` or `tailscale up` exited non-zero or did not end within 2 minutes); the last line of the step says how each ended, and a line per attempt says why it had no answer (no route, a refused connection, a TLS error against `coordinator_ca`). `hk: no service tailnet-wait` is an hk older than the command: `hostkeeper_version` is not the release of the pinned commit. `reason` is empty. The version is not set. | A TLS error: check `coordinator_ca` and the name in `coordinator_url`. No route or no connection: check the [ACL](#the-tag-and-the-acl) and that the coordinator is up, then run the job again. |
 | Write the request of the set | `targets` is empty or is not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give the targets of the release as one JSON object. |
 | Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no trusted publisher of the service admits this repository, workflow file, branch or environment, or the allow-list does not accept the audience), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hk made the call: it refused a field it does not know, and hk's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry), `store_failed` (the coordinator's store did not take the write: nothing changed; run the job again, and if it is refused again, the coordinator's log names the write and the store's error), `state_changed` (a set in host groups found, each of the three times the coordinator decided it, that another coordinator had changed the desired state before the set could commit: nothing changed; run the job again). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hk refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hk releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
-| Wait for the fleet to converge | The version is set. `halted`: a halt of the service stands until an operator clears it, so the fleet does not converge: the hosts that reported it are ordered nothing, and no host is ordered a version a host halted at (an operator's halt orders no host at all) (a halt whose host reports the service absent clears itself once, and the host is ordered the install again). `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hk releases status`. |
+| Wait for the fleet to converge | The version is set. `halted`: a halt of the service stands until an operator clears it, so the fleet does not converge: the hosts that reported it are ordered nothing, and no host is ordered a version a host halted at (an operator's halt orders no host at all) (a halt whose host reports the service absent clears itself once, and the host is ordered the install again). `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: no call of the wait was answered within `max_polls` times 10 seconds (the coordinator down, the network) or got no token. The job's message is what the wait still waited on: each host not at the version, its state and since when, and why the plan waited. | Look at the service in the coordinator's UI or with `hk releases status`. |
 
 ## What it does not do
 

@@ -14,7 +14,9 @@
 //! settings key `xcode_mac`) check the archive as a maintenance run of the kind `probe`, which
 //! [`xcode_farm`] schedules, reads and records. [`tailnet_wait`] is
 //! `hk tailnet-wait`, which waits for the coordinator after a CI runner joined the tailnet and
-//! rejoins it once when the coordinator does not answer. [`settings`] is the file
+//! rejoins it once when the coordinator does not answer. [`releases_wait`] is `hk releases wait`, a
+//! hand-written method of the generated service `releases` that waits for the fleet to converge
+//! in short held calls and says what it waits on. [`settings`] is the file
 //! `$HOME/.hostkeeper/hk.toml`, which gives `--endpoint`, `--ca-file` and `--token-file` their
 //! defaults (and `--mac` of the two Xcode verbs, as `xcode_mac`), and `hk settings init`, which
 //! writes it; [`home`] makes and checks `~/.hostkeeper`.
@@ -22,7 +24,7 @@
 //! - [`run`]: a command line against a [`World`], which holds everything it reads and writes: the
 //!   command table, the streams and whether stderr is a terminal, the home directory and the user's id, the runner's token request, the program
 //!   that runs the ssh verbs, the programs of the Mac that `hk xcode add` and `hk xcode verify` run and the
-//!   `tailscale` and the clock of `hk tailnet-wait`. The tests of this crate run it with fakes for
+//!   `tailscale` and the clock of `hk tailnet-wait` and `hk releases wait`. The tests of this crate run it with fakes for
 //!   all of them.
 //! - [`main`]: the program's `main`, which builds the real [`World`] from the process.
 //! - [`markdown`]: `docs/cli.md`, from a command table.
@@ -43,6 +45,7 @@ mod encode;
 mod hand;
 mod help;
 mod home;
+mod releases_wait;
 mod send;
 mod settings;
 pub mod ssh;
@@ -67,6 +70,15 @@ use hostkeeper_proto::ctl::{COMMANDS, Command};
 
 pub use doc::markdown;
 pub use table::is_served;
+
+/// The flags of the method `method` of the service `service` that `hk` writes by hand
+/// ([`hand`]), in the order its help lists them; none when there is no such method. The workflow
+/// lint checks the flags a workflow passes to such a method against them.
+#[must_use]
+pub fn hand_flags(service: &str, method: &str) -> Option<Vec<&'static str>> {
+    hand::find(service.as_bytes(), method.as_bytes())
+        .map(|found| found.flags.iter().map(|flag| flag.name).collect())
+}
 
 /// The program's name: the word `--help` and `docs/cli.md` use, and the diagnostic prefix, and
 /// what `--version` starts with.
@@ -103,7 +115,8 @@ pub struct World<'a> {
     /// The system, the programs and the clock `hk xcode add` and `hk xcode verify` run on.
     pub mac: &'a xcode_push::Mac,
     /// The `tailscale` program and the wait of `hk tailnet-wait`, whose `wait` also makes the waits
-    /// between the tries of `hk xcode add`'s upload.
+    /// between the tries of `hk xcode add`'s upload, and the wait and the clock of
+    /// `hk releases wait`.
     pub tailnet: &'a tailnet_wait::Tailnet<'a>,
 }
 

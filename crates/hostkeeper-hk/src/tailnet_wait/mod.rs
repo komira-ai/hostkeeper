@@ -61,15 +61,20 @@ pub struct Tailnet<'a> {
     pub limit: Duration,
     /// Waits the time between two attempts.
     pub wait: &'a dyn Fn(Duration),
+    /// The time since an origin that does not change in the run, by which `hk releases wait`
+    /// spends its `--wait-secs`.
+    pub now: &'a dyn Fn() -> Duration,
 }
 
 impl Tailnet<'static> {
-    /// `tailscale` from the `PATH`, [`REJOIN_LIMIT`], and the thread's own sleep.
+    /// `tailscale` from the `PATH`, [`REJOIN_LIMIT`], the thread's own sleep and the system's
+    /// monotonic clock.
     pub fn system() -> Tailnet<'static> {
         Tailnet {
             tailscale: PathBuf::from("tailscale"),
             limit: REJOIN_LIMIT,
             wait: &std::thread::sleep,
+            now: &crate::xcode_push::monotonic,
         }
     }
 }

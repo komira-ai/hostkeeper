@@ -269,7 +269,7 @@ fn failure_ack(ack: &FailureAck) -> proto::FailureAck {
 /// The hosts of `service`, whose status is `one`, by node id: each host it heard, and each node it
 /// places and has no heartbeat of ([`unheard_host`]), so that a package no host of its group runs
 /// yet shows every host of the group and why it is not ordered.
-fn hosts(service: &str, one: &ServiceStatus, ops: &OpsState) -> Vec<proto::ServiceHost> {
+pub(crate) fn hosts(service: &str, one: &ServiceStatus, ops: &OpsState) -> Vec<proto::ServiceHost> {
     let mut hosts: Vec<proto::ServiceHost> = one
         .hosts
         .iter()

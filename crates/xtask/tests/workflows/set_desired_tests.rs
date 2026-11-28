@@ -141,12 +141,12 @@ jobs:
             --ca-file \"$RUNNER_TEMP/hk-coordinator-ca.pem\" \\
             --github-oidc-audience \"$AUDIENCE\" \\
             --response-file \"$RUNNER_TEMP/hk-wait.json\" \\
-            releases wait-converged \\
+            releases wait \\
             --service \"$SERVICE\" \\
             --version \"$VERSION\" \\
             --wait-secs \"${MAX_POLLS}0\" \\
             ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
-            2> \"$RUNNER_TEMP/hk-wait.err\"
+            2> >(tee \"$RUNNER_TEMP/hk-wait.err\" >&2)
       - id: outputs
         if: ${{ always() }}
         env:
@@ -158,7 +158,7 @@ jobs:
           SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}
           SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hk-set.err', runner.temp) || '/dev/null' }}
           WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hk-wait.json', runner.temp) || '/dev/null' }}
-          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
+          WAIT_ERR: ${{ (steps.wait.outcome == 'success' || steps.wait.outcome == 'failure') && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
           OUTPUTS_PROGRAM: '\"reason=converged\"'
         run: |
           jq --null-input --raw-output \\

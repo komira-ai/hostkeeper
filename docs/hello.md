@@ -295,8 +295,8 @@ Run it twice, in this order, with the same `version`, a release the hosts are no
 1. **`variant: hello`.** The coordinator stores `<version>` as hello's desired version. The canary
    host updates first, bakes, then the others stage by stage, as in step 2. The job ends green,
    with the outputs `desired_version` `<version>`, `converged` `true` and `reason` `converged`.
-   The wait is one call (`hk releases wait-converged`) that the coordinator holds until the
-   fleet has converged, at most 30 minutes (`max_polls` left at 180).
+   The wait (`hk releases wait`) lasts until the fleet has converged, at most 30 minutes
+   (`max_polls` left at 180), in held calls of at most 60 seconds each.
 2. **`variant: fail-ready`.** The coordinator stores `<version>-fail-ready`. The canary host fails
    its `verify` (`not_ready`, phase `gate_release`) and rolls itself back. The coordinator marks
    `<version>-fail-ready` bad and sets the desired version back to `<version>`, the last good one,

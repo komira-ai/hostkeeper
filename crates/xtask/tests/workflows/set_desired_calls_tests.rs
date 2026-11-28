@@ -7,7 +7,8 @@
 use super::lint::entry;
 use super::set_desired::{ALWAYS_IF, CALL_STEPS, ORDERED, WAIT_IF};
 use super::set_desired_calls::{
-    CALLS, Call, OUTPUTS_ENV, REQUEST_ARGS, SET_REDIRECT, command, step_call_problems,
+    CALLS, Call, OUTPUTS_ENV, REQUEST_ARGS, SET_REDIRECT, WAIT_REDIRECT, method_flags,
+    step_call_problems,
 };
 use super::set_desired_tests::{CLIENT, CLIENT_BLOCK, assert_client, moved, real, step_ids};
 use super::with_in;
@@ -41,7 +42,8 @@ fn set_with(from: &str, to: &str) -> String {
 #[test]
 fn the_real_file_keeps_every_rule_of_the_calls() {
     // Catches: the real workflow drifting from the rules, a step of the order missing from it,
-    // and the two methods it calls missing from hk's command table.
+    // and the two methods it calls missing from hk: the set a command of its table, the wait a
+    // method it writes by hand, each with its own flags.
     let text = real();
     assert_client(&text, &[]);
     assert_client(CLIENT, &[]);
@@ -52,10 +54,19 @@ fn the_real_file_keeps_every_rule_of_the_calls() {
     }
     assert_eq!(ids.last().map(String::as_str), Some("outputs"));
     for call in &CALLS {
-        let found = command(call.method).expect("a command of the table");
-        assert_eq!(found.service, "Releases");
+        assert!(method_flags(call.method).is_some(), "{}", call.method);
     }
-    assert!(command("no-such-method").is_none());
+    let set = method_flags("set-desired").expect("the set");
+    assert!(set.iter().any(|f| f == "--request"), "{set:?}");
+    assert_eq!(
+        method_flags("wait"),
+        Some(
+            ["--service", "--version", "--wait-secs", "--host-group"]
+                .map(str::to_owned)
+                .to_vec()
+        )
+    );
+    assert!(method_flags("no-such-method").is_none());
 }
 
 #[test]
@@ -160,8 +171,13 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
         &["step 12 (`set-desired`) does not call `releases set-desired`"],
     );
     assert_client(
-        &with_in(CLIENT, "releases wait-converged \\", "releases converge \\"),
-        &["step 13 (`wait`) does not call `releases wait-converged`"],
+        &with_in(CLIENT, "releases wait \\", "releases converge \\"),
+        &["step 13 (`wait`) does not call `releases wait`"],
+    );
+    // The one held call of half an hour, which a path that drops a silent connection cuts.
+    assert_client(
+        &with_in(CLIENT, "releases wait \\", "releases wait-converged \\"),
+        &["step 13 (`wait`) does not call `releases wait`"],
     );
     assert_client(
         &with_in(
@@ -169,9 +185,7 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
             WAIT_SECS,
             &format!("{WAIT_SECS}            --max-polls \"$MAX_POLLS\" \\\n"),
         ),
-        &[
-            "step 13 (`wait`) passes `--max-polls`, which is not a flag of `releases wait-converged`",
-        ],
+        &["step 13 (`wait`) passes `--max-polls`, which is not a flag of `releases wait`"],
     );
     assert_client(
         &set_with(SET_RESPONSE, ""),
@@ -216,15 +230,16 @@ fn a_call_is_one_hk_command_of_the_table_into_its_own_files() {
     ] {
         assert_client(&set_with(SET_REDIRECT, to), &[no_err]);
     }
-    // The wait ends with its file alone: the rule of its own end is unchanged.
+    // The wait as it was, its diagnostics in its file alone: its log shows nothing of what it
+    // waits on while it waits.
     assert_client(
         &with_in(
             CLIENT,
+            &format!("{WAIT_REDIRECT}\n"),
             "2> \"$RUNNER_TEMP/hk-wait.err\"\n",
-            "2> >(tee \"$RUNNER_TEMP/hk-wait.err\" >&2)\n",
         ),
         &[
-            "step 13 (`wait`) does not end with `2> \"$RUNNER_TEMP/hk-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hk-wait.err`, the file the outputs step reads",
+            "step 13 (`wait`) does not end with `2> >(tee \"$RUNNER_TEMP/hk-wait.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hk-wait.err`, the file the outputs step reads",
         ],
     );
 }
@@ -434,7 +449,7 @@ fn no_step_hands_a_token_or_an_environment_on() {
                 ),
             ),
             &[&format!(
-                "step 11 (`request`) has a `{word}` loop: the wait is one call the coordinator holds"
+                "step 11 (`request`) has a `{word}` loop: the wait is one hk command, which makes its own calls"
             )],
         );
     }

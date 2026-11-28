@@ -311,6 +311,12 @@ enum WaitOutcome {
 - **A cut wait.** A wait cut by a restart of the coordinator or by the network ends the call with a transport error,
   which the workflow reports as `no_answer` (section 5). Today's loop rides out such a gap by reading again with a new
   token; the held call does not, and the job is run again. This is the one thing the wait loses against today's.
+  **Superseded** (**Built**): the half-hour call was cut in practice, at 5 to 20 minutes into it, on the path from a
+  hosted runner over the tailnet, with nothing in the answer to say which host was still updating. `set-desired.yml`
+  now runs `hk releases wait` (`crates/hostkeeper-hk/src/releases_wait`), which holds calls of at most 60 seconds, each
+  with a token of its own, asks again after a call that was cut, inside the same bound, and prints what the wait waits
+  on; an answer that is not `CONVERGED` carries `NotYet` (`waits.proto`): each host not settled on the version, its
+  state and since when, and why each plan waits (`crates/hostkeeper-coordinator/src/grpc/not_yet.rs`).
 - **The UI** does not call it. The CLI exposes it as `hkctl releases wait-converged`.
 
 ### 3.2 `Hosts.ClearRecord`, and the order that carries it
