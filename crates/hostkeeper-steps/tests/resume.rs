@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_steps::record::{HookSel, Progress, State};
+use hostkeeper_steps::record::{Deferrals, HookSel, Progress, State};
 use hostkeeper_steps::{
     AdditiveCall, BootId, Finished, LaunchError, Loaded, REASON_REBOOTED, Record, RecordError,
     ResumeAction, Stamp, StepLauncher, resume, resume_action,
@@ -217,7 +217,8 @@ fn running(boot: &str) -> State {
 /// says: a `prepare` cut off by a boot is moved to `rollback` with the verdict `Deferred
 /// rebooted` waiting; a `cutover` or a `verify` before the commit is read as killed; a committed
 /// `cutover` moves on to `verify` with its window begun now; a committed `verify` runs again
-/// with a fresh window; a `rollback` cut off runs again as its next attempt.
+/// with a fresh window, which keeps none of the deferrals of the window before; a `rollback` cut
+/// off runs again as its next attempt.
 #[test]
 fn resume_rewrites_each_reboot_cell_for_the_runner() {
     let (action, changed, rec) = rewrite(
@@ -273,18 +274,24 @@ fn resume_rewrites_each_reboot_cell_for_the_runner() {
     );
     assert_eq!(rec.progress.verify_started, Some(stamp("boot-b", 1500)));
 
-    let (action, changed, rec) = rewrite(
-        record(Step::Verify, running("boot-a"), true, false),
-        true,
-        "boot-b",
-        1500,
-    );
+    // A window begun again counts its own deferrals, none of the window before the boot.
+    let mut deferring = record(Step::Verify, running("boot-a"), true, false);
+    deferring.progress.deferrals = Some(Deferrals {
+        count: 5,
+        since: stamp("boot-a", 100),
+        class: Class::Environment,
+        reason: Some("provider_busy".to_owned()),
+        detail: None,
+        attempt: 2,
+    });
+    let (action, changed, rec) = rewrite(deferring, true, "boot-b", 1500);
     assert_eq!((action, changed), (ContinueVerifyFreshWindow, true));
     assert_eq!(
         (rec.step, rec.attempt, rec.state),
         (Step::Verify, 3, State::Pending)
     );
     assert_eq!(rec.progress.verify_started, Some(stamp("boot-b", 1500)));
+    assert_eq!(rec.progress.deferrals, None);
 
     let (action, changed, rec) = rewrite(
         record(Step::Rollback, running("boot-a"), false, false),

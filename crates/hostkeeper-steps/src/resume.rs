@@ -169,9 +169,13 @@ pub fn resume(rec: &mut Record, rebooted: bool, clock: &dyn Clock) -> (ResumeAct
             rec.state = State::Pending;
             rec.progress.retry = 0;
             rec.progress.verify_started = Some(now);
+            rec.progress.deferrals = None;
         }
+        // A fresh window counts its own deferrals: the count and the seconds of its end are of
+        // the one window.
         ResumeAction::ContinueVerifyFreshWindow => {
             rec.progress.verify_started = Some(now);
+            rec.progress.deferrals = None;
             restart(rec);
         }
         ResumeAction::RerunStep => restart(rec),

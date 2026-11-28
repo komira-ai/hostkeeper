@@ -11,11 +11,10 @@ use std::sync::{Arc, OnceLock};
 use hostkeeper_hook::{Class, Phase, Report, Step, Verdict};
 use hostkeeper_steps::clock::Stamp;
 use hostkeeper_steps::record::{
-    Deferrals, HookDetail, HookSel, Loaded, Progress, REASON_FORCED_OVER, RECORD_FILE, SCHEMA,
-    State,
+    Deferrals, HookDetail, HookSel, Loaded, Progress, RECORD_FILE, SCHEMA, State,
 };
-use hostkeeper_steps::runner::REASON_VERIFY_DEADLINE;
-use hostkeeper_steps::{CrashPoint, Finished, Record};
+use hostkeeper_steps::runner::{REASON_ABORTED, REASON_VERIFY_DEADLINE};
+use hostkeeper_steps::{BootId, BootIdError, Clock, CrashPoint, Finished, Record, StepRunner};
 use support::{DEFER, IRREVERSIBLE_OK, OK, Reply, Rig};
 
 fn record(state: State, progress: Progress) -> Record {

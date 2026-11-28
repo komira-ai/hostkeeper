@@ -49,7 +49,8 @@ fn a_long_detail_is_cut_to_the_bound_at_a_character_boundary_with_a_mark() {
     assert_eq!(cut_text("ab", 5), "ab");
     assert_eq!(cut_marked("abcdef", 6), "abcdef");
     assert_eq!(cut_marked("abcdefg", 6), "abc\u{2026}");
-    assert_eq!(cut_marked("abcd", 3), "");
+    assert_eq!(cut_marked("abcd", 3), "\u{2026}");
+    assert_eq!(cut_marked("abcd", 2), "");
     assert_eq!(cut_marked("abc", 3), "abc");
 }
 

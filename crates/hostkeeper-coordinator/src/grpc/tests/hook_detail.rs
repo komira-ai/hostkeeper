@@ -30,7 +30,7 @@ fn halted(detail: Option<&str>) -> agent::HeartbeatRequest {
 /// Proves: the detail a gRPC heartbeat's halted verdict carries is what `Hosts.Get` answers, in
 /// the host's heartbeat and in kbf's `last_update` of the host, with the reason beside it, and
 /// what the halt alert of `Alerts.List` quotes after the check; a detail longer than the
-/// coordinator keeps is answered cut to 256 bytes at a character boundary.
+/// coordinator keeps is answered cut to 256 bytes at a character boundary, ending in the mark `…`.
 ///
 /// Catches: the hook's text dropped anywhere between the heartbeat handler and the operator's
 /// answers, the gap that left a halt on a Mac with nothing but `state_invalid`.
@@ -101,5 +101,59 @@ async fn a_halts_detail_reaches_hosts_get_and_the_halt_alert() {
     let long = format!("{}é{}", "x".repeat(255), "y".repeat(255));
     let reply = beat(&world.coordinator, &peer, &halted(Some(&long))).await;
     assert_eq!(reply.token(), (Code::Ok, ""));
-    assert_eq!(shown().await, Some("x".repeat(255)));
+    assert_eq!(shown().await, Some(format!("{}…", "x".repeat(253))));
+}
+
+/// Proves: what a host waits for while its update's `verify` defers, as its gRPC heartbeat says
+/// (`step.deferrals`), is what `Hosts.Get` answers in the host's heartbeat: the step, its run,
+/// the count, the last reason and detail and since when; a step without deferrals is answered
+/// without them.
+///
+/// Catches: the operator left to log in to a host to see why its update does not finish.
+#[tokio::test]
+async fn a_deferring_verify_reaches_hosts_get() {
+    let enrollment = EnrollmentRig::new("grpc-deferring-enrollment");
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let world = world_over("grpc-deferring", &enrollment);
+    let peer = peer_of(&certificate);
+    let deferrals = agent::StepDeferrals {
+        count: 4,
+        reason: Some("provider_busy".to_owned()),
+        detail: Some(SAID.to_owned()),
+        since_unix: Some(1_790_000_000),
+    };
+    let shown = |deferrals: Option<agent::StepDeferrals>| {
+        let world = &world;
+        let peer = &peer;
+        async move {
+            let mut message = proto_message(&[svc("kbf", "1.0")]);
+            message.services[0].updating = Some("2.0".to_owned());
+            message.services[0].step = Some(agent::StepRun {
+                name: "verify".to_owned(),
+                attempt: 5,
+                deferrals,
+            });
+            let reply = beat(&world.coordinator, peer, &message).await;
+            assert_eq!(reply.token(), (Code::Ok, ""));
+            let get = proto::GetHostRequest {
+                node_id: "s1".to_owned(),
+            };
+            let (code, said, got) = operator_call::<proto::GetHostResponse>(
+                world,
+                "/hostkeeper.operator.v1.Hosts/Get",
+                get,
+            )
+            .await;
+            assert_eq!((code, said.as_str()), (Code::Ok, ""));
+            let host = got.and_then(|answer| answer.host).expect("the host");
+            host.heartbeat.expect("its heartbeat").services[0]
+                .step
+                .clone()
+        }
+    };
+    let step = shown(Some(deferrals.clone())).await.expect("the step");
+    assert_eq!((step.name.as_str(), step.attempt), ("verify", 5));
+    assert_eq!(step.deferrals, Some(deferrals));
+    let step = shown(None).await.expect("the step");
+    assert_eq!(step.deferrals, None);
 }
