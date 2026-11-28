@@ -340,6 +340,21 @@ impl World {
         })
     }
 
+    /// The Update button on the hosts `hosts`, confirmed, with a reason, when the coordinator
+    /// refuses it: the gRPC status code and message of the refusal.
+    pub fn update_refused(&self, hosts: &[&str]) -> (i32, String) {
+        self.rpc::<op::ScheduleMaintenanceResponse>(
+            SCHEDULE,
+            &op::ScheduleMaintenanceRequest {
+                host_ids: hosts.iter().map(|host| (*host).to_owned()).collect(),
+                reason: "monthly updates".to_owned(),
+                confirm: true,
+                ..op::ScheduleMaintenanceRequest::default()
+            },
+        )
+        .expect_err("the coordinator refuses the run")
+    }
+
     /// `Maintenance.Get` of the run `run_id`: each host of the run, in node id order.
     pub fn hosts(&self, run_id: &str) -> Vec<op::MaintenanceHost> {
         let answer: op::GetMaintenanceRunResponse = self

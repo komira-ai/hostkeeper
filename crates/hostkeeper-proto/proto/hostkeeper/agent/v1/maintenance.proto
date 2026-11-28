@@ -38,8 +38,10 @@ message MaintenanceReport {
   repeated InstalledXcode xcodes = 2;
   // On a Mac, what a macOS update needs; absent on Linux.
   optional MacUpdateFacts mac = 3;
-  // What is due on the host, at most 12; empty when nothing is. The daemon lists no `xcode` item:
-  // whether a newer Xcode is due is the coordinator's to decide, from `xcodes`.
+  // What is due on the host, at most 12; empty when nothing is. A Mac lists the newest major upgrade
+  // of macOS it is offered whatever its group allows: whether that counts is the coordinator's,
+  // by the group's `macos_major`. The daemon lists no `xcode` item: whether a newer Xcode is due is
+  // the coordinator's to decide, from `xcodes`.
   repeated DueItem due = 4;
   // How many more due items the daemon found than the 12 `due` lists; 0 when it lists them all.
   uint32 due_left_out = 5;
