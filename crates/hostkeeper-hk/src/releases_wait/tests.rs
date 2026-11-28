@@ -190,7 +190,8 @@ fn calls_cut_in_mid_wait_are_asked_again_and_the_wait_ends_converged() {
     let mut sim = Sim::new(|clock, secs| {
         calls += 1;
         if calls == 3 || calls == 4 {
-            let why = "no answer from https://c (connection reset by peer)".to_owned();
+            let why =
+                "no answer from https://coordinator.example (connection reset by peer)".to_owned();
             (Asked::Cut(why), Duration::from_secs(5))
         } else if clock < Duration::from_secs(1500) {
             (Asked::Answer(not_yet()), Duration::from_secs(secs.into()))
@@ -205,10 +206,10 @@ fn calls_cut_in_mid_wait_are_asked_again_and_the_wait_ends_converged() {
         sim.said(),
         [
             block("not converged after 1m00s of 30m00s:"),
-            "hk: releases wait: no answer after 2m05s (no answer from https://c (connection reset \
+            "hk: releases wait: no answer after 2m05s (no answer from https://coordinator.example (connection reset \
              by peer)); asking again in 10s\n"
                 .to_owned(),
-            "hk: releases wait: no answer after 2m20s (no answer from https://c (connection reset \
+            "hk: releases wait: no answer after 2m20s (no answer from https://coordinator.example (connection reset \
              by peer)); asking again in 10s\n"
                 .to_owned(),
         ]
@@ -364,7 +365,7 @@ fn the_table_is_printed_when_it_changes() {
     let answers = [
         not_yet(),
         not_yet(),
-        answer("DEADLINE", &[silent.clone()]),
+        answer("DEADLINE", std::slice::from_ref(&silent)),
         answer("DEADLINE", &[silent]),
         not_yet(),
     ];
@@ -500,10 +501,10 @@ fn each_state_of_a_host_says_what_it_is_and_since_when() {
 fn spans_times_words_and_numbers_are_spelled_as_the_table_says_them() {
     assert_eq!(span(Duration::from_secs(1244)), "20m44s");
     assert_eq!(span(Duration::from_secs(3661)), "1h01m01s");
-    assert_eq!(utc(0), "1970-01-01T00:00:00Z");
-    assert_eq!(utc(951_782_400), "2000-02-29T00:00:00Z");
+    assert_eq!(utc(1_798_761_599), "2026-12-31T23:59:59Z");
     assert_eq!(utc(1_800_000_000), "2027-01-15T08:00:00Z");
-    assert_eq!(utc(1_709_251_199), "2024-02-29T23:59:59Z");
+    assert_eq!(utc(1_835_395_199), "2028-02-28T23:59:59Z");
+    assert_eq!(utc(1_835_395_200), "2028-02-29T00:00:00Z");
     assert_eq!(words(None, "PLAN_WAIT_"), "unspecified");
     assert_eq!(words(Some("OTHER"), "PLAN_WAIT_"), "other");
     let value = json!({"a": 7, "b": "8", "c": true, "d": "x"});

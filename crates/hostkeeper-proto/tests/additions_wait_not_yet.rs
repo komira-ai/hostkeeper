@@ -1,9 +1,10 @@
 //! `WaitConvergedResponse.not_yet` (field 3), added after `convergence`, and its messages in
 //! waits.proto (`NotYet`, `WaitingHost`, `WaitingPlan`, `WaitingState`): what a wait that did not
-//! end converged still waits on. A reader of the release before (the baseline,
-//! `proto/compat/baseline.binpb`) knows none of them, reads the outcome and the convergence of an
-//! answer that carries them as it always did, and writes the answer back unchanged; an answer the
-//! release before wrote reads with no `not_yet`.
+//! end converged still waits on. The last release committed (the baseline,
+//! `proto/compat/baseline.binpb`) knows none of them. It predates `WaitConverged` itself, so the
+//! reader of the release before this change is this build's descriptors less field 3 ([`before`]):
+//! it reads the outcome and the convergence of an answer that carries `not_yet` as it always did,
+//! and writes the answer back unchanged; an answer it wrote reads with no `not_yet`.
 
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage, Value};
@@ -14,6 +15,27 @@ use hostkeeper_proto::hostkeeper::operator::v1 as op;
 fn baseline_pool() -> DescriptorPool {
     let bytes = include_bytes!("../proto/compat/baseline.binpb");
     DescriptorPool::decode(&bytes[..]).expect("the baseline decodes")
+}
+
+/// `WaitConvergedResponse` as the release before this change has it: this build's descriptors,
+/// the response without its field 3.
+fn before() -> prost_reflect::MessageDescriptor {
+    let mut set = prost_types::FileDescriptorSet::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET)
+        .expect("the set decodes");
+    let response = set
+        .file
+        .iter_mut()
+        .filter(|file| file.package() == "hostkeeper.operator.v1")
+        .flat_map(|file| file.message_type.iter_mut())
+        .find(|message| message.name() == "WaitConvergedResponse")
+        .expect("the response");
+    let fields = response.field.len();
+    response.field.retain(|field| field.number() != 3);
+    assert_eq!(response.field.len(), fields - 1, "field 3 was there");
+    DescriptorPool::from_file_descriptor_set(set)
+        .expect("the set less the field")
+        .get_message_by_name("hostkeeper.operator.v1.WaitConvergedResponse")
+        .expect("the response")
 }
 
 /// An answer at the deadline with one host updating, one silent, and the plan waiting.
@@ -71,9 +93,7 @@ fn an_older_reader_keeps_the_outcome_of_an_answer_that_says_what_it_waits_on() {
             .get_enum_by_name("hostkeeper.operator.v1.WaitingState")
             .is_none()
     );
-    let message = older
-        .get_message_by_name("hostkeeper.operator.v1.WaitConvergedResponse")
-        .expect("released");
+    let message = before();
     assert!(message.get_field(3).is_none(), "field 3 is new");
     let sent = answer();
     let bytes = sent.encode_to_vec();
@@ -90,11 +110,7 @@ fn an_older_reader_keeps_the_outcome_of_an_answer_that_says_what_it_waits_on() {
 /// (`not_yet` present and empty) rather than one that does not say.
 #[test]
 fn an_answer_of_the_release_before_says_nothing_of_what_it_waits_on() {
-    let older = baseline_pool();
-    let message = older
-        .get_message_by_name("hostkeeper.operator.v1.WaitConvergedResponse")
-        .expect("released");
-    let mut written = DynamicMessage::new(message);
+    let mut written = DynamicMessage::new(before());
     written.set_field_by_name(
         "outcome",
         Value::EnumNumber(op::WaitOutcome::Deadline as i32),

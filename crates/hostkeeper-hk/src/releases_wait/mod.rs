@@ -114,7 +114,7 @@ pub(crate) fn span(time: Duration) -> String {
 
 /// `unix` seconds as `YYYY-MM-DDTHH:MM:SSZ`, in UTC.
 pub(crate) fn utc(unix: u64) -> String {
-    // The civil date of a count of days since 1970-01-01 (H. Hinnant's `civil_from_days`), on
+    // The civil date of a count of days since the unix epoch (H. Hinnant's `civil_from_days`), on
     // unsigned numbers: every value here is at least 0.
     let (days, secs) = (unix / 86_400, unix % 86_400);
     let z = days + 719_468;
