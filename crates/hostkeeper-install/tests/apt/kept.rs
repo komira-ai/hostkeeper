@@ -22,7 +22,11 @@ const HOOK: &str = "/usr/lib/mdm/config-hook";
 /// A config package (hostgroups.md section 6.1): a file under `/etc/mdm/` and a hook program.
 fn config_deb(version: &str) -> Deb {
     Deb::new(PACKAGE, version, "amd64")
-        .file(FILE.trim_start_matches('/'), 0o644, &format!("version = {version:?}\n"))
+        .file(
+            FILE.trim_start_matches('/'),
+            0o644,
+            &format!("version = {version:?}\n"),
+        )
         .file(HOOK.trim_start_matches('/'), 0o755, "#!/bin/sh\nexit 0\n")
 }
 
@@ -106,7 +110,10 @@ fn a_file_nobody_owns_is_kept_at_a_first_install_and_put_back_at_its_removal() {
     assert_eq!(removed.lost, Vec::new());
     assert_eq!(env.host.installed(PACKAGE), None);
     assert_eq!(seen(&env, FILE), before);
-    assert!(!at_root(&env, HOOK).exists(), "the package's own file is gone");
+    assert!(
+        !at_root(&env, HOOK).exists(),
+        "the package's own file is gone"
+    );
     assert_eq!(kept(&env).set_of(&service(SERVICE)).expect("read"), None);
 }
 
@@ -173,7 +180,10 @@ fn an_update_keeps_the_first_installs_set_and_keeps_nothing_new() {
         .remove(&service(SERVICE), REMOVE_SECS)
         .expect("removes");
     assert_eq!(seen(&env, FILE).0, "hand = true\n");
-    assert!(!at_root(&env, added).exists(), "the update's file was the package's");
+    assert!(
+        !at_root(&env, added).exists(),
+        "the update's file was the package's"
+    );
 }
 
 /// Proves a first install whose ownership query fails is the host's failure (`io_error`) before
@@ -213,7 +223,10 @@ fn a_first_install_that_cannot_keep_its_copy_installs_nothing() {
     let (order, dir) = config_order(&env, &config_deb(V1));
     let failure = env.installer().activate(&order, &dir).expect_err("fails");
     assert_eq!(failure.reason(), Reason::IoError, "{failure}");
-    assert!(failure.detail().starts_with("the kept files of mdm: "), "{failure}");
+    assert!(
+        failure.detail().starts_with("the kept files of mdm: "),
+        "{failure}"
+    );
     assert_eq!(seen(&env, FILE).0, "hand\n");
     assert!(!env.has_run("apt-get install"));
 }
@@ -260,7 +273,12 @@ fn a_removal_run_again_after_its_record_drop_failed_puts_the_file_back_again() {
         .remove(&service(SERVICE), REMOVE_SECS)
         .expect_err("the record's drop fails");
     assert_eq!(seen(&env, FILE).0, "hand\n");
-    assert!(kept(&env).set_of(&service(SERVICE)).expect("read").is_some());
+    assert!(
+        kept(&env)
+            .set_of(&service(SERVICE))
+            .expect("read")
+            .is_some()
+    );
 
     fs::write(at_root(&env, FILE), "changed meanwhile\n").expect("a change");
     env.records.faults(|f| f.clear = false);
@@ -301,8 +319,11 @@ fn an_activate_run_again_after_a_failed_try_keeps_the_first_tries_set() {
     let env = env("apt-kept-retry");
     hand_place(&env, FILE, "hand\n", 0o600);
     let (order, dir) = config_order(&env, &config_deb(V1));
-    env.host.edit(|s| s.faults.script_fails_for = Some(V1.to_owned()));
-    env.installer().activate(&order, &dir).expect_err("the script fails");
+    env.host
+        .edit(|s| s.faults.script_fails_for = Some(V1.to_owned()));
+    env.installer()
+        .activate(&order, &dir)
+        .expect_err("the script fails");
     env.host.edit(|s| s.faults.script_fails_for = None);
     env.installer().activate(&order, &dir).expect("activates");
     assert_eq!(searched(&env).len(), 1, "the second try asked nothing");
@@ -323,9 +344,14 @@ fn output(code: Option<i32>, stdout: &str, stderr: &str, cut: bool) -> ToolOutpu
 }
 
 fn asked() -> Vec<String> {
-    ["/etc/a", "/usr/lib/x86_64-linux-gnu/libc.so.6", "/etc/b", "/etc/c"]
-        .map(str::to_owned)
-        .to_vec()
+    [
+        "/etc/a",
+        "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "/etc/b",
+        "/etc/c",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }
 
 /// Proves `dpkg-query --search`'s lines are read for the asked paths alone: a package list, a
@@ -338,14 +364,10 @@ fn the_search_answer_names_the_owned_paths_of_those_asked() {
                   /etc/b.distrib\nunasked: /etc/z\n";
     let stderr = "dpkg-query: no path found matching pattern /etc/c\n";
     let owned = parse::owned(&output(Some(1), stdout, stderr, false), &asked()).expect("read");
-    let want: BTreeSet<String> = [
-        "/etc/a",
-        "/etc/b",
-        "/usr/lib/x86_64-linux-gnu/libc.so.6",
-    ]
-    .map(str::to_owned)
-    .into_iter()
-    .collect();
+    let want: BTreeSet<String> = ["/etc/a", "/etc/b", "/usr/lib/x86_64-linux-gnu/libc.so.6"]
+        .map(str::to_owned)
+        .into_iter()
+        .collect();
     assert_eq!(owned, want);
     let all = parse::owned(&output(Some(0), "p: /etc/c\n", "", false), &asked()).expect("read");
     assert_eq!(all, ["/etc/c".to_owned()].into_iter().collect());

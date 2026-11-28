@@ -73,7 +73,16 @@ fn config_order(
 ) -> hostkeeper_proto::hostkeeper::agent::v1::Order {
     let command = [&format!("/{HOOK_PROGRAM}")[..], "update-hook"];
     let mut target = hooked_entry(package_version, pin, &command);
-    target.manifest.as_mut().expect("a manifest").run = Vec::new();
+    let manifest = target.manifest.as_mut().expect("a manifest");
+    manifest.run = Vec::new();
+    // The hook's `uninstall` step is bounded, as a package that may be uninstalled says.
+    if let Some(bounds) = manifest
+        .hook
+        .as_mut()
+        .and_then(|hook| hook.timeout_secs.as_mut())
+    {
+        bounds.uninstall = Some(60);
+    }
     with_entry(order, &target)
 }
 
@@ -111,7 +120,11 @@ fn a_hand_placed_file_survives_a_failed_first_install_with_its_bytes_mode_and_ow
         .launcher
         .replies(SERVICE, Step::Verify, &[(1, r#"{"reason":"not_ready"}"#)]);
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     let Reply::Finished { verdict, .. } = reply else {
         panic!("not finished: {reply:?}");
     };
@@ -132,7 +145,11 @@ fn a_hand_placed_file_survives_a_first_install_whose_package_script_fails() {
     apt.host
         .edit(|s| s.faults.script_fails_for = Some("1.0.0-1".to_owned()));
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     assert_eq!(reply, failed(Class::Release, "dpkg_error"));
     assert_eq!(apt.host.installed(SERVICE), None);
     assert_eq!(seen(&apt), before);
@@ -149,7 +166,11 @@ fn a_hand_placed_file_survives_an_install_an_update_and_the_uninstall() {
     let before = seen(&apt);
     let daemon = apt.daemon();
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     assert_eq!(reply, succeeded());
     assert_eq!(seen(&apt).0, "version = \"1.0.0-1\"\n");
     let set = set_dir(&apt);
@@ -162,7 +183,11 @@ fn a_hand_placed_file_survives_an_install_an_update_and_the_uninstall() {
     let index = fs::read_to_string(set.join("kept.toml")).expect("the index");
 
     let two = apt.publish(config_package("2.0.0-1"));
-    let reply = daemon.order(&config_order(update(SERVICE, "2.0.0", &two, 1), "2.0.0-1", &two));
+    let reply = daemon.order(&config_order(
+        update(SERVICE, "2.0.0", &two, 2),
+        "2.0.0-1",
+        &two,
+    ));
     assert_eq!(reply, succeeded());
     assert_eq!(apt.host.installed(SERVICE), held("2.0.0-1"));
     assert_eq!(seen(&apt).0, "version = \"2.0.0-1\"\n");
@@ -172,7 +197,7 @@ fn a_hand_placed_file_survives_an_install_an_update_and_the_uninstall() {
         "the update keeps the set"
     );
 
-    assert_eq!(daemon.order(&uninstall(SERVICE, 1)), succeeded());
+    assert_eq!(daemon.order(&uninstall(SERVICE, 3)), succeeded());
     assert_eq!(apt.host.installed(SERVICE), None);
     assert_eq!(seen(&apt), before);
     assert!(!set.exists());
@@ -192,7 +217,11 @@ fn a_file_another_package_owns_is_not_kept_and_the_first_install_is_refused() {
     let before = seen(&apt);
     let daemon = apt.daemon();
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     assert_eq!(reply, failed(Class::Release, "dpkg_error"));
     assert_eq!(seen(&apt), before);
     assert!(!apt.rig.scratch.path().join("kept").exists());
@@ -206,10 +235,14 @@ fn a_path_with_no_file_before_the_install_is_empty_after_the_uninstall() {
     apt.host.place_files(apt.rig.scratch.path());
     let (daemon, log) = alerting(apt.daemon());
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     assert_eq!(reply, succeeded());
     assert!(apt.rig.host(FILE).is_file());
-    assert_eq!(daemon.order(&uninstall(SERVICE, 1)), succeeded());
+    assert_eq!(daemon.order(&uninstall(SERVICE, 3)), succeeded());
     assert!(!apt.rig.host(FILE).exists());
     assert!(!apt.rig.scratch.path().join("kept").exists());
     assert_eq!(lost_lines(&log), Vec::<String>::new());
@@ -223,11 +256,15 @@ fn a_kept_copy_missing_at_the_uninstall_leaves_the_path_empty_and_raises_an_aler
     let apt = rig("apt-kept-lost");
     let (daemon, log) = alerting(apt.daemon());
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     assert_eq!(reply, succeeded());
     fs::remove_file(set_dir(&apt).join("0")).expect("the copy goes");
 
-    assert_eq!(daemon.order(&uninstall(SERVICE, 1)), succeeded());
+    assert_eq!(daemon.order(&uninstall(SERVICE, 3)), succeeded());
     assert_eq!(apt.host.installed(SERVICE), None);
     assert_eq!(recorded(&daemon), None);
     assert!(!apt.rig.host(FILE).exists(), "the path stays empty");
@@ -250,13 +287,22 @@ fn a_kept_copy_that_changed_is_set_aside_and_the_alert_names_where() {
     let apt = rig("apt-kept-aside");
     let (daemon, log) = alerting(apt.daemon());
     let one = apt.publish(config_package("1.0.0-1"));
-    let reply = daemon.order(&config_order(install(SERVICE, "1.0.0", &one, 1), "1.0.0-1", &one));
+    let reply = daemon.order(&config_order(
+        install(SERVICE, "1.0.0", &one, 1),
+        "1.0.0-1",
+        &one,
+    ));
     assert_eq!(reply, succeeded());
     fs::write(set_dir(&apt).join("0"), "changed in the store\n").expect("the copy changes");
 
-    assert_eq!(daemon.order(&uninstall(SERVICE, 1)), succeeded());
+    assert_eq!(daemon.order(&uninstall(SERVICE, 3)), succeeded());
     assert!(!apt.rig.host(FILE).exists(), "the path stays empty");
-    let aside = apt.rig.scratch.path().join("kept").join(format!(".lost-{SERVICE}"));
+    let aside = apt
+        .rig
+        .scratch
+        .path()
+        .join("kept")
+        .join(format!(".lost-{SERVICE}"));
     assert_eq!(
         fs::read_to_string(aside.join("0")).expect("the copy set aside"),
         "changed in the store\n"

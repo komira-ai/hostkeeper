@@ -201,7 +201,10 @@ fn a_keep_replaces_the_set_an_earlier_try_kept_and_a_stale_staging_directory() {
     kept.keep(&service(), "pkg", &paths(&["/etc/b"])).unwrap();
     let set = kept.set_of(&service()).unwrap().unwrap();
     assert_eq!(
-        set.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+        set.files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
         ["/etc/b"]
     );
     assert_eq!(names(&rig.store), ["js-agent-config"]);
@@ -335,9 +338,17 @@ fn a_missing_copy_is_lost_naming_its_path_and_the_other_files_are_put_back() {
     );
     assert!(!rig.real("/etc/a").exists(), "the path stays empty");
     assert_eq!(rig.seen("/etc/b").0, b"b");
-    assert_eq!(kept.set_of(&service()).unwrap(), None, "the set is set aside");
+    assert_eq!(
+        kept.set_of(&service()).unwrap(),
+        None,
+        "the set is set aside"
+    );
     assert_eq!(names(&kept.aside_of(&service())), ["1", INDEX]);
-    assert_eq!(kept.put_back(&service()).unwrap(), Vec::new(), "a rerun finds no set");
+    assert_eq!(
+        kept.put_back(&service()).unwrap(),
+        Vec::new(),
+        "a rerun finds no set"
+    );
 }
 
 #[test]
@@ -427,7 +438,10 @@ fn a_second_loss_sets_its_set_aside_in_place_of_the_first() {
         assert_eq!(kept.put_back(&service()).unwrap().len(), 1);
         fs::remove_file(rig.real("/etc/js-agent")).unwrap();
     }
-    assert_eq!(fs::read(kept.aside_of(&service()).join("0")).unwrap(), b"later");
+    assert_eq!(
+        fs::read(kept.aside_of(&service()).join("0")).unwrap(),
+        b"later"
+    );
 }
 
 #[test]
@@ -542,5 +556,8 @@ fn a_drop_removes_the_set_and_a_stale_staging_directory() {
 #[test]
 fn unowned_is_the_candidates_less_the_owned() {
     let owned: BTreeSet<String> = paths(&["/b"]).into_iter().collect();
-    assert_eq!(unowned(&paths(&["/a", "/b", "/c"]), &owned), paths(&["/a", "/c"]));
+    assert_eq!(
+        unowned(&paths(&["/a", "/b", "/c"]), &owned),
+        paths(&["/a", "/c"])
+    );
 }

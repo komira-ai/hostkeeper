@@ -71,12 +71,21 @@ fn a_hand_placed_file_survives_a_failed_first_install_of_a_pkg() {
     assert!(
         matches!(
             &ended,
-            Reply::Finished { verdict: Verdict::Failed { class: Class::Release, .. }, .. }
+            Reply::Finished {
+                verdict: Verdict::Failed {
+                    class: Class::Release,
+                    ..
+                },
+                ..
+            }
         ),
         "{ended:?}"
     );
     assert_eq!(mac.mac.receipt(IDENTIFIER), None, "the package is removed");
-    assert!(!mac.real("/Library/Application Support/hello/hello").exists());
+    assert!(
+        !mac.real("/Library/Application Support/hello/hello")
+            .exists()
+    );
     assert_eq!(seen(&mac), before);
     assert!(!set_dir(&mac).exists(), "the kept copy is dropped");
 }
@@ -140,12 +149,18 @@ fn a_kept_copy_missing_at_the_uninstall_of_a_pkg_raises_an_alert() {
     let (daemon, log) = alerting(mac.daemon());
     let one = mac.publish("1.0.0", package("1.0.0"));
     let ended = daemon.order(&install_of("1.0.0", &one, 1));
-    assert!(matches!(&ended, Reply::Finished { reason: None, .. }), "{ended:?}");
+    assert!(
+        matches!(&ended, Reply::Finished { reason: None, .. }),
+        "{ended:?}"
+    );
     fs::remove_file(set_dir(&mac).join("0")).expect("the copy goes");
     support_macos_pkg::open_up(&mac.rig.packages);
 
     let ended = daemon.order(&uninstall(SERVICE, 2));
-    assert!(matches!(&ended, Reply::Finished { reason: None, .. }), "{ended:?}");
+    assert!(
+        matches!(&ended, Reply::Finished { reason: None, .. }),
+        "{ended:?}"
+    );
     assert!(!mac.real(FILE).exists(), "the path stays empty");
     assert!(!set_dir(&mac).exists());
     assert_eq!(

@@ -107,13 +107,16 @@ impl RepositoryInstaller<'_> {
             .map_err(|e| io_failure("the payload's paths on the host", e))?;
         let owned = match candidates.is_empty() {
             true => BTreeSet::new(),
-            false => {
-                self.backend
-                    .owned(self.tools, &candidates, order.bounds.activate)?
-            }
+            false => self
+                .backend
+                .owned(self.tools, &candidates, order.bounds.activate)?,
         };
-        kept.keep(&order.service, &order.package, &unowned(&candidates, &owned))
-            .map_err(kept_failure)
+        kept.keep(
+            &order.service,
+            &order.package,
+            &unowned(&candidates, &owned),
+        )
+        .map_err(kept_failure)
     }
 
     /// Reloads the service manager after the units or their links changed.

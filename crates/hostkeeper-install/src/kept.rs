@@ -183,8 +183,9 @@ impl Kept {
         };
         for path in paths {
             let copy = set.files.len().to_string();
-            if let Some(file) =
-                self.copy_in(path, &staging.join(&copy), copy).map_err(|e| fail(path.as_str(), e))?
+            if let Some(file) = self
+                .copy_in(path, &staging.join(&copy), copy)
+                .map_err(|e| fail(path.as_str(), e))?
             {
                 set.files.push(file);
             }

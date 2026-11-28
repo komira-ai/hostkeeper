@@ -48,7 +48,10 @@ fn a_file_no_receipt_lists_is_kept_at_a_first_install_and_put_back_after_its_rem
     assert_eq!(set.package, IDENTIFIER);
 
     rig.pkg().remove(&order, &[&dir]).unwrap();
-    assert!(!rig.exists(&home("VERSION")), "remove deletes what the receipt lists");
+    assert!(
+        !rig.exists(&home("VERSION")),
+        "remove deletes what the receipt lists"
+    );
     assert_eq!(rig.kept.put_back(&service()).unwrap(), Vec::new());
     assert_eq!(seen(&rig, &home("VERSION")), before);
     rig.kept.drop_set(&service()).unwrap();
@@ -84,8 +87,11 @@ fn a_file_another_receipt_lists_is_not_kept_and_the_install_is_refused_as_today(
 fn a_file_the_packages_own_receipt_lists_is_not_kept() {
     let rig = Rig::new("pkg-kept-own");
     rig.write(&home("VERSION"), b"0.9", 0o644);
-    rig.mac
-        .set_receipt(IDENTIFIER, "0.9", &["Library/Application Support/svc/VERSION"]);
+    rig.mac.set_receipt(
+        IDENTIFIER,
+        "0.9",
+        &["Library/Application Support/svc/VERSION"],
+    );
     rig.mac.add(v1());
     let order = rig.order_run("1.0", &BOTH);
     let dir = rig.stage(&order, "svc-1.0");
@@ -129,7 +135,11 @@ fn an_update_keeps_the_first_installs_set_and_keeps_nothing_new() {
 fn a_first_install_whose_copy_cannot_be_kept_installs_nothing() {
     let rig = Rig::new("pkg-kept-fails");
     rig.write(&home("VERSION"), b"hand-placed", 0o600);
-    fs::write(rig.scratch.path().join("kept"), "a file where the store goes").unwrap();
+    fs::write(
+        rig.scratch.path().join("kept"),
+        "a file where the store goes",
+    )
+    .unwrap();
     rig.mac.add(v1());
     let order = rig.order_run("1.0", &BOTH);
     let dir = rig.stage(&order, "svc-1.0");
