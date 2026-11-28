@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_daemon::filesystems::{
-    DATA_VOLUME, MOUNTINFO, Usage, linux_mounts, read, statvfs, usage,
+    Blocks, DATA_VOLUME, MOUNTINFO, Usage, linux_mounts, read, statvfs, usage,
 };
 use hostkeeper_daemon::hardware_sources::SourceRead;
 use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
@@ -213,6 +213,53 @@ fn nine_filesystems_send_eight_and_a_long_mount_point_is_cut() {
     let stat = fake(root, &[(long.as_str(), rw(1, 1))]);
     let cut = usage(root, vec![long.clone()], &stat);
     assert_eq!(cut[0].mount, long[..31]);
+}
+
+/// Proves the size is the blocks less those reserved for root, times the fragment size, so the
+/// percent used is `df`'s: an ext4 filesystem of 1000 blocks of 4096 bytes, 300 free of which 250
+/// an unprivileged writer may write (50 reserved), is 950 blocks of size and 250 available, 73%
+/// used where the blocks alone would say 75%; a filesystem that says more available than free
+/// has none reserved; and no product passes `u64::MAX`.
+///
+/// Catches: a size of all the blocks, which alerts an ext4 disk with its 5% reserve 5 points
+/// early, or the fragment size left out of either count.
+#[test]
+fn the_size_leaves_out_the_blocks_reserved_for_root() {
+    let ext4 = Blocks {
+        total: 1000,
+        free: 300,
+        available: 250,
+        fragment_bytes: 4096,
+    };
+    assert_eq!(
+        Usage::of(ext4, false),
+        Usage {
+            size_bytes: 950 * 4096,
+            available_bytes: 250 * 4096,
+            read_only: false,
+        }
+    );
+    let unreserved = Blocks {
+        free: 250,
+        available: 300,
+        ..ext4
+    };
+    assert_eq!(Usage::of(unreserved, true).size_bytes, 1000 * 4096);
+    assert!(Usage::of(unreserved, true).read_only);
+    let huge = Blocks {
+        total: u64::MAX,
+        free: u64::MAX,
+        available: u64::MAX,
+        fragment_bytes: 4096,
+    };
+    assert_eq!(
+        Usage::of(huge, false),
+        Usage {
+            size_bytes: u64::MAX,
+            available_bytes: u64::MAX,
+            read_only: false,
+        }
+    );
 }
 
 /// Proves `statvfs` of a directory gives its filesystem's size and available bytes, read-write,

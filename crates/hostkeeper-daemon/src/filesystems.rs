@@ -58,18 +58,52 @@ pub struct Usage {
     pub read_only: bool,
 }
 
-/// `statvfs` of `path`; none when it fails.
+/// The block counts of one filesystem, as `statvfs` gives them, each in fragments of
+/// `fragment_bytes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Blocks {
+    /// All its blocks (`f_blocks`).
+    pub total: u64,
+    /// Its free blocks, those reserved for root among them (`f_bfree`).
+    pub free: u64,
+    /// Its free blocks an unprivileged writer may write (`f_bavail`).
+    pub available: u64,
+    /// The bytes of a block (`f_frsize`).
+    pub fragment_bytes: u64,
+}
+
+impl Usage {
+    /// The usage of a filesystem of `blocks`, read-only when `read_only`: its size is its blocks
+    /// less those reserved for root (its free blocks less its available ones), so that the
+    /// percent used of its available bytes is `df`'s. Each count saturates: a filesystem that says
+    /// more available than free blocks has none reserved, and no product passes `u64::MAX`.
+    #[must_use]
+    pub fn of(blocks: Blocks, read_only: bool) -> Usage {
+        let reserved = blocks.free.saturating_sub(blocks.available);
+        Usage {
+            size_bytes: blocks
+                .total
+                .saturating_sub(reserved)
+                .saturating_mul(blocks.fragment_bytes),
+            available_bytes: blocks.available.saturating_mul(blocks.fragment_bytes),
+            read_only,
+        }
+    }
+}
+
+/// `statvfs` of `path`, as [`Usage::of`] counts it; none when it fails.
 #[must_use]
 pub fn statvfs(path: &Path) -> Option<Usage> {
     let stat = rustix::fs::statvfs(path).ok()?;
-    Some(Usage {
-        size_bytes: stat
-            .f_blocks
-            .saturating_sub(stat.f_bfree.saturating_sub(stat.f_bavail))
-            .saturating_mul(stat.f_frsize),
-        available_bytes: stat.f_bavail.saturating_mul(stat.f_frsize),
-        read_only: stat.f_flag.contains(rustix::fs::StatVfsMountFlags::RDONLY),
-    })
+    Some(Usage::of(
+        Blocks {
+            total: stat.f_blocks,
+            free: stat.f_bfree,
+            available: stat.f_bavail,
+            fragment_bytes: stat.f_frsize,
+        },
+        stat.f_flag.contains(rustix::fs::StatVfsMountFlags::RDONLY),
+    ))
 }
 
 /// The mount points of `mountinfo` (the text of [`MOUNTINFO`]) the daemon reports (the module's
