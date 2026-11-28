@@ -36,17 +36,18 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
-use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_link::{
     Drift, Health, HeldHalt, HeldHalts, Liveness, MaintainOrder, MaintainSink, Observation, Order,
-    OrderId, OrderRef, OrderResult, OrderSink, Outcome, Reason, RecordedService, Renewal,
-    RenewalSource, ServiceObserver, ServiceRecords, Target, TrustedRootFacts, TrustedRootSource,
-    UnixClock, Verb,
+    OrderId, OrderRef, OrderResult, OrderSink, Outcome, Reason, RecordedDeferrals, RecordedService,
+    Renewal, RenewalSource, ServiceObserver, ServiceRecords, Target, TrustedRootFacts,
+    TrustedRootSource, UnixClock, Verb,
 };
 use hostkeeper_observe::{RestartWindow, ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
+use hostkeeper_wire::wire::cut_marked;
 
 use crate::executor::{Ctx, Daemon, Reply};
 use crate::host_health::HealthKeeper;
@@ -284,14 +285,10 @@ fn finished(base: OrderResult, verdict: &Verdict, reason: Option<&str>) -> Order
     }
 }
 
-/// `text` cut to at most [`MAX_DETAIL`] bytes, at a character boundary.
+/// `text` cut to at most [`MAX_DETAIL`] bytes, at a character boundary, ending in the mark `…`
+/// when it was cut ([`cut_marked`]).
 fn bounded(text: &str) -> String {
-    text.chars()
-        .scan(0, |used, c| {
-            *used += c.len_utf8();
-            (*used <= MAX_DETAIL).then_some(c)
-        })
-        .collect()
+    cut_marked(text, MAX_DETAIL)
 }
 
 /// The held-halt port over the daemon's own store.
@@ -406,7 +403,7 @@ impl ServiceRecords for DaemonRecords {
 /// coordinator still holds for the host.
 pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
     let version = installed::linked_version(&ctx.dirs.packages, &service, CURRENT)?;
-    let (updating, record_try, last_result) = match ctx.store(&service).load() {
+    let (updating, record_try, last_result, deferring) = match ctx.store(&service).load() {
         Ok(Loaded::Current(record)) => {
             let updating = match record.state {
                 State::Finished { .. } => None,
@@ -415,9 +412,10 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
             let settled = (service.as_str() == SELF_SERVICE)
                 .then(|| settled_result(&record))
                 .flatten();
-            (updating, record.order_try, settled)
+            let deferring = deferring(ctx, &record);
+            (updating, record.order_try, settled, deferring)
         }
-        _ => (None, None, None),
+        _ => (None, None, None, None),
     };
     let installer = recorded_installer(ctx, &service);
     Some(RecordedService {
@@ -427,6 +425,28 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
         last_result,
         record_try,
         installer,
+        deferring,
+    })
+}
+
+/// How the `verify` of the update `record` holds has deferred, while that update is unfinished
+/// at `verify` in its verify window (not the watcher of a pending promotion): the run it is at,
+/// how many runs deferred, the last one's reason (none when it is no token) and its detail cut to
+/// [`MAX_DETAIL`], and the seconds since the first, none when that was stamped in another boot.
+/// `None` otherwise.
+fn deferring(ctx: &Ctx, record: &Record) -> Option<RecordedDeferrals> {
+    let unfinished = !matches!(record.state, State::Finished { .. });
+    let waiting = unfinished & (record.step == Step::Verify) & record.progress.watching.is_none();
+    let deferrals = record.progress.deferrals.as_ref().filter(|_| waiting)?;
+    Some(RecordedDeferrals {
+        attempt: record.attempt,
+        count: deferrals.count,
+        reason: deferrals
+            .reason
+            .as_deref()
+            .and_then(|reason| Reason::new(reason).ok()),
+        detail: deferrals.detail.as_deref().map(bounded),
+        age_secs: deferrals.since.elapsed_secs(&*ctx.clock),
     })
 }
 

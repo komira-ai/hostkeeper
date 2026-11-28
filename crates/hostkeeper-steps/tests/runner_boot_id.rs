@@ -7,13 +7,21 @@ mod support;
 
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::Finished;
-use hostkeeper_steps::runner::WATCH_POLL_SECS;
+use hostkeeper_steps::runner::{REASON_VERIFY_DEADLINE, WATCH_POLL_SECS};
 use support::{DEFER, PENDING, Rig};
 
 fn failed(phase: Phase, class: Class) -> Finished {
     Finished {
         verdict: Verdict::Failed { phase, class },
         reason: None,
+    }
+}
+
+/// `failed`, with the reason of a verify window that ended on deferrals that gave none.
+fn timed_out(phase: Phase, class: Class) -> Finished {
+    Finished {
+        reason: Some(REASON_VERIFY_DEADLINE.to_owned()),
+        ..failed(phase, class)
     }
 }
 
@@ -45,7 +53,7 @@ fn a_verify_window_closes_while_the_boot_id_cannot_be_read() {
     order.bounds.verify_deadline_secs = 250;
     rig.fake.say(Step::Verify, &[DEFER; 8]);
     let got = rig.runner().run(&order).expect("a verdict");
-    assert_eq!(got, failed(Phase::GateRelease, Class::Release));
+    assert_eq!(got, timed_out(Phase::GateRelease, Class::Release));
     assert_eq!(verify_bounds(&rig), [250, 150, 50]);
     assert_eq!(rig.fake.steps().last(), Some(&Step::Rollback));
     assert_eq!(rig.clock.slept(), [100, 100]);

@@ -27,7 +27,7 @@ use std::io;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::names::{MAX_UNIT_NAME, is_service_name};
 use hostkeeper_hook::{
@@ -46,6 +46,10 @@ use crate::order_util::{
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
 pub use crate::switch::{Builtin, Switch, SwitchError, Toward};
 use crate::switch::{remove_after, remove_unstarted};
+pub use window::REASON_VERIFY_DEADLINE;
+use window::verdict_reason;
+
+mod window;
 
 /// The protocol version of this updater: an order's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
@@ -818,20 +822,6 @@ impl StepRunner {
         Ok(closed)
     }
 
-    /// The bound of the step about to run: its own, and for `verify` before the update has
-    /// succeeded no more than the time left of the verify window. `None` when nothing is left.
-    fn bound(&self, order: &UpdateOrder, rec: &Record) -> Option<Bound> {
-        let own = order.bounds.bound(rec.step)?;
-        match (&rec.progress.verify_started, own) {
-            (Some(began), Bound::Secs(secs)) if rec.step == Step::Verify => {
-                let spent = self.spent(began);
-                let left = order.bounds.verify_deadline_secs.saturating_sub(spent);
-                NonZeroU64::new(secs.get().min(left)).map(Bound::Secs)
-            }
-            _ => Some(own),
-        }
-    }
-
     /// Decides from a step that ended what comes next.
     fn after(
         &self,
@@ -861,6 +851,8 @@ impl StepRunner {
         ctx.observe(step, &report);
         rec.progress.committed = ctx.committed;
         rec.progress.promotion_pending = ctx.promotion_pending;
+        let passed = ctx.verify_deadline_passed;
+        let ended = self.window_ended(order, rec, (outcome, code), &report, passed);
         // A first install has no release to go back to: a `rollback` that fails saying so
         // declines the install, which ends `Failed` rather than in a halt (C3).
         let declined = (step == Step::Rollback)
@@ -875,7 +867,10 @@ impl StepRunner {
                 },
                 class: report.class,
             }),
-            false => next(step, outcome, &report, &ctx),
+            false => match &ended {
+                Some(ended) => ended.rollback(ctx.committed),
+                None => next(step, outcome, &report, &ctx),
+            },
         };
         match then {
             Next::Run(then) => {
@@ -886,6 +881,9 @@ impl StepRunner {
                 self.move_to(rec, then);
             }
             Next::Again { step, after_secs } => {
+                if (step == Step::Verify) && self.written_before_the_wait(rec)? {
+                    return Ok(());
+                }
                 self.clock
                     .sleep_secs(wait_secs(after_secs, DEFAULT_RETRY_SECS));
                 if step != Step::Verify {
@@ -897,6 +895,10 @@ impl StepRunner {
             Next::Rollback { then } => {
                 rec.progress.then = Some(then);
                 rec.progress.reason = report.reason;
+                if let Some(ended) = &ended {
+                    ended.keep(&mut rec.progress);
+                }
+                rec.progress.keep_cause();
                 rec.progress.retry = 0;
                 self.move_to(rec, Step::Rollback);
             }
@@ -906,7 +908,7 @@ impl StepRunner {
                 if matches!(verdict, Verdict::Succeeded { .. }) {
                     self.confirm(order)?;
                 }
-                let reason = report.reason.or(rec.progress.reason.clone());
+                let reason = verdict_reason(step, outcome, report.reason, &mut rec.progress);
                 self.report(rec, verdict, reason);
             }
         }
@@ -917,33 +919,6 @@ impl StepRunner {
         rec.step = step;
         rec.attempt = 1;
         rec.state = State::Pending;
-    }
-
-    /// The seconds spent of the window begun at `began`: on the clock when it is of this boot
-    /// ([`Stamp::elapsed_secs`]). One that may be of another boot, its boot id or the clock's
-    /// being another or unknown, begins again when this runner first meets it, and from then is
-    /// measured on the monotonic clock of this process (which no boot outlives): a boot id that
-    /// stays unreadable restarts the window once, never at every read.
-    fn spent(&self, began: &Stamp) -> u64 {
-        if let Some(secs) = began.elapsed_secs(&*self.clock) {
-            return secs;
-        }
-        let now = self.clock.mono_secs();
-        let mut met = self.met.lock().unwrap_or_else(PoisonError::into_inner);
-        let first = *met
-            .entry((began.boot_id.clone(), began.mono_secs))
-            .or_insert(now);
-        now.saturating_sub(first)
-    }
-
-    /// Whether another run of `verify` after the wait would fall outside the verify window.
-    fn verify_window_passed(&self, order: &UpdateOrder, rec: &Record, report: &Report) -> bool {
-        let Some(began) = &rec.progress.verify_started else {
-            return false;
-        };
-        let wait = wait_secs(report.retry_after_secs, DEFAULT_RETRY_SECS);
-        let spent = self.spent(began);
-        spent.saturating_add(wait) >= order.bounds.verify_deadline_secs
     }
 
     /// The update is over, or (a pending promotion) the watcher begins.

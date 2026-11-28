@@ -56,6 +56,7 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
         health_reason: None,
         health_body: None,
         restarts: None,
+        deferring: None,
     }
 }
 
@@ -369,6 +370,7 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
                 health_reason: None,
                 health_body: None,
                 restarts: None,
+                deferring: None,
             }
         })
         .collect();

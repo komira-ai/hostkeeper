@@ -7,8 +7,8 @@ use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::hold_scope::Scope;
 use hostkeeper_wire::wire::{
-    Class, CommitState, DeferredReport, Health, Heartbeat, OrderId, Outcome, Phase, StepName,
-    StepRun, Token, UpdateResult,
+    Class, CommitState, DeferredReport, Health, Heartbeat, OrderId, Outcome, Phase, StepDeferrals,
+    StepName, StepRun, Token, UpdateResult,
 };
 
 use crate::converge::{Convergence, HaltNote, RoleCounts, State};
@@ -870,8 +870,14 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
     b.last_update = Some(full_update());
     b.updating = Some(version("3.0"));
     b.step = Some(StepRun {
-        name: StepName::parse("cutover").expect("a step"),
+        name: StepName::parse("verify").expect("a step"),
         attempt: 2,
+        deferrals: Some(StepDeferrals {
+            count: 3,
+            reason: Token::parse("provider_busy"),
+            detail: Some("the tree was not made".to_owned()),
+            since_unix: Some(1_790_000_000),
+        }),
     });
     b.commit = Some(CommitState::Committed);
     b.step_secs = BTreeMap::from([
@@ -900,8 +906,14 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
             last_update: Some(full_update_proto()),
             updating: Some("3.0".to_owned()),
             step: Some(agent::StepRun {
-                name: "cutover".to_owned(),
+                name: "verify".to_owned(),
                 attempt: 2,
+                deferrals: Some(agent::StepDeferrals {
+                    count: 3,
+                    reason: Some("provider_busy".to_owned()),
+                    detail: Some("the tree was not made".to_owned()),
+                    since_unix: Some(1_790_000_000),
+                }),
             }),
             commit: agent::CommitState::Committed as i32,
             step_secs: HashMap::from([("prepare".to_owned(), 4), ("cutover".to_owned(), 9)]),

@@ -15,7 +15,8 @@
 //! version, health `healthy`, no update) and every entry is in `services`, which is sent even
 //! when it is empty. A fact that has no field in the JSON (the log tail and start of an update,
 //! a pin) is left out. An update's detail is kept, as its `detail` key, which the JSON reader
-//! cuts to `MAX_DETAIL_BYTES`. The host's clock and certificate (`sent_unix`,
+//! cuts to `MAX_DETAIL_BYTES`, ending in `…` when it is cut; so are the deferrals of a running
+//! `verify`, as `step.deferrals`. The host's clock and certificate (`sent_unix`,
 //! `cert_not_after_unix`, `last_renew_error`) are top-level keys, each only when the request
 //! sets it. So is the maintenance report, as `maintenance`: standard base64 of its encoding
 //! ([`crate::maintenance`]).
@@ -99,10 +100,16 @@ fn facts(entry: &proto::ServiceBeat) -> Map<String, Value> {
         object.insert("updating".to_owned(), target.clone().into());
     }
     if let Some(step) = &entry.step {
-        object.insert(
-            "step".to_owned(),
-            json!({ "name": step.name, "attempt": step.attempt }),
-        );
+        let mut read = json!({ "name": step.name, "attempt": step.attempt });
+        if let Some(deferrals) = &step.deferrals {
+            read["deferrals"] = json!({
+                "count": deferrals.count,
+                "reason": deferrals.reason,
+                "detail": deferrals.detail,
+                "since_unix": deferrals.since_unix,
+            });
+        }
+        object.insert("step".to_owned(), read);
     }
     if let Some(commit) = commit(entry.commit()) {
         object.insert("commit".to_owned(), commit.into());

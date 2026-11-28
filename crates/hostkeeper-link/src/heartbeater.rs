@@ -112,7 +112,7 @@ use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
     Feature, Features, Health, Heartbeat, Liveness, LocalHalt, Observed, Platform, Renewal,
-    ServiceFacts, fit,
+    ServiceFacts, VerifyDeferrals, fit,
 };
 use crate::deferral::{Book, deferral_of};
 use crate::host_facts::PushedFacts;
@@ -510,6 +510,7 @@ impl Heartbeater {
                 last_result,
                 record_try,
                 installer,
+                deferring,
             } = recorded;
             if self.seen.insert(name.as_str().to_owned())
                 && let Some(result) = last_result
@@ -556,6 +557,7 @@ impl Heartbeater {
                 health_reason,
                 health_body: observation.health_body,
                 restarts: observation.restarts,
+                deferring: deferring.map(|recorded| VerifyDeferrals::at(recorded, now)),
                 name,
             });
         }
@@ -669,6 +671,7 @@ impl Heartbeater {
             health_reason: None,
             health_body: None,
             restarts: None,
+            deferring: None,
             name,
         }
     }

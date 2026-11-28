@@ -205,6 +205,26 @@ pub struct RecordedService {
     /// The installer the installed release came through (`apt`, for one); none for
     /// `hostkeeper-archive`. Sent on the gRPC route only.
     pub installer: Option<String>,
+    /// The deferrals of `verify` while the running update waits in its verify window; none when
+    /// no update runs, it is at another step, or its `verify` has not deferred.
+    pub deferring: Option<RecordedDeferrals>,
+}
+
+/// How the `verify` of the running update has deferred, as its step record says
+/// (`Progress::deferrals` of hostkeeper-steps).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedDeferrals {
+    /// The run of `verify` the update is at, from 1.
+    pub attempt: u32,
+    /// How many runs of it deferred.
+    pub count: u32,
+    /// The reason the last of them gave; none when it gave none, or one that is no token.
+    pub reason: Option<Reason>,
+    /// The detail the last of them gave, cut to its bound; none when it gave none.
+    pub detail: Option<String>,
+    /// Seconds since the first of them; none when that cannot be measured (it was stamped in
+    /// another boot).
+    pub age_secs: Option<u64>,
 }
 
 /// The services installed on the host, from their step records: never a list of names from a

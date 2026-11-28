@@ -47,7 +47,7 @@ use crate::maintenance::maintenance_json;
 use crate::names::Reason;
 use crate::operator_keys::KeysReport;
 use crate::order::{DeferredReport, OrderResult};
-use crate::ports::{Drift, HeldHalt};
+use crate::ports::{Drift, HeldHalt, RecordedDeferrals};
 use crate::prerequisites::PrerequisitesReport;
 use crate::probe::RemoteLoginProbe;
 use crate::repositories::RepositoriesReport;
@@ -368,6 +368,56 @@ pub struct ServiceFacts {
     /// over gRPC only (`ServiceBeat.restarts`), counted toward the bound on both, and dropped with
     /// [`ServiceFacts::health_body`].
     pub restarts: Option<ServiceRestarts>,
+    /// The deferrals of `verify` while the running update waits in its verify window
+    /// ([`VerifyDeferrals`]); none otherwise. Sent over gRPC only (`ServiceBeat.step`), counted
+    /// toward the bound on both, and dropped with [`ServiceFacts::deferred`]
+    /// ([`OptionalFact::DeferralDetail`]).
+    pub deferring: Option<VerifyDeferrals>,
+}
+
+/// What the host waits for while its update's `verify` defers: the run it is at, how many runs
+/// deferred, the last one's reason and detail, and since when. The coordinator shows it in the
+/// host's view while the update runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifyDeferrals {
+    /// The run of `verify` the update is at, from 1.
+    pub attempt: u32,
+    /// How many runs of it deferred.
+    pub count: u32,
+    /// The reason the last of them gave; none when it gave none.
+    pub reason: Option<Reason>,
+    /// The detail the last of them gave; none when it gave none.
+    pub detail: Option<String>,
+    /// When the first of them ended, in unix seconds; none when that cannot be told.
+    pub since_unix: Option<u64>,
+}
+
+impl VerifyDeferrals {
+    /// The report of `recorded` at `now`, in unix seconds: the first deferral `age_secs` before
+    /// it (at the epoch when the age is greater than `now`).
+    pub fn at(recorded: RecordedDeferrals, now: u64) -> VerifyDeferrals {
+        VerifyDeferrals {
+            attempt: recorded.attempt,
+            count: recorded.count,
+            reason: recorded.reason,
+            detail: recorded.detail,
+            since_unix: recorded.age_secs.map(|age| now.saturating_sub(age)),
+        }
+    }
+
+    /// The report as JSON, with the wire's names: the step `verify`, its run, and the deferrals.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "name": "verify",
+            "attempt": self.attempt,
+            "deferrals": {
+                "count": self.count,
+                "reason": self.reason.as_ref().map(Reason::as_str),
+                "detail": self.detail,
+                "since_unix": self.since_unix,
+            },
+        })
+    }
 }
 
 /// A halt the host holds of a service, as the heartbeat reports it: the coordinator shows the
@@ -437,6 +487,9 @@ impl ServiceFacts {
         }
         if let Some(restarts) = &self.restarts {
             facts["restarts"] = restarts_json(restarts);
+        }
+        if let Some(deferring) = &self.deferring {
+            facts["step"] = deferring.to_json();
         }
         facts
     }
@@ -697,7 +750,10 @@ impl Heartbeat {
                 service.restarts = None;
             }),
             OptionalFact::HealthDetail => services.for_each(|service| service.health_detail = None),
-            OptionalFact::DeferralDetail => services.for_each(|service| service.deferred = None),
+            OptionalFact::DeferralDetail => services.for_each(|service| {
+                service.deferred = None;
+                service.deferring = None;
+            }),
             OptionalFact::ObserverDetail => services.for_each(|service| service.observed = None),
         }
     }
@@ -715,7 +771,7 @@ pub enum OptionalFact {
     RemoteLoginProbe,
     /// [`ServiceFacts::health_detail`].
     HealthDetail,
-    /// [`ServiceFacts::deferred`].
+    /// [`ServiceFacts::deferred`] and [`ServiceFacts::deferring`].
     DeferralDetail,
     /// [`ServiceFacts::observed`].
     ObserverDetail,

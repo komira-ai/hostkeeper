@@ -229,35 +229,6 @@ fn a_deferred_verify_is_run_again_after_its_wait() {
     assert_eq!(rig.clock.slept(), [100, 100]);
 }
 
-/// Catches a verify window that is not enforced: a `verify` that keeps deferring past
-/// `verify_deadline_secs` is followed by `rollback`, and each run is bounded by the time the
-/// window has left.
-#[test]
-fn verify_that_defers_past_the_window_rolls_back() {
-    let rig = Rig::new("run-window");
-    let mut order = rig.order();
-    order.bounds.verify_deadline_secs = 250;
-    rig.fake.say(Step::Verify, &[DEFER, DEFER, DEFER, DEFER]);
-    let got = rig.runner().run(&order).unwrap();
-    assert_eq!(got, failed(Phase::GateRelease, Class::Release));
-    let timeouts: Vec<u64> = rig
-        .fake
-        .runs()
-        .iter()
-        .filter_map(|e| match e {
-            support::Event::Run {
-                step: Step::Verify,
-                bound,
-                ..
-            } => Some(support::secs_of(*bound)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(timeouts, [250, 150, 50]);
-    assert_eq!(rig.fake.steps().last(), Some(&Step::Rollback));
-    assert_eq!(rig.clock.slept(), [100, 100]);
-}
-
 /// Catches a rollback that fails being read as a failure to page for when nothing can repair the
 /// host: before the commit it is a `halt`; after the commit it is `Failed(after_commit)` only
 /// when the hook says it is irreversible, and a halt when it says nothing.

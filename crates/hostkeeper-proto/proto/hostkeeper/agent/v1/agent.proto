@@ -695,7 +695,9 @@ message UpdateResult {
   // on the host (`package_digest_mismatch`, `path_conflict` and the like); or FAILED after the switch, with
   // the reason `link_failed`, `daemon_reload_failed` or `start_failed`.
   bool forced = 9;
-  // What the hook or the daemon said of the outcome, at most 512 bytes.
+  // What the hook or the daemon said of the outcome, at most 512 bytes, ending in `…` when it
+  // was cut. A verify window that ended with the hook deferring says so here:
+  // `verify deferred N times over S seconds; last reason: R; last detail: D`.
   optional string detail = 10;
   // The last lines of the step's output, at most 20, each at most 200 bytes. When a heartbeat
   // would exceed 16 KiB, these and the other optional facts are the first dropped.
@@ -717,6 +719,29 @@ message StepRun {
   string name = 1;
   // The try, from 1.
   uint32 attempt = 2;
+  // Present while the step is `verify` and it has deferred in the update's verify window: what
+  // the host waits for. A hostkeeper daemon sends `step` only then. Read only over gRPC; a
+  // coordinator that predates it skips it, and the first of a service's facts a heartbeat over
+  // its 16 KiB leaves out, with `deferred`.
+  StepDeferrals deferrals = 3;
+}
+
+// How the `verify` of a running update has deferred (exit 75) in its verify window. When the
+// window ends with it still deferring, the update fails with the class of the last deferral, its
+// reason (`verify_deadline` when it gave none) and the detail
+// `verify deferred N times over S seconds; last reason: R; last detail: D`.
+message StepDeferrals {
+  // How many runs of `verify` deferred, from 1.
+  uint32 count = 1;
+  // The reason the last of them gave, a token of 1 to 64 bytes of `[a-z0-9_]`; absent when it
+  // gave none.
+  optional string reason = 2;
+  // The detail the last of them gave, at most 512 bytes, ending in `…` when it was cut; absent
+  // when it gave none.
+  optional string detail = 3;
+  // When the first of them ended, in unix seconds by the host's clock; absent when the host
+  // cannot tell (it was stamped in another boot).
+  optional uint64 since_unix = 4;
 }
 
 // An update the host declined for a reason about its moment.

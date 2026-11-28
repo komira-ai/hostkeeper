@@ -26,6 +26,7 @@ fn facts(local_halt: Option<LocalHalt>) -> ServiceFacts {
         health_reason: None,
         health_body: None,
         restarts: None,
+        deferring: None,
     }
 }
 

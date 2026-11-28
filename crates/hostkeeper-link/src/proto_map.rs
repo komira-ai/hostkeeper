@@ -43,6 +43,7 @@ use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 
 use crate::beat::{
     AGENT_NAME, Feature, Health, Heartbeat, LocalHalt, Platform, RootReason, ServiceFacts,
+    VerifyDeferrals,
 };
 use crate::full_disk_access::FullDiskAccess;
 use crate::host_facts::PushedFacts;
@@ -287,8 +288,26 @@ fn service(facts: &ServiceFacts) -> Result<pb::ServiceBeat, Unsendable> {
         health_reason: facts.health_reason.clone(),
         health_body: facts.health_body.clone(),
         restarts: facts.restarts.clone(),
+        step: facts.deferring.as_ref().map(deferring),
         ..pb::ServiceBeat::default()
     })
+}
+
+/// The deferrals of a running `verify` as `step`: the step `verify`, its run, and `deferrals`.
+fn deferring(deferring: &VerifyDeferrals) -> pb::StepRun {
+    pb::StepRun {
+        name: "verify".to_owned(),
+        attempt: deferring.attempt,
+        deferrals: Some(pb::StepDeferrals {
+            count: deferring.count,
+            reason: deferring
+                .reason
+                .as_ref()
+                .map(|reason| reason.as_str().to_owned()),
+            detail: deferring.detail.clone(),
+            since_unix: deferring.since_unix,
+        }),
+    }
 }
 
 /// A halt the host holds as `local_halt`.
@@ -654,3 +673,7 @@ mod maintenance_tests;
 #[cfg(test)]
 #[path = "proto_map_health_tests.rs"]
 mod health_tests;
+
+#[cfg(test)]
+#[path = "proto_map_deferring_tests.rs"]
+mod deferring_tests;

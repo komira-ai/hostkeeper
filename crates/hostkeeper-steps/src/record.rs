@@ -128,6 +128,63 @@ pub struct Progress {
     /// only when set, and a record without it loads as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<HookDetail>,
+    /// How `verify` has deferred in this update's verify window: how often, since when, and what
+    /// its last deferral said. The heartbeat shows it while the update runs, and a window that
+    /// ends with the hook still deferring is reported with it ([`crate::runner`]). Additive:
+    /// written only when set, and a record without it loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferrals: Option<Deferrals>,
+    /// The reason and the `detail` of the failure that sent the update to `rollback`, as
+    /// [`Progress::reason`] and [`Progress::detail`] held them then: a `rollback` that succeeds
+    /// reports that failure with them, whatever its own lines said ([`Progress::restore_cause`]).
+    /// Additive: written only when set, and a record without it loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<HookDetail>,
+}
+
+/// The deferrals of `verify` in one verify window ([`Progress::deferrals`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deferrals {
+    /// How many runs of `verify` deferred (exit `75`).
+    pub count: u32,
+    /// When the first of them ended.
+    pub since: Stamp,
+    /// The class the last of them gave (`release` when its line gave none).
+    pub class: Class,
+    /// The `reason` the last of them gave; `None` when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The `detail` the last of them gave, as the hook wrote it; `None` when it gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// The run of `verify` the last of them was ([`Record::attempt`]): a run read again after a
+    /// restart is not counted twice.
+    pub attempt: u32,
+}
+
+impl Deferrals {
+    /// The deferrals after one more, the run `attempt`, whose line is `report` and which ended at
+    /// `now`: one more counted, the first's time kept, and the class, reason and detail of this
+    /// one's line.
+    pub fn after(
+        before: Option<Deferrals>,
+        report: &Report,
+        now: Stamp,
+        attempt: u32,
+    ) -> Deferrals {
+        let (count, since) = match before {
+            Some(before) => (before.count.saturating_add(1), before.since),
+            None => (1, now),
+        };
+        Deferrals {
+            count,
+            since,
+            class: report.class,
+            reason: report.reason.clone(),
+            detail: report.detail.clone(),
+            attempt,
+        }
+    }
 }
 
 /// The `detail` of a hook's last line, and the `reason` of the same line ([`Progress::detail`]).
@@ -160,6 +217,32 @@ impl Progress {
                 text: text.clone(),
             });
         }
+    }
+
+    /// Keeps, as [`Progress::cause`], the reason and the detail of the failure that sends the
+    /// update to `rollback` now: [`Progress::reason`] and, when it was kept under that reason,
+    /// [`Progress::detail`]. A detail kept under another reason is not the failure's.
+    pub fn keep_cause(&mut self) {
+        let detail = self
+            .detail
+            .as_ref()
+            .filter(|kept| kept.reason == self.reason);
+        self.cause = Some(HookDetail {
+            reason: self.reason.clone(),
+            text: detail.map(|kept| kept.text.clone()).unwrap_or_default(),
+        })
+        .filter(|cause| !cause.text.is_empty());
+    }
+
+    /// The reason a `rollback` that succeeded reports the failure that sent the update to it
+    /// with: that failure's ([`Progress::reason`]), and its detail ([`Progress::cause`]) made the
+    /// one kept again, so that the lines of the `rollback` (a deferral of it with a text of its
+    /// own) do not take its place.
+    pub fn restore_cause(&mut self) -> Option<String> {
+        if let Some(cause) = self.cause.take() {
+            self.detail = Some(cause);
+        }
+        self.reason.clone()
     }
 }
 

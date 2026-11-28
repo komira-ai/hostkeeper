@@ -21,7 +21,8 @@ use crate::version::Version;
 pub use crate::wire_report::{
     Answer, Class, CommitState, DeferredReport, LocalHalt, MAX_ACKS, MAX_FEATURES,
     MAX_FEATURES_BEFORE_SSH, MAX_ORDER_ID, MAX_STEP_NAME, MAX_STEP_SECS, MAX_TOKEN, ORDER_FEATURE,
-    OrderId, PackageDigest, Phase, StepName, StepRun, Token, VERDICT_ACKS_FEATURE, VerdictAck,
+    OrderId, PackageDigest, Phase, StepDeferrals, StepName, StepRun, Token, VERDICT_ACKS_FEATURE,
+    VerdictAck,
 };
 use crate::wire_report::{features_text, is_false, lenient, or_default, step_secs_text};
 
@@ -109,7 +110,8 @@ pub struct UpdateResult {
     )]
     pub order_try: Option<u64>,
     /// What the hook or the updater said of the outcome, in prose (the hook's `detail`), cut to
-    /// [`MAX_DETAIL_BYTES`] at a character boundary when it is read. Absent from an updater that
+    /// [`MAX_DETAIL_BYTES`] at a character boundary, ending in [`CUT_MARK`], when it is read
+    /// longer. Absent from an updater that
     /// predates it, on the frozen JSON route (whose agents send none) and when nothing was said;
     /// a value that is not a string reads as `None`. The coordinator fills it from the gRPC
     /// heartbeat's `UpdateResult.detail`.
@@ -133,14 +135,30 @@ pub(crate) fn cut_text(text: &str, max: usize) -> &str {
     &text[..end]
 }
 
-/// A detail as [`UpdateResult::detail`] reads it: a string cut to [`MAX_DETAIL_BYTES`], and
-/// `None` for anything else.
-fn detail_text<'de, D>(d: D) -> Result<Option<String>, D::Error>
+/// The mark a text cut to its bound ends with ([`cut_marked`]): one character, three bytes.
+pub const CUT_MARK: &str = "…";
+
+/// `text` as it is when it is at most `max` bytes; else cut at a character boundary to leave room
+/// for [`CUT_MARK`], which it then ends with, at most `max` bytes in all, so that a reader can
+/// tell a cut text from a whole one. A `max` smaller than the mark keeps nothing of a longer text.
+pub fn cut_marked(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    match max.checked_sub(CUT_MARK.len()) {
+        Some(room) => format!("{}{CUT_MARK}", cut_text(text, room)),
+        None => String::new(),
+    }
+}
+
+/// A detail as [`UpdateResult::detail`] reads it: a string cut to [`MAX_DETAIL_BYTES`] with the
+/// mark ([`cut_marked`]), and `None` for anything else.
+pub(crate) fn detail_text<'de, D>(d: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let text: Option<String> = lenient(d)?;
-    Ok(text.map(|text| cut_text(&text, MAX_DETAIL_BYTES).to_owned()))
+    Ok(text.map(|text| cut_marked(&text, MAX_DETAIL_BYTES)))
 }
 
 impl PartialEq for UpdateResult {

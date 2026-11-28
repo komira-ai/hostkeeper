@@ -72,6 +72,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 health_reason: None,
                 health_body: None,
                 restarts: None,
+                deferring: None,
             },
             ServiceFacts {
                 local_halt: None,
@@ -92,6 +93,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                 health_reason: None,
                 health_body: None,
                 restarts: None,
+                deferring: None,
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,

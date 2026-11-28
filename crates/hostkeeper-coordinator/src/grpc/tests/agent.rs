@@ -197,8 +197,8 @@ fn each_platform_has_its_json_name_and_an_unknown_one_has_none() {
 /// every fact is every key the JSON route has for it: a health, the last update (its outcome,
 /// phase, class, reason, order and detail), the update running, its step, commit state and step
 /// timings, the promotion, a deferral, and the try the step record holds. The facts that have no JSON key (a pin, an update's
-/// start, force and log tail) are left out. Catches the hook's detail dropped on the way in: the
-/// JSON reader keeps it.
+/// start, force and log tail) are left out. Catches the hook's detail dropped on the way in, and
+/// the deferrals of a running `verify` (`step.deferrals`): the JSON reader keeps them.
 #[test]
 fn a_service_entry_is_the_json_entry_of_its_facts() {
     assert_eq!(
@@ -229,6 +229,12 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         step: Some(proto::StepRun {
             name: "verify".to_owned(),
             attempt: 2,
+            deferrals: Some(proto::StepDeferrals {
+                count: 1,
+                reason: Some("provider_busy".to_owned()),
+                detail: Some("read of /Volumes/build: Operation not permitted".to_owned()),
+                since_unix: Some(1_790_000_000),
+            }),
         }),
         commit: proto::CommitState::Committed as i32,
         step_secs: HashMap::from([("cutover".to_owned(), 41)]),
@@ -255,7 +261,11 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
             "detail": "detail",
         },
         "updating": "3.2",
-        "step": {"name": "verify", "attempt": 2},
+        "step": {"name": "verify", "attempt": 2, "deferrals": {
+            "count": 1, "reason": "provider_busy",
+            "detail": "read of /Volumes/build: Operation not permitted",
+            "since_unix": 1_790_000_000_u64,
+        }},
         "commit": "committed",
         "step_secs": {"cutover": 41},
         "promotion_pending": true,
@@ -286,14 +296,27 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         Some("detail")
     );
     assert_eq!(listed[0].record_try, Some(2));
+    let deferrals = listed[0]
+        .step
+        .as_ref()
+        .and_then(|step| step.deferrals.clone());
+    assert_eq!(
+        deferrals,
+        Some(hostkeeper_wire::wire::StepDeferrals {
+            count: 1,
+            reason: hostkeeper_wire::wire::Token::parse("provider_busy"),
+            detail: Some("read of /Volumes/build: Operation not permitted".to_owned()),
+            since_unix: Some(1_790_000_000),
+        })
+    );
 }
 
 /// Catches a detail longer than the coordinator keeps being stored whole: the gRPC verdict's
 /// detail of 512 bytes, the most a daemon sends, is read cut to `MAX_DETAIL_BYTES` at a
-/// character boundary, and a verdict without one is read without one.
+/// character boundary, ending in the mark `…`, and a verdict without one is read without one.
 #[test]
 fn a_verdicts_detail_is_read_cut_to_the_coordinators_bound() {
-    use hostkeeper_wire::wire::MAX_DETAIL_BYTES;
+    use hostkeeper_wire::wire::{CUT_MARK, MAX_DETAIL_BYTES};
     let with = |detail: Option<String>| {
         let mut one = entry("svc", "1.0");
         one.health = proto::Health::Unhealthy as i32;
@@ -311,10 +334,14 @@ fn a_verdicts_detail_is_read_cut_to_the_coordinators_bound() {
         let listed = read.beat.services.expect("the services");
         listed[0].last_update.clone().expect("the last update")
     };
-    let long = format!("{}é{}", "x".repeat(MAX_DETAIL_BYTES - 1), "y".repeat(255));
+    let room = MAX_DETAIL_BYTES - CUT_MARK.len();
+    let long = format!("{}é{}", "x".repeat(room - 1), "y".repeat(512 - room - 1));
     assert_eq!(long.len(), 512);
     let read = with(Some(long));
-    assert_eq!(read.detail, Some("x".repeat(MAX_DETAIL_BYTES - 1)));
+    assert_eq!(
+        read.detail,
+        Some(format!("{}{CUT_MARK}", "x".repeat(room - 1)))
+    );
     assert_eq!(
         read.reason.as_ref().map(|r| r.as_str()),
         Some("state_invalid")
