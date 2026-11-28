@@ -20,11 +20,18 @@
 //!   the host's last record held for the service, else empty: not known. The enrollment keeps an
 //!   installer it holds for the same service when a record says it is not known.
 //!
+//! Each record is kept with the time of the heartbeat it was taken from by the coordinator's
+//! clock, the time the host's node is seen at ([`crate::fleet::Node::seen`]); `Hosts.List` and
+//! `Hosts.Get` answer it in Unix seconds as they answer the time of the last heartbeat
+//! ([`crate::grpc::report::heard_unix`]), so a host whose record is its last heartbeat's is
+//! listed with a running time equal to its heartbeat's. No wall clock is read to note it.
+//!
 //! The records are in memory under their own lock, taken after the fleet's and holding nothing
 //! else.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::{EnrolledHost, HostRunning, RunningService};
 use hostkeeper_enrollment::names::HostId as StoreHostId;
@@ -39,23 +46,24 @@ use crate::identity::Identity;
 use crate::picks::TARGET_FEATURE;
 use crate::service::Coordinator;
 
-/// The last record of what each host heard runs, and when it was taken (unix seconds).
+/// The last record of what each host heard runs, and the time of the heartbeat it was taken
+/// from, by the coordinator's clock.
 #[derive(Debug, Default)]
 pub(crate) struct Kept {
-    seen: Mutex<BTreeMap<HostId, (HostRunning, u64)>>,
+    seen: Mutex<BTreeMap<HostId, (HostRunning, Duration)>>,
 }
 
 impl Kept {
-    /// Replaces the record of `id`.
-    fn note(&self, id: &HostId, running: HostRunning, unix: u64) {
+    /// Replaces the record of `id`, taken from its heartbeat at `at`.
+    fn note(&self, id: &HostId, running: HostRunning, at: Duration) {
         self.seen
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id.clone(), (running, unix));
+            .insert(id.clone(), (running, at));
     }
 
-    /// The record of `id` and when it was taken, if the host was heard.
-    pub(crate) fn of(&self, id: &HostId) -> Option<(HostRunning, u64)> {
+    /// The record of `id` and the time of the heartbeat it was taken from, if the host was heard.
+    pub(crate) fn of(&self, id: &HostId) -> Option<(HostRunning, Duration)> {
         self.seen
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -195,7 +203,12 @@ impl Coordinator {
     /// with the host's enrollment, which the caller writes once the heartbeat's decision is over
     /// ([`crate::service::Coordinator::keep_noted`]): a duplicate host's heartbeats come from two
     /// daemons, and a retiring host's enrollment is not written for. `fleet` is the lock the
-    /// caller holds, for the installers the host's daemon said over gRPC.
+    /// caller holds, for the installers the host's daemon said over gRPC; `now` is the
+    /// heartbeat's time by the coordinator's clock, the time its node is seen at.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the heartbeat, its host, its time and whether its record is kept"
+    )]
     pub(crate) fn note_running(
         &self,
         fleet: &Fleet,
@@ -204,6 +217,7 @@ impl Coordinator {
         announced: &[ServiceBeat],
         legacy: Option<&str>,
         keep: bool,
+        now: Duration,
     ) -> Option<HostRunning> {
         let before = self.running.of(&who.host_id).map(|(before, _)| before);
         let running = said(
@@ -215,25 +229,28 @@ impl Coordinator {
             before.as_ref(),
         );
         let kept = (keep && self.enrollment().is_some()).then(|| running.clone());
-        self.running
-            .note(&who.host_id, running, self.ops.unix_now());
+        self.running.note(&who.host_id, running, now);
         kept
     }
 
     /// Fills in `host`, a host heard since the coordinator started, with what it runs: the record
-    /// kept from its heartbeats, else what `enrolled` kept; a service whose installer is not
-    /// known takes the one `enrolled` kept for it.
+    /// kept from its heartbeats, at the time of the heartbeat it was taken from (in Unix seconds
+    /// when the coordinator's clock reads `now` and the wall clock `unix_now`, as the time of the
+    /// last heartbeat is), else what `enrolled` kept; a service whose installer is not known
+    /// takes the one `enrolled` kept for it.
     pub(crate) fn show_running(
         &self,
         host: &mut proto::Host,
         id: &HostId,
         enrolled: Option<&EnrolledHost>,
+        now: Duration,
+        unix_now: u64,
     ) {
         let kept = enrolled.and_then(|e| e.running.as_ref());
         match self.running.of(id) {
-            Some((running, unix)) => {
+            Some((running, at)) => {
                 host.running = services_of(&running, kept);
-                host.running_unix = Some(unix);
+                host.running_unix = Some(crate::grpc::report::heard_unix(at, now, unix_now));
             }
             None => {
                 if let Some(kept) = kept {
@@ -245,21 +262,24 @@ impl Coordinator {
     }
 
     /// The hosts of a page of `Hosts.List`: `page` holds each id with the host heard since the
-    /// start (if it was), `enrolled` what the enrollment holds of each. A heard host takes what
-    /// it runs ([`Self::show_running`]); a host not heard is the one its enrollment kept
+    /// start (if it was), `enrolled` what the enrollment holds of each, when the coordinator's
+    /// clock reads `now` and the wall clock `unix_now`. A heard host takes what it runs
+    /// ([`Self::show_running`]); a host not heard is the one its enrollment kept
     /// ([`unheard`]), and is left out when the enrollment holds none (it was denied since the ids
     /// were read). Answers the hosts with their enrollment.
     pub(crate) fn page_hosts(
         &self,
         page: Vec<(HostId, Option<proto::Host>)>,
         enrolled: Vec<Option<EnrolledHost>>,
+        now: Duration,
+        unix_now: u64,
     ) -> (Vec<proto::Host>, Vec<Option<EnrolledHost>>) {
         let mut hosts = Vec::with_capacity(page.len());
         let mut kept = Vec::with_capacity(page.len());
         for ((id, heard), enrolled) in page.into_iter().zip(enrolled) {
             let host = match (heard, &enrolled) {
                 (Some(mut host), enrolled) => {
-                    self.show_running(&mut host, &id, enrolled.as_ref());
+                    self.show_running(&mut host, &id, enrolled.as_ref(), now, unix_now);
                     host
                 }
                 (None, Some(enrolled)) => unheard(enrolled),

@@ -397,6 +397,16 @@ fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::Host
     }
 }
 
+/// The Unix time of `seen`, a time by the coordinator's clock, when that clock reads `now` and
+/// the ops store's wall clock reads `unix_now`: `unix_now` less the whole seconds since `seen`.
+/// `Hosts.List` and `Hosts.Get` put back together both the time of a host's last heartbeat
+/// ([`host`]) and the time of what it runs ([`crate::service::Coordinator::show_running`]) with
+/// it, from the same reads of the two clocks, so the two are equal when they are the same
+/// heartbeat's.
+pub(crate) fn heard_unix(seen: Duration, now: Duration, unix_now: u64) -> u64 {
+    unix_now.saturating_sub(now.saturating_sub(seen).as_secs())
+}
+
 /// The host `id` of the node `node` as `Hosts.List` and `Hosts.Get` answer it, from `status`
 /// at `now`, when the ops store's wall clock reads `unix_now`.
 ///
@@ -405,9 +415,9 @@ fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::Host
 /// put back together from what the coordinator keeps: the platform of the first service that
 /// heard it, its agent and features, and one entry per service that heard it (each as
 /// [`service_beat`] says it). The coordinator's clock is not the wall clock, so the time of the
-/// last heartbeat is `unix_now` less the seconds the host has been silent. What the last
-/// heartbeat said of the host's clock, certificate and trusted root is in the host's own fields
-/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`, `trusted_root_age_secs`,
+/// last heartbeat is `unix_now` less the seconds the host has been silent ([`heard_unix`]). What
+/// the last heartbeat said of the host's clock, certificate and trusted root is in the host's own
+/// fields (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`, `trusted_root_age_secs`,
 /// `trusted_root_reason`), not in the heartbeat put back together.
 pub(crate) fn host(
     id: &HostId,
@@ -444,10 +454,9 @@ pub(crate) fn host(
     }
     services.sort_by(|a, b| a.service.cmp(&b.service));
     beats.sort_by(|a, b| a.name.cmp(&b.name));
-    let silent = now.saturating_sub(node.seen).as_secs();
     proto::Host {
         live: node.is_live(now),
-        last_heartbeat_unix: unix_now.saturating_sub(silent),
+        last_heartbeat_unix: heard_unix(node.seen, now, unix_now),
         heartbeat: Some(agent::HeartbeatRequest {
             platform: platform
                 .map_or(agent::Platform::Unspecified, platform_of)
