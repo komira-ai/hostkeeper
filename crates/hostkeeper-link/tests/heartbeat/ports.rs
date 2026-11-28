@@ -158,6 +158,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "probe.rs",
         "proto_map.rs",
         "proto_map_bmc_tests.rs",
+        "proto_map_deferring_tests.rs",
         "proto_map_facts_tests.rs",
         "proto_map_health_tests.rs",
         "proto_map_keys_tests.rs",

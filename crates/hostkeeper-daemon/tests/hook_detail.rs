@@ -223,12 +223,12 @@ const REFUSED: &str = "read of /Volumes/build/js.job: Operation not permitted";
 fn a_verify_that_defers_until_its_window_ends_is_reported_with_its_last_deferral() {
     let apt = AptRig::new("detail-deferred-verify");
     let rig = &apt.rig;
-    // The window of 300 seconds leaves no time for a run after a wait of 300.
-    let said = deferred_line(300, REFUSED);
+    // The test manifest's window of 1600 seconds leaves no time for a run after a wait of 1600.
+    let said = deferred_line(1600, REFUSED);
     rig.launcher
         .replies("alpha", Step::Verify, &[(75, said.as_str())]);
     rig.launcher.replies("alpha", Step::Rollback, &[(0, "{}")]);
-    let long = deferred_line(300, &"y".repeat(600));
+    let long = deferred_line(1600, &"y".repeat(600));
     rig.launcher
         .replies("beta", Step::Verify, &[(75, long.as_str())]);
     rig.launcher.replies("beta", Step::Rollback, &[(0, "{}")]);
