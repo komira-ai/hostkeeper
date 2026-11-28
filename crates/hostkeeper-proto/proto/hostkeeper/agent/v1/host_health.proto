@@ -66,10 +66,12 @@ message FilesystemUse {
   // Where it is mounted (`/`, `/var/lib/js-agent`; a Mac's `/System/Volumes/Data`), cut to 32
   // bytes.
   string mount = 1;
-  // Its size: its blocks times its fragment size.
+  // The bytes an unprivileged writer has: its blocks less those only root may write (its free
+  // blocks less its available ones), times its fragment size; so the percent used of
+  // `available_bytes` is `df`'s.
   uint64 size_bytes = 2;
   // The bytes an unprivileged writer may still write: its available blocks times its fragment
-  // size. What the root-reserved blocks hold counts as used.
+  // size.
   uint64 available_bytes = 3;
 }
 

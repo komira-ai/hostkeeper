@@ -82,7 +82,7 @@ fn an_older_coordinator_keeps_the_filesystems() {
     };
     assert_eq!(
         alone.encode_to_vec(),
-        [0x3a, 9, 0x0a, 1, b'/', 0x10, 1, 0x18, 2]
+        [0x3a, 7, 0x0a, 1, b'/', 0x10, 1, 0x18, 2]
     );
 
     let read = DynamicMessage::decode(health_d, bytes.as_slice()).expect("decodes");

@@ -193,11 +193,13 @@ each rule; the fixtures are in `crates/hostkeeper-daemon/tests/fixtures/kernel/`
   `crates/hostkeeper-coordinator/src/alerts_health.rs`, the coordinator's rule). It is carried by `HostHealth.filesystems` (field 7,
   additive: a coordinator of a release before keeps it as a field it does not know, and a daemon of a release before sends none),
   not by a record: each heartbeat's health lists, as `statvfs` reads them then, at most 8 filesystems, each by its mount point (cut
-  to 32 bytes), its size and the bytes an unprivileged writer may still write. Which ones: the root filesystem first, then, by mount
-  point, every other filesystem of a local block device (no `loop`, `ram`, `zram`, `nbd` or `sr` device; no `tmpfs`, overlay,
-  network or pseudo filesystem) mounted read-write, once per device, as `/proc/self/mountinfo` lists them; so wherever a host mounts
-  the daemon's state, the packages or the jobs' data, it is reported. On a Mac, the data volume `/System/Volumes/Data` (`/` is the
-  sealed system volume) and each volume mounted under `/Volumes`. A filesystem `statvfs` cannot read, a read-only one and one of
+  to 32 bytes), the bytes an unprivileged writer has and those it may still write (the blocks reserved for root in neither, so the
+  percent used is `df`'s). Which ones: the root filesystem first, then, by mount point, every other filesystem of a local block
+  device (no `loop`, `ram`, `zram`, `nbd` or `sr` device; no `tmpfs`, overlay, network or pseudo filesystem, whose `statvfs` can
+  hang) mounted read-write, once per source device (a bind mount or another btrfs subvolume of it is not listed again), as
+  `/proc/self/mountinfo` lists them; so wherever a host mounts the daemon's state, the packages or the jobs' data, it is reported.
+  On a Mac, the data volume `/System/Volumes/Data` alone (`/` is the sealed system volume; `/Volumes` holds network shares and disk
+  images as often as disks, which nothing tells apart without a program). A filesystem `statvfs` cannot read, a read-only one and one of
   no size are left out. The list goes with the memory devices and `sources` when a heartbeat is over its 16 KiB (4.1), and with
   the memory devices when the health would pass its 4096 bytes; a health with no filesystems is no word on fullness, which the
   coordinator does not read as a filesystem emptied. The coordinator's rule (5.1): 90% used (the size less the available bytes, of
@@ -331,7 +333,8 @@ sending twice to stay visible.
 prerequisites report (about 4 KiB) are counted and never dropped (Built: `beat.rs`). So `HostHealth` is at most 4 KiB encoded
 (`check_health`, checked on both sides like `check_report` of the maintenance report, Built: `crates/hostkeeper-proto/src/maintenance.rs`):
 6 records of at most about 600 bytes (their strings at most 328 bytes and `raw` 256, with tags), 3.6 KiB, and the baseline without its
-memory devices, about 350 bytes. Together the three never-dropped reports are at most 13 of the 16 KiB. When a beat is still over,
+memory devices, about 350 bytes; the 8 `filesystems` at their bound add about 450 bytes, and leave with the memory devices
+when the health would pass its 4096 bytes. Together the three never-dropped reports are at most 13 of the 16 KiB. When a beat is still over,
 `fit`'s `DROP_ORDER` (Built) gains two groups, dropped first: the memory devices, the `sources` and the `filesystems`, then the
 services' `health_body` and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in every beat that
 has room for them (Built, section 4.3). A size test with 16 services and every part at its bound shows the beat fits [V].

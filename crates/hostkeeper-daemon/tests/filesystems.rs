@@ -1,5 +1,5 @@
 //! How full the host's filesystems are (`hostkeeper_daemon::filesystems`), as each heartbeat's
-//! health carries it: the filesystems chosen from a Linux mount table and from a Mac's volumes,
+//! health carries it: the filesystems chosen from a Linux mount table, and a Mac's data volume,
 //! the root first and at most 8, read-only and unreadable ones left out, and the keeper sending
 //! them in every heartbeat and leaving them out, with the memory devices, of a health that would
 //! pass its 4096 bytes. Every file is under a scratch root; `statvfs` is faked but for the tests
@@ -8,12 +8,11 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::{MetadataExt as _, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_daemon::filesystems::{
-    DATA_VOLUME, MAC_VOLUMES, MOUNTINFO, Usage, linux_mounts, mac_mounts, read, statvfs, usage,
+    DATA_VOLUME, MOUNTINFO, Usage, linux_mounts, read, statvfs, usage,
 };
 use hostkeeper_daemon::hardware_sources::SourceRead;
 use hostkeeper_daemon::host_health::{BootFacts, HealthKeeper};
@@ -27,7 +26,8 @@ use prost::Message as _;
 use support::Scratch;
 
 /// A build host's mount table: the root and the EFI partition of one NVMe disk, the jobs' data
-/// on LVM, the root's device bound again under `/srv`, a snap, a read-only disk, a disk whose
+/// on LVM, the root's device bound again under `/srv`, a btrfs disk with two subvolumes mounted
+/// (each its own anonymous device number), a snap, a read-only disk, a disk whose
 /// mount point has a space, a CD, a RAM disk, zram, a network block device, a network filesystem,
 /// and the kernel's own filesystems; one line cut short and one with no source.
 const BUILD_HOST: &str = "\
@@ -38,6 +38,8 @@ const BUILD_HOST: &str = "\
 30 22 259:1 / /boot/efi rw,relatime shared:30 - vfat /dev/nvme0n1p1 rw,fmask=0077
 31 22 253:0 / /var/lib/js-agent rw,noatime shared:31 - xfs /dev/mapper/vg-jobs rw,attr2
 32 22 259:2 /srv/data /srv/bind rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw
+43 22 0:60 /@data /data rw,relatime shared:43 - btrfs /dev/sdd1 rw,subvol=/@data
+44 22 0:61 /@cache /data/cache rw,relatime shared:44 - btrfs /dev/sdd1 rw,subvol=/@cache
 33 22 7:0 / /snap/core22/1380 ro,nodev,relatime shared:33 - squashfs /dev/loop0 ro
 34 22 8:17 / /mnt/archive ro,relatime shared:34 - ext4 /dev/sdb1 ro
 35 22 8:33 / /mnt/My\\040Disk rw,relatime shared:35 - ext4 /dev/sdc1 rw
@@ -51,17 +53,24 @@ const BUILD_HOST: &str = "\
 ";
 
 /// Proves the filesystems chosen from a mount table: each read-write filesystem of a local block
-/// device, LVM's included, once per device, in the order of the table, a mount point's escape read
+/// device, LVM's included, once per source device (a btrfs disk's second subvolume not again), in
+/// the order of the table, a mount point's escape read
 /// back.
 ///
 /// Catches: a snap, a RAM disk, zram, a network block device, a CD, a read-only disk, a network or
 /// pseudo filesystem reported (a squashfs is always 100% full: a false critical on every host with a
-/// snap), a bind mount reported twice, or a line that does not parse failing the read.
+/// snap), a bind mount or a btrfs disk reported twice, or a line that does not parse failing the read.
 #[test]
 fn the_local_read_write_disks_of_the_mount_table_are_chosen() {
     assert_eq!(
         linux_mounts(BUILD_HOST),
-        ["/", "/boot/efi", "/var/lib/js-agent", "/mnt/My Disk"]
+        [
+            "/",
+            "/boot/efi",
+            "/var/lib/js-agent",
+            "/data",
+            "/mnt/My Disk"
+        ]
     );
     assert_eq!(linux_mounts(""), Vec::<String>::new());
 }
@@ -87,7 +96,7 @@ fn a_mount_points_escapes_are_read_back() {
 }
 
 /// A fake `statvfs`: each mount point under the root, by its path, and what it says of it.
-fn fake(root: &Path, known: &[(&str, Usage)]) -> impl Fn(&Path) -> Option<Usage> {
+fn fake(root: &Path, known: &[(&str, Usage)]) -> impl Fn(&Path) -> Option<Usage> + use<> {
     let known: Vec<(PathBuf, Usage)> = known
         .iter()
         .map(|(mount, usage)| (root.join(mount.trim_start_matches('/')), *usage))
@@ -206,24 +215,6 @@ fn nine_filesystems_send_eight_and_a_long_mount_point_is_cut() {
     assert_eq!(cut[0].mount, long[..31]);
 }
 
-/// Proves a Mac reports its data volume and each volume mounted under `/Volumes` (a directory on
-/// another device than `/Volumes`), and no link (`Macintosh HD`, a link to `/`) nor a directory of
-/// `/Volumes`'s own device.
-#[test]
-fn a_mac_reports_its_data_volume_and_its_mounted_volumes() {
-    let entries = [
-        ("Macintosh HD".to_owned(), None),
-        ("Builds".to_owned(), Some(9)),
-        ("empty-dir".to_owned(), Some(1)),
-        ("Cache".to_owned(), Some(12)),
-    ];
-    assert_eq!(
-        mac_mounts(1, &entries),
-        [DATA_VOLUME, "/Volumes/Builds", "/Volumes/Cache"]
-    );
-    assert_eq!(mac_mounts(1, &[]), [DATA_VOLUME]);
-}
-
 /// Proves `statvfs` of a directory gives its filesystem's size and available bytes, read-write,
 /// and of a path that is not there gives none.
 #[test]
@@ -266,11 +257,10 @@ fn a_linux_hosts_filesystems_are_read_from_its_root() {
     }
 }
 
-/// Proves a Mac's filesystems are read under its root: the data volume, and none of `/Volumes`'
-/// entries on its own device (a directory, a link, a file); with no `/Volumes`, or a `/Volumes`
-/// that is not a directory, the data volume alone; with no data volume, none.
+/// Proves a Mac's filesystems are its data volume, read under its root, whatever `/Volumes`
+/// holds; with no data volume, none.
 #[test]
-fn a_macs_filesystems_are_read_from_its_root() {
+fn a_macs_filesystem_is_its_data_volume() {
     let host = Scratch::new("filesystems-mac");
     let root = host.path();
     assert_eq!(
@@ -279,27 +269,10 @@ fn a_macs_filesystems_are_read_from_its_root() {
         "no data volume"
     );
     fs::create_dir_all(root.join(DATA_VOLUME.trim_start_matches('/'))).expect("mkdir");
-    let mounts = |root: &Path| -> Vec<String> {
-        read(PlatformKind::Macos, root)
-            .into_iter()
-            .map(|f| f.mount)
-            .collect()
-    };
-    assert_eq!(mounts(root), [DATA_VOLUME], "no /Volumes");
-
-    fs::write(root.join(MAC_VOLUMES), "").expect("a file");
-    assert_eq!(mounts(root), [DATA_VOLUME], "a /Volumes that is a file");
-    fs::remove_file(root.join(MAC_VOLUMES)).expect("rm");
-
-    let volumes = root.join(MAC_VOLUMES);
-    fs::create_dir_all(volumes.join("Same Disk")).expect("mkdir");
-    symlink("/", volumes.join("Macintosh HD")).expect("link");
-    fs::write(volumes.join("note"), "").expect("a file");
-    assert_eq!(
-        fs::metadata(volumes.join("Same Disk")).expect("stat").dev(),
-        fs::metadata(&volumes).expect("stat").dev()
-    );
-    assert_eq!(mounts(root), [DATA_VOLUME]);
+    fs::create_dir_all(root.join("Volumes/Share")).expect("mkdir");
+    let read = read(PlatformKind::Macos, root);
+    let mounts: Vec<&str> = read.iter().map(|f| f.mount.as_str()).collect();
+    assert_eq!(mounts, [DATA_VOLUME]);
 }
 
 /// A probe that never judges the system going down.

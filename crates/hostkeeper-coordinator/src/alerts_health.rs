@@ -5,9 +5,9 @@
 //! these.
 //!
 //! **A nearly full filesystem** is `storage_failing` at 90% used a warning and at 97% critical
-//! ([`FULL_WARNING_PERCENT`], [`FULL_CRITICAL_PERCENT`]), "used" being what an unprivileged writer
-//! can no longer write: the size less the available bytes, so the blocks reserved for root count as
-//! used. It is not a hardware record: nothing of it is written to the host's log but the alert's
+//! ([`FULL_WARNING_PERCENT`], [`FULL_CRITICAL_PERCENT`]), "used" being the size less the
+//! available bytes, of the size: the daemon gives both as an unprivileged writer has them, the
+//! blocks reserved for root in neither, so the percent is `df`'s. It is not a hardware record: nothing of it is written to the host's log but the alert's
 //! own raising and clearing. And it never cordons the host ([`HealthAlert::cordons`] is false at
 //! every level): a full disk is cleaned, not repaired, and draining a host for it would stop its
 //! work for nothing. Of the inputs of `storage_failing`, only a critical `disk` record cordons.
