@@ -4,6 +4,13 @@
 //! the incident's host, encoded as its firmware's table gives them; the filters of the disks and
 //! network interfaces; the decoder of SMBIOS type 17 entries; the memory devices sent in a boot's
 //! heartbeats; the health's bound. No real `/proc`, `/sys` or program.
+//!
+//! Linux only: `capacity::read` is the Linux daemon's reader of `/proc` and `/sys`, and a Mac's
+//! daemon never calls it (`host_health::at_host` gives a Mac's keeper no capacity root; a Mac's
+//! capacity is `mac_capacity`, tested in its own file). Its fixtures are a Linux root, and one of
+//! them, an SMBIOS entry whose name is not UTF-8 (`17-\xff`, which the reader passes over), is a
+//! name APFS refuses to create (EILSEQ, os error 92), so the file is not built for macOS.
+#![cfg(target_os = "linux")]
 
 mod support;
 
