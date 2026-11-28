@@ -292,7 +292,7 @@ fn the_oidc_request_comes_after_every_verification_step() {
     let reordered = moved(
         &text,
         "      # The first step that requests an OIDC token for the coordinator",
-        "      # One held call",
+        "      # One hk command, whose held calls",
         "      # Verification 1 of 3",
     );
     assert_client(&reordered, &early_want);

@@ -262,7 +262,11 @@ fn the_last_call_holds_the_time_left_and_a_last_cut_is_said() {
     let ended = wait_for(&mut sim, &plan(90)).expect("ended");
     assert_eq!(body(ended), not_yet());
     assert_eq!(sim.asked, [60, 30]);
-    assert_eq!(sim.paused, [], "no pause when no time is left");
+    assert_eq!(
+        sim.paused,
+        Vec::<Duration>::new(),
+        "no pause when no time is left"
+    );
     assert_eq!(
         sim.said(),
         [
