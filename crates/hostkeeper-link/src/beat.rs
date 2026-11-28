@@ -5,10 +5,10 @@
 //! limit of `hostkeeper-proto`, and is at most [`MAX_HEARTBEAT_BYTES`] as JSON with the wire's
 //! names ([`Heartbeat::encoded_len`]). [`fit`] keeps it: a heartbeat with more services is
 //! refused, never cut short; one with too many bytes loses its optional facts, a group at a
-//! time in the order of [`DROP_ORDER`] (the host health's memory devices and source states, then
-//! the services' health bodies and restarts, then the Remote Login probe, then the health detail,
-//! then the deferral detail, then the observer's detail), then sends fewer host health records,
-//! and is refused when that is not enough. The
+//! time in the order of [`DROP_ORDER`] (the host health's memory devices, source states and
+//! filesystems, then the services' health bodies and restarts, then the Remote Login probe, then
+//! the health detail, then the deferral detail, then the observer's detail), then sends fewer host
+//! health records, and is refused when that is not enough. The
 //! service, its version, its health, the update running and the last verdict are never
 //! dropped, nor are the host's clock and certificate facts ([`Heartbeat::sent_unix`],
 //! [`Heartbeat::renewal`]), whose one text is at most
@@ -30,8 +30,8 @@
 //! as `serial_console`: a port, a state and a detail). The host's maintenance report ([`Heartbeat::maintenance`], as `maintenance`: the
 //! daemon's own message, at most about 5 KiB) is counted and never dropped. The host's hardware
 //! health ([`Heartbeat::health`], as `health`: the daemon's own message, at most
-//! [`hostkeeper_proto::health::MAX_HEALTH_BYTES`] encoded) is counted too: its memory devices and
-//! source states are the first group dropped, and its records the last thing given up, from the
+//! [`hostkeeper_proto::health::MAX_HEALTH_BYTES`] encoded) is counted too: its memory devices,
+//! source states and filesystems are the first group dropped, and its records the last thing given up, from the
 //! least severe and newest, each left for a later heartbeat; the rest of it is never dropped.
 
 use hostkeeper_config::names::{ServiceName, Version};
@@ -545,8 +545,8 @@ pub struct Heartbeat {
     pub maintenance: Option<MaintenanceReport>,
     /// The host's hardware health (`host-health-v1`); none from a daemon that reads none, or to a
     /// coordinator that does not advertise the feature. Sent over gRPC only, and counted toward
-    /// the bound on both; [`fit`] drops its memory devices and source states first, and gives up
-    /// its records last.
+    /// the bound on both; [`fit`] drops its memory devices, source states and filesystems first,
+    /// and gives up its records last.
     pub health: Option<HostHealth>,
 }
 
@@ -659,6 +659,7 @@ impl Heartbeat {
             OptionalFact::RemoteLoginProbe => self.remote_login_probe.is_some(),
             OptionalFact::HostHealthDetail => self.health.as_ref().is_some_and(|health| {
                 !health.sources.is_empty()
+                    || !health.filesystems.is_empty()
                     || health
                         .baseline
                         .as_ref()
@@ -684,6 +685,7 @@ impl Heartbeat {
             // Each is dropped only from a heartbeat that holds it ([`Heartbeat::holds`], `fit`).
             OptionalFact::HostHealthDetail => self.health.iter_mut().for_each(|health| {
                 health.sources.clear();
+                health.filesystems.clear();
                 health
                     .baseline
                     .iter_mut()
@@ -706,8 +708,8 @@ impl Heartbeat {
 /// A group of optional facts a heartbeat loses, every service's at once, to fit its bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionalFact {
-    /// The memory devices of [`Heartbeat::health`]'s baseline and its source states, the host's
-    /// own: sent again in a later heartbeat.
+    /// The memory devices of [`Heartbeat::health`]'s baseline, its source states and its
+    /// filesystems, the host's own: sent again in a later heartbeat.
     HostHealthDetail,
     /// [`ServiceFacts::health_body`] and [`ServiceFacts::restarts`].
     ServiceHealthBody,

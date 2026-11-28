@@ -1,6 +1,11 @@
-//! Host health messages for the tests of `additions_host_health.rs` and
-//! `additions_host_health_bounds.rs`: the incident's (docs/design/host-health-alerts.md
-//! section 2.2) and the fullest one within the bounds.
+//! Host health messages for the tests of `additions_host_health.rs`,
+//! `additions_host_health_bounds.rs` and `additions_filesystem_use.rs`: the incident's
+//! (docs/design/host-health-alerts.md section 2.2) and the fullest one within the bounds.
+
+#![allow(
+    dead_code,
+    reason = "each test binary that includes this file uses only some of its messages"
+)]
 
 use hostkeeper_proto::health::{
     MAX_CODE, MAX_DISK_NAME, MAX_EVENT_ID, MAX_EVENTS, MAX_MESSAGE, MAX_NIC_NAME, MAX_RAW, MAX_SMT,
@@ -73,6 +78,11 @@ pub fn incident() -> agent::HostHealth {
                 reason: "database is locked".to_owned(),
             },
         ],
+        filesystems: vec![agent::FilesystemUse {
+            mount: "/".to_owned(),
+            size_bytes: 1_888_000_000_000,
+            available_bytes: 1_200_000_000_000,
+        }],
     }
 }
 
@@ -125,5 +135,6 @@ pub fn fullest() -> agent::HostHealth {
         boot_unix: u64::MAX,
         clean_previous_shutdown: true,
         sources: Vec::new(),
+        filesystems: Vec::new(),
     }
 }

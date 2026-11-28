@@ -57,7 +57,8 @@ fn service(
     }
 }
 
-/// The incident's health: the SEL record of DIMM D1, a baseline and two sources.
+/// The incident's health: the SEL record of DIMM D1, a baseline, two sources and the root
+/// filesystem, 97% used.
 fn incident() -> pb::HostHealth {
     pb::HostHealth {
         events: vec![pb::HardwareEvent {
@@ -110,6 +111,11 @@ fn incident() -> pb::HostHealth {
                 reason: "database is locked".to_owned(),
             },
         ],
+        filesystems: vec![pb::FilesystemUse {
+            mount: "/".to_owned(),
+            size_bytes: 1_888_000_000_000,
+            available_bytes: 56_000_000_000,
+        }],
     }
 }
 

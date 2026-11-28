@@ -29,8 +29,8 @@ package hostkeeper.agent.v1;
 // What the daemon reports of its host's hardware in one heartbeat. Every text and every list has a
 // bound, given with its field, and the whole message is at most 4096 bytes encoded
 // (`hostkeeper_proto::health`). When a heartbeat is over its 16 KiB, the daemon first leaves out
-// `baseline.memory_devices` and `sources`, then sends fewer `events`; the records left out wait for
-// the next heartbeat.
+// `baseline.memory_devices`, `sources` and `filesystems`, then sends fewer `events`; the records
+// left out wait for the next heartbeat.
 message HostHealth {
   // Records the coordinator has not yet acknowledged (`HeartbeatResponse.health_written`), at most
   // 6 in one heartbeat: the most severe first, then the oldest. A record whose heartbeat was lost
@@ -51,6 +51,28 @@ message HostHealth {
   // have, or that fails, is listed with its reason, never left out, so that a source that reports
   // nothing is never read as one that found nothing wrong.
   repeated SourceState sources = 6;
+  // How full each of the host's local filesystems is, as `statvfs` reads it in this heartbeat:
+  // the root filesystem first, at most 8 (docs/design/host-health-alerts.md section 3.1). Not a
+  // hardware record: the coordinator judges a nearly full filesystem as `storage_failing` (90%
+  // used a warning, 97% critical), which never cordons the host. Empty: not read, or left out of
+  // this heartbeat with the other detail (above), which is no word on fullness, not a clean bill.
+  // Left out of a heartbeat whose health would otherwise pass its 4096 bytes, with
+  // `baseline.memory_devices`.
+  repeated FilesystemUse filesystems = 7;
+}
+
+// How full one local filesystem is, as `statvfs` gives it.
+message FilesystemUse {
+  // Where it is mounted (`/`, `/var/lib/js-agent`; a Mac's `/System/Volumes/Data`), cut to 32
+  // bytes.
+  string mount = 1;
+  // The bytes an unprivileged writer has: its blocks less those only root may write (its free
+  // blocks less its available ones), times its fragment size; so the percent used of
+  // `available_bytes` is `df`'s.
+  uint64 size_bytes = 2;
+  // The bytes an unprivileged writer may still write: its available blocks times its fragment
+  // size.
+  uint64 available_bytes = 3;
 }
 
 // One record of a host's hardware event log, as the daemon makes it from one entry of a source

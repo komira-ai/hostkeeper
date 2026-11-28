@@ -1,6 +1,6 @@
 //! The host's hardware health (`host-health-v1`): counted toward the heartbeat's bound as
 //! `health`, with a service's health reason, body and restarts beside its other facts; the two
-//! groups [`fit`] drops first (the memory devices and source states, then the services' health
+//! groups [`fit`] drops first (the memory devices, source states and filesystems, then the services' health
 //! bodies and restarts) and the records it gives up last; a service's reason, body and restarts
 //! taken from the observer; and no `host-health-v1` announced and no `health` sent by a daemon
 //! that reads no health, whatever the coordinator advertises (`host_health_source` tests one that
@@ -134,12 +134,30 @@ fn health(records: usize, devices: usize, sources: usize) -> pb::HostHealth {
                 reason: "database is locked".to_owned(),
             })
             .collect(),
+        filesystems: Vec::new(),
     }
 }
 
-/// `health` without its memory devices and source states.
+/// `health` with `n` filesystems, the first the root, each 97% used.
+fn with_filesystems(mut health: pb::HostHealth, n: usize) -> pb::HostHealth {
+    health.filesystems = (0..n)
+        .map(|i| pb::FilesystemUse {
+            mount: if i == 0 {
+                "/".to_owned()
+            } else {
+                format!("/srv/data{i}")
+            },
+            size_bytes: 100 << 30,
+            available_bytes: 3 << 30,
+        })
+        .collect();
+    health
+}
+
+/// `health` without its memory devices, source states and filesystems.
 fn without_detail(mut health: pb::HostHealth) -> pb::HostHealth {
     health.sources.clear();
+    health.filesystems.clear();
     if let Some(baseline) = &mut health.baseline {
         baseline.memory_devices.clear();
     }
@@ -159,7 +177,7 @@ fn len(detail_len: usize, body: bool, health: Option<pb::HostHealth>) -> usize {
 /// `health`.
 #[test]
 fn the_health_is_counted_as_json_with_the_names_of_the_message() {
-    let mut health = health(1, 1, 1);
+    let mut health = with_filesystems(health(1, 1, 1), 1);
     health.events[0] = pb::HardwareEvent {
         event_id: "sel:01a4@1790000000".to_owned(),
         time_unix: 1_795_662_012,
@@ -219,6 +237,11 @@ fn the_health_is_counted_as_json_with_the_names_of_the_message() {
                 "status": "SOURCE_STATUS_UNREADABLE",
                 "reason": "database is locked",
             }],
+            "filesystems": [{
+                "mount": "/",
+                "size_bytes": 107_374_182_400_u64,
+                "available_bytes": 3_221_225_472_u64,
+            }],
         })
     );
     assert_eq!(
@@ -258,13 +281,14 @@ fn the_health_groups_are_dropped_first() {
     );
 }
 
-/// Catches the memory devices and source states kept while the services' health facts go, a
-/// group dropped when the one before it was enough, or a record given up while a group was left:
-/// one byte over the bound with the host health's detail, that detail alone goes; one byte over
-/// without it, the services' health bodies and restarts go too, and nothing else.
+/// Catches the memory devices, source states and filesystems kept while the services' health
+/// facts go, a group dropped when the one before it was enough, or a record given up while a group
+/// was left: one byte over the bound with the host health's detail, that detail alone goes (the 8
+/// filesystems with it, so the heartbeat says nothing of fullness rather than part of it); one
+/// byte over without it, the services' health bodies and restarts go too, and nothing else.
 #[test]
 fn a_heartbeat_over_the_bound_loses_the_health_detail_then_the_health_bodies() {
-    let whole = health(1, 32, 12);
+    let whole = with_filesystems(health(1, 32, 12), 8);
     let detail_pad = MAX_HEARTBEAT_BYTES + 1 - len(0, true, Some(whole.clone()));
     let over = beat(
         vec![with_health(required("js-agent", detail_pad))],
@@ -316,7 +340,7 @@ fn a_health_group_the_heartbeat_does_not_hold_is_passed_over() {
 
 /// Catches a group whose test of what the heartbeat holds reads only one of its parts, and a group
 /// that clears only some services: each part alone (memory devices without sources, sources
-/// without memory devices or with no baseline at all, a health body without restarts, restarts without a health body) makes
+/// without memory devices or with no baseline at all, filesystems alone, a health body without restarts, restarts without a health body) makes
 /// its group dropped and listed, and the services' group clears every service's body and restarts.
 #[test]
 fn each_part_of_a_health_group_alone_makes_it_dropped() {
@@ -329,7 +353,13 @@ fn each_part_of_a_health_group_alone_makes_it_dropped() {
 
     let mut no_baseline = health(1, 0, 2);
     no_baseline.baseline = None;
-    for health in [health(1, 2, 0), health(1, 0, 2), no_baseline] {
+    let filesystems_only = with_filesystems(health(1, 0, 0), 1);
+    for health in [
+        health(1, 2, 0),
+        health(1, 0, 2),
+        no_baseline,
+        filesystems_only,
+    ] {
         let fitted = over(vec![required("js-agent", 0)], health.clone());
         assert_eq!(groups(&fitted), [OptionalFact::HostHealthDetail]);
         assert_eq!(fitted.beat.health, Some(without_detail(health)));

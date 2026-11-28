@@ -8,9 +8,9 @@ use prost::Message as _;
 
 use hostkeeper_proto::health::{
     HealthError, MAX_BOOT_ID, MAX_CODE, MAX_DISK_NAME, MAX_DISKS, MAX_EVENT_ID, MAX_EVENTS,
-    MAX_HEALTH_BODY, MAX_HEALTH_BYTES, MAX_HEALTH_REASON, MAX_LAST_RESULT, MAX_LOCATOR,
-    MAX_MEMORY_DEVICES, MAX_MESSAGE, MAX_NIC_NAME, MAX_NICS, MAX_RAW, MAX_SMT, MAX_SOURCE,
-    MAX_SOURCE_REASON, MAX_SOURCES, MAX_SUBJECT, check_health, check_service,
+    MAX_FILESYSTEMS, MAX_HEALTH_BODY, MAX_HEALTH_BYTES, MAX_HEALTH_REASON, MAX_LAST_RESULT,
+    MAX_LOCATOR, MAX_MEMORY_DEVICES, MAX_MESSAGE, MAX_MOUNT, MAX_NIC_NAME, MAX_NICS, MAX_RAW,
+    MAX_SMT, MAX_SOURCE, MAX_SOURCE_REASON, MAX_SOURCES, MAX_SUBJECT, check_health, check_service,
 };
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 
@@ -61,7 +61,7 @@ fn the_incident_and_the_fullest_health_keep_every_bound() {
 #[test]
 fn each_list_one_over_its_bound_is_refused_by_name() {
     type Grow = fn(&mut agent::HostHealth, usize);
-    let lists: [(&str, usize, Grow); 5] = [
+    let lists: [(&str, usize, Grow); 6] = [
         ("events", MAX_EVENTS, |h, n| {
             h.events = (0..n)
                 .map(|i| agent::HardwareEvent {
@@ -81,6 +81,9 @@ fn each_list_one_over_its_bound_is_refused_by_name() {
         }),
         ("sources", MAX_SOURCES, |h, n| {
             h.sources = vec![agent::SourceState::default(); n];
+        }),
+        ("filesystems", MAX_FILESYSTEMS, |h, n| {
+            h.filesystems = vec![agent::FilesystemUse::default(); n];
         }),
     ];
     for (field, max, grow) in lists {
@@ -106,7 +109,7 @@ fn each_list_one_over_its_bound_is_refused_by_name() {
 #[test]
 fn each_text_one_byte_over_its_bound_is_refused_by_name() {
     type Stretch = fn(&mut agent::HostHealth, usize);
-    let texts: [(&str, usize, Stretch); 13] = [
+    let texts: [(&str, usize, Stretch); 14] = [
         ("events.event_id", MAX_EVENT_ID, |h, n| {
             h.events[0].event_id = "i".repeat(n);
         }),
@@ -145,6 +148,12 @@ fn each_text_one_byte_over_its_bound_is_refused_by_name() {
             h.sources = vec![agent::SourceState {
                 reason: "r".repeat(n),
                 ..agent::SourceState::default()
+            }];
+        }),
+        ("filesystems.mount", MAX_MOUNT, |h, n| {
+            h.filesystems = vec![agent::FilesystemUse {
+                mount: "/".repeat(n),
+                ..agent::FilesystemUse::default()
             }];
         }),
     ];

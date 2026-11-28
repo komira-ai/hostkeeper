@@ -182,6 +182,7 @@ pub mod entry;
 pub mod executor;
 pub mod facts_file;
 mod files;
+pub mod filesystems;
 pub mod full_disk_access;
 pub mod halt;
 pub mod handover;
