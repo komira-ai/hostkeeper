@@ -461,6 +461,7 @@ fn the_health_fields_have_their_numbers_and_types() {
             f("boot_unix", 4, "uint64", false),
             f("clean_previous_shutdown", 5, "bool", false),
             f("sources", 6, &a("SourceState"), true),
+            f("filesystems", 7, &a("FilesystemUse"), true),
         ]
     );
     assert_eq!(

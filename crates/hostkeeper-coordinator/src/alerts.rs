@@ -890,3 +890,6 @@ pub use book::{Book, Observed};
 mod rows;
 #[path = "alerts_updates.rs"]
 pub(crate) mod updates;
+
+#[path = "alerts_health.rs"]
+pub mod health;

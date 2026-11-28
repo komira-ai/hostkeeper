@@ -189,8 +189,22 @@ each rule; the fixtures are in `crates/hostkeeper-daemon/tests/fixtures/kernel/`
   read once.
   Nothing is written, removed or cleared.
 - Each read reports its source's state in `HostHealth.sources` (`ok`, `unsupported` or `unreadable` with its reason).
-- Not built: a filesystem nearly full (`statvfs`). No field of `HostHealth` (HH1) carries a filesystem's fullness, and it is not a
-  hardware record, so it waits for a decision on how the heartbeat carries it.
+- **A filesystem nearly full** (Built: `crates/hostkeeper-daemon/src/filesystems.rs`, the daemon's side;
+  `crates/hostkeeper-coordinator/src/alerts_health.rs`, the coordinator's rule). It is carried by `HostHealth.filesystems` (field 7,
+  additive: a coordinator of a release before keeps it as a field it does not know, and a daemon of a release before sends none),
+  not by a record: each heartbeat's health lists, as `statvfs` reads them then, at most 8 filesystems, each by its mount point (cut
+  to 32 bytes), its size and the bytes an unprivileged writer may still write. Which ones: the root filesystem first, then, by mount
+  point, every other filesystem of a local block device (no `loop`, `ram`, `zram`, `nbd` or `sr` device; no `tmpfs`, overlay,
+  network or pseudo filesystem) mounted read-write, once per device, as `/proc/self/mountinfo` lists them; so wherever a host mounts
+  the daemon's state, the packages or the jobs' data, it is reported. On a Mac, the data volume `/System/Volumes/Data` (`/` is the
+  sealed system volume) and each volume mounted under `/Volumes`. A filesystem `statvfs` cannot read, a read-only one and one of
+  no size are left out. The list goes with the memory devices and `sources` when a heartbeat is over its 16 KiB (4.1), and with
+  the memory devices when the health would pass its 4096 bytes; a health with no filesystems is no word on fullness, which the
+  coordinator does not read as a filesystem emptied. The coordinator's rule (5.1): 90% used (the size less the available bytes, of
+  the size) is `storage_failing` at warning, 97% critical, one alert per mount point (finding `filesystem_full/<mount>`), ended at
+  the first heartbeat that reports it under 90%, as the other inputs of `storage_failing` end at the first read that no longer finds
+  them; no hardware record and no cordon at any level. The rule is a function HH5's derivation calls with each host's last health,
+  as the coordinator stores no health before HH5.
 
 **The BMC's event log, as built** (HH8; Built: `crates/hostkeeper-daemon/src/sel_source.rs`, the reader; `sel.rs` and
 `sel_tables.rs`, the decoder and its tables; `sdr.rs`, the sensor names; the requests in `ipmi.rs`, `BmcRequest`). The reader is a
@@ -278,6 +292,8 @@ message HostHealth {
   uint64 boot_unix = 4;
   bool clean_previous_shutdown = 5;
   repeated SourceState sources = 6;  // per source: ok, unsupported, unreadable (with its reason)
+  repeated FilesystemUse filesystems = 7; // at most 8, the root first: mount (at most 32 bytes), size_bytes,
+                                     // available_bytes, as statvfs reads them in this beat (Built, section 3.1)
 }
 message HardwareEvent {              // section 2.1, less what the coordinator adds (host_id, machine_serial, observed_unix, by)
   string event_id = 1;               // at most 64 bytes
@@ -316,8 +332,8 @@ prerequisites report (about 4 KiB) are counted and never dropped (Built: `beat.r
 (`check_health`, checked on both sides like `check_report` of the maintenance report, Built: `crates/hostkeeper-proto/src/maintenance.rs`):
 6 records of at most about 600 bytes (their strings at most 328 bytes and `raw` 256, with tags), 3.6 KiB, and the baseline without its
 memory devices, about 350 bytes. Together the three never-dropped reports are at most 13 of the 16 KiB. When a beat is still over,
-`fit`'s `DROP_ORDER` (Built) gains two groups, dropped first: the memory devices and the `sources`, then the services' `health_body`
-and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in every beat that
+`fit`'s `DROP_ORDER` (Built) gains two groups, dropped first: the memory devices, the `sources` and the `filesystems`, then the
+services' `health_body` and `restarts`; and the beat sends fewer records, which wait in the queue for the next. The memory devices are sent in every beat that
 has room for them (Built, section 4.3). A size test with 16 services and every part at its bound shows the beat fits [V].
 
 **Expected sources.** Every Linux host is expected to have a BMC (decision 6), rasdaemon, smartmontools and a persistent journal
@@ -700,7 +716,7 @@ Each lands with its own tests, among them one that fails without it. A daemon pu
 | HH7 | Coordinator: `service_unhealthy` and `service_crash_loop`, the likely-cause join | HH5, HH6 |
 | HH8 | Daemon, Linux: the SEL and SDR decoder, `Get Device ID` | HH3 |
 | HH9 | Daemon, Linux: rasdaemon's database | HH3 |
-| HH10 | Daemon, Linux: the journal's kernel lines, `/dev/kmsg`, taint, pstore, `HardwareCorrupted`, ext4 errors, read-only remounts, `statvfs` (Built, but `statvfs`: section 3.1) | HH3 |
+| HH10 | Daemon, Linux: the journal's kernel lines, `/dev/kmsg`, taint, pstore, `HardwareCorrupted`, ext4 errors, read-only remounts, `statvfs` (Built: section 3.1) | HH3 |
 | HH11 | Daemon, Linux: `smartctl --json` and hwmon, with the source states | HH3 |
 | HH12 | Daemon, Mac: boot id, marker, the panic parser and classifier, `system_profiler` and the capacity | HH3 |
 | HH13 | Daemon, Mac: `SMARTStatus`, the thermal rule, the `runs` ring | HH12 |

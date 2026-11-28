@@ -40,6 +40,17 @@ pub(crate) fn health_json(health: &pb::HostHealth) -> Value {
             })
         })
         .collect();
+    let filesystems: Vec<Value> = health
+        .filesystems
+        .iter()
+        .map(|filesystem| {
+            json!({
+                "mount": filesystem.mount,
+                "size_bytes": filesystem.size_bytes,
+                "available_bytes": filesystem.available_bytes,
+            })
+        })
+        .collect();
     json!({
         "events": events,
         "baseline": health.baseline.as_ref().map(baseline_json),
@@ -47,6 +58,7 @@ pub(crate) fn health_json(health: &pb::HostHealth) -> Value {
         "boot_unix": health.boot_unix,
         "clean_previous_shutdown": health.clean_previous_shutdown,
         "sources": sources,
+        "filesystems": filesystems,
     })
 }
 

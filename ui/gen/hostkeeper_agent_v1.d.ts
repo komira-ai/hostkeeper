@@ -24,6 +24,7 @@ export namespace hostkeeper_agent_v1 {
   export type FailureClass = "FAILURE_CLASS_UNSPECIFIED" | "FAILURE_CLASS_RELEASE" | "FAILURE_CLASS_ENVIRONMENT";
   export type FailurePhase = "FAILURE_PHASE_UNSPECIFIED" | "FAILURE_PHASE_BEFORE_COMMIT" | "FAILURE_PHASE_GATE_RELEASE" | "FAILURE_PHASE_GATE_ENVIRONMENT" | "FAILURE_PHASE_AFTER_COMMIT" | "FAILURE_PHASE_HALT";
   export type FileVaultState = "FILE_VAULT_STATE_UNSPECIFIED" | "FILE_VAULT_STATE_OFF" | "FILE_VAULT_STATE_ON" | "FILE_VAULT_STATE_ENCRYPTING" | "FILE_VAULT_STATE_DECRYPTING";
+  export interface FilesystemUse { mount?: string; sizeBytes?: string; availableBytes?: string; }
   export type FullDiskAccess = "FULL_DISK_ACCESS_UNSPECIFIED" | "FULL_DISK_ACCESS_GRANTED" | "FULL_DISK_ACCESS_NOT_GRANTED" | "FULL_DISK_ACCESS_NOT_APPLICABLE" | "FULL_DISK_ACCESS_UNDETERMINED";
   export type HardwareComponent =
     | "HARDWARE_COMPONENT_UNSPECIFIED"
@@ -82,6 +83,7 @@ export namespace hostkeeper_agent_v1 {
     bootUnix?: string;
     cleanPreviousShutdown?: boolean;
     sources?: hostkeeper_agent_v1.SourceState[];
+    filesystems?: hostkeeper_agent_v1.FilesystemUse[];
   }
   export interface InstalledXcode { version?: string; build?: string; path?: string; selected?: boolean; foreign?: boolean; }
   export interface LocalHalt { reason?: string; generation?: string; ageSecs?: string; }

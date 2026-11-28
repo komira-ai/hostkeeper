@@ -73,6 +73,11 @@ pub fn incident() -> agent::HostHealth {
                 reason: "database is locked".to_owned(),
             },
         ],
+        filesystems: vec![agent::FilesystemUse {
+            mount: "/".to_owned(),
+            size_bytes: 1_888_000_000_000,
+            available_bytes: 1_200_000_000_000,
+        }],
     }
 }
 
@@ -125,5 +130,6 @@ pub fn fullest() -> agent::HostHealth {
         boot_unix: u64::MAX,
         clean_previous_shutdown: true,
         sources: Vec::new(),
+        filesystems: Vec::new(),
     }
 }

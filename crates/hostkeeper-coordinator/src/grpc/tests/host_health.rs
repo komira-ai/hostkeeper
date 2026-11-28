@@ -42,6 +42,7 @@ fn incident() -> agent::HostHealth {
             status: agent::SourceStatus::Ok.into(),
             reason: String::new(),
         }],
+        filesystems: Vec::new(),
     }
 }
 

@@ -26,6 +26,8 @@ pub const MAX_MEMORY_DEVICES: usize = 32;
 pub const MAX_DISKS: usize = 16;
 /// The most interfaces of `baseline.nics`.
 pub const MAX_NICS: usize = 8;
+/// The most entries of `filesystems`.
+pub const MAX_FILESYSTEMS: usize = 8;
 
 /// The most bytes of a record's `event_id` and of its `about`; a record's `event_id` is at least
 /// one byte.
@@ -52,6 +54,8 @@ pub const MAX_DISK_NAME: usize = 32;
 pub const MAX_NIC_NAME: usize = 16;
 /// The most bytes of a source state's `reason`.
 pub const MAX_SOURCE_REASON: usize = 64;
+/// The most bytes of a filesystem's `mount`.
+pub const MAX_MOUNT: usize = 32;
 
 /// The most bytes of a service's `health_reason`.
 pub const MAX_HEALTH_REASON: usize = 64;
@@ -124,6 +128,7 @@ pub fn check_health(health: &HostHealth) -> Result<(), HealthError> {
             MAX_NICS,
         ),
         ("sources", health.sources.len(), MAX_SOURCES),
+        ("filesystems", health.filesystems.len(), MAX_FILESYSTEMS),
     ];
     if let Some((field, count, max)) = counts.into_iter().find(|&(_, count, max)| count > max) {
         return Err(HealthError::TooMany { field, count, max });
@@ -167,10 +172,15 @@ pub fn check_health(health: &HostHealth) -> Result<(), HealthError> {
             ("sources.reason", s.reason.as_str(), MAX_SOURCE_REASON),
         ]
     });
+    let filesystems = health
+        .filesystems
+        .iter()
+        .map(|f| ("filesystems.mount", f.mount.as_str(), MAX_MOUNT));
     if let Some((field, text, max)) = events
         .chain(baseline_texts)
         .chain(boot_id)
         .chain(sources)
+        .chain(filesystems)
         .find(|&(_, text, max)| text.len() > max)
     {
         return Err(HealthError::TooLong {
