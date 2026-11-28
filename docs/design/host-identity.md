@@ -79,6 +79,10 @@ the network.
 The join token js-agent reads from `/etc/js-agent/token`, placed by hand on each host
 (komira-ai/hostkeeper#288 asked hostkeeper to place it).
 
+js-agent presents the host's certificate in place of the token on Linux and on a Mac (komira-ai/jobscheduler#922), so an
+enrolled host needs neither `/etc/js-agent/token` nor `/etc/js-agent/instance`. What is left of komira-ai/hostkeeper#288, and the design of a
+general path for a per-host file the certificate cannot replace, are in [host-held-files.md](host-held-files.md).
+
 ## 5. Decisions
 
 - **One certificate per host, the enrollment certificate,** not one per service: the host is what
