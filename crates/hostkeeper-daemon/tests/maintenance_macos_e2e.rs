@@ -30,6 +30,10 @@ use support_mac::{
     xcodebuild,
 };
 
+/// A major upgrade on Macs whose daemon runs with no flag, as its launchd job starts it.
+#[path = "maintenance_macos_e2e/major.rs"]
+mod major;
+
 /// The group of every test.
 const GROUP: &str = "macs";
 

@@ -29,6 +29,9 @@ pub struct Mac {
     pub free: u64,
     /// `softwareupdate` offers the minor update and the major upgrade; when not, nothing.
     pub offered: bool,
+    /// With `offered`, `softwareupdate --list` lists the minor update and the major upgrade; when
+    /// not, it lists nothing, and only `--list-full-installers` offers the major upgrade.
+    pub minor_listed: bool,
 }
 
 impl Default for Mac {
@@ -43,6 +46,7 @@ impl Default for Mac {
             old_xcode: false,
             free: FREE,
             offered: true,
+            minor_listed: true,
         }
     }
 }
@@ -118,7 +122,12 @@ impl Machine {
                 boot: 1,
                 version: OLD_VERSION.to_owned(),
                 build: OLD_BUILD.to_owned(),
-                list: if mac.offered { LIST } else { NONE }.to_owned(),
+                list: if mac.offered && mac.minor_listed {
+                    LIST
+                } else {
+                    NONE
+                }
+                .to_owned(),
                 full: if mac.offered { FULL } else { NONE }.to_owned(),
                 filevault_on: mac.filevault_on,
                 secure_token: mac.account != Account::NoSecureToken,
