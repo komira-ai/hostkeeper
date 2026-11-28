@@ -53,7 +53,6 @@ use hostkeeper_daemon::maintenance_mac::{FreeSpace, MacPorts, MacReadiness};
 use hostkeeper_daemon::maintenance_macos::{Macos, MacosPorts};
 use hostkeeper_daemon::maintenance_mdm::MdmConflicts;
 use hostkeeper_daemon::maintenance_plist::HostPlists;
-use hostkeeper_daemon::maintenance_softwareupdate::MacosMajor;
 use hostkeeper_daemon::maintenance_xcode::Xcodes;
 use hostkeeper_launchd::{
     Launchctl, LaunchctlError, LaunchctlOutput, PlatformKind, StdinError, StdinRun,

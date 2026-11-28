@@ -508,9 +508,9 @@ whole, so a `Put` that leaves `maintenance` out sets every key back to its defau
 reads `batch` (unless the run names its own) and `min_serving` to decide when each host of the group
 starts its turn, and `linux_scope`, `macos_major`, `drain_deadline_secs` (unless the run names its
 own) and `return_secs` for the `maintain` order it sends the host
-([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). `Schedule` counts a
-major upgrade of macOS that a Mac reports as due only when its group's `macos_major` is true
-([macos.md](../macos.md), Maintenance facts). A run also reads two keys of the policy itself: a
+([maintenance-updates.md](../design/maintenance-updates.md), section 5.1). A Mac reports the newest
+major upgrade of macOS it is offered; `Schedule`, the alert `updates_due` and `Hosts.Get` count it
+as due only when its group's `macos_major` is true ([macos.md](../macos.md), Maintenance facts). A run also reads two keys of the policy itself: a
 host whose turn is done holds its batch place until it has sent the group's `bake_beats` healthy
 heartbeats in a row (section 5.6), and a host whose turn deferred is offered again, after the
 run's other hosts of the group and while the window is open, once the group's `defer_backoff` has

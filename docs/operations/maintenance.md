@@ -891,9 +891,9 @@ A new major macOS (26 to 27) is not due by default. The group's `macos_major` tr
 coordinator count one the Mac reports, and its `maintain` order lets the daemon stage and install
 it: `softwareupdate --fetch-full-installer` at the stage (twice its size free on the data volume), then
 the installer's `startosinstall` at the apply, which restarts the Mac itself, and the installer
-removed once the check passes. The Mac reports a major upgrade only when its daemon runs with
-`--maintenance-macos-major`, which the Mac's launchd job does not pass ([Not built
-yet](#not-built-yet)).
+removed once the check passes. The Mac's daemon always reports the newest major upgrade it is
+offered, and the group's `macos_major` alone decides: while it is false, the coordinator counts
+none, `hk hosts get` shows none in `maintenance.due[]` and the alert `updates_due` counts none.
 
 A major upgrade cannot be undone. Turn `macos_major` on in a group of its own first, for one Mac,
 and back off once the group is upgraded. It is never installed with FileVault on.
@@ -974,7 +974,7 @@ appear, and clear by themselves when their cause does.
 
 | Alert | Level | Stands while | What to do |
 |---|---|---|---|
-| `updates_due` | warning | a host of the group (one alert per group, `host_group` set, and one for the hosts in no group) reports something due, stale reports included | Update the group or its hosts, or Schedule them in a window; or leave it: it never pages |
+| `updates_due` | warning | a host of the group (one alert per group, `host_group` set, and one for the hosts in no group) reports something due, stale reports included; a major macOS upgrade only while the group's `macos_major` is true | Update the group or its hosts, or Schedule them in a window; or leave it: it never pages |
 | `maintenance_halted` | critical | a host's turn is stored halted (one per host); it names the host, the run, its group and its daemon's reason, and adds that a retry or a put back is sent once one is queued | [A halted host](#a-halted-host): read the reason, then Retry or Put back |
 | `maintenance_not_back` | critical | a host stored rebooting stayed silent past its group's `return_secs` (one per host) | [A host that is not back](#a-host-that-is-not-back): look at its console; it goes on when it reports |
 | `xcode_release_waiting` | warning | the list of Xcode releases holds a release newer than any the store holds (one alert, the newest; it names the version, the build and the macOS it requires) | [Bringing in a new Xcode](#bringing-in-a-new-xcode): `hk xcode add <version>` from your Mac |
@@ -1074,9 +1074,6 @@ On a Mac:
 - **A Mac with FileVault on is never ordered `macos`.** The report does not yet say whether the
   update account is a FileVault user, so every Mac not reported off is left out
   (`filevault_not_ready`). The authenticated restart is built in the daemon for when it does.
-- **No Mac reports a major upgrade due.** The daemon reports one only with
-  `--maintenance-macos-major`, and the Mac's launchd job runs `hostkeeper daemon` with no flag, so a
-  group's `macos_major` has nothing to count yet.
 - **The update account's making is not proven on a Mac.** That `sysadminctl` takes both passwords
   on a pipe, and the Secure Token grant, are still to be shown (the proof's MP-A2 to MP-A5). Its
   password is changed by hand only.

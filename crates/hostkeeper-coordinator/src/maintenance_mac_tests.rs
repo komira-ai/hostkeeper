@@ -1,7 +1,8 @@
 //! What a Mac must report before it is ordered `macos` ([`crate::maintenance_mac`]), each rule
 //! through the coordinator: `Maintenance.Schedule` (the host left out, or waiting without
 //! `macos`, with why), `Maintenance.Get`, and the heartbeat that would start the host's turn (no
-//! order, and why stored on its turn), and the group's `macos_major`.
+//! order, and why stored on its turn), and the group's `macos_major`, which also decides what
+//! `Hosts.Get` shows due and what the alert `updates_due` counts.
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::agent::v1::MaintenanceKind;
@@ -17,6 +18,7 @@ use crate::maintenance_calls_tests::{
     GROUP, clean_mac, edit_runs, get, host_at, hosts_request, run_of, schedule, seed_runs, waiting,
 };
 use crate::maintenance_runs::{Kind, RunHost, Skip, Step};
+use crate::marks_support::operator;
 use crate::orders::Order;
 
 /// The Mac of the tests.
@@ -494,6 +496,67 @@ fn a_major_upgrade_is_not_ordered_unless_the_group_allows_it() {
             "{n}"
         );
     }
+}
+
+/// The due items `Hosts.Get` shows in [`MAC`]'s report.
+fn shown(world: &World) -> Vec<agent::DueItem> {
+    world
+        .coordinator()
+        .get_host(
+            &operator(),
+            &proto::GetHostRequest {
+                node_id: MAC.to_owned(),
+            },
+        )
+        .expect("a host")
+        .host
+        .expect("a host")
+        .maintenance
+        .expect("a report")
+        .due
+}
+
+/// The messages of the alerts `updates_due` `Alerts.List` answers.
+fn noticed(world: &World) -> Vec<String> {
+    world
+        .coordinator()
+        .list_alerts(&operator(), proto::ListAlertsRequest {})
+        .expect("listed")
+        .alerts
+        .into_iter()
+        .filter(|alert| alert.kind() == proto::AlertKind::UpdatesDue)
+        .map(|alert| alert.message)
+        .collect()
+}
+
+/// Proves: the major upgrade a Mac's daemon reports (it reports the newest one it is offered,
+/// whatever its group allows) is shown and noticed only where the group's `macos_major` allows
+/// it. In a group whose `macos_major` is false, `Hosts.Get` shows the Mac's report without it (a
+/// minor update beside it is kept), and the alert `updates_due` does not count a Mac whose only
+/// item due is the major upgrade (only [`LINUX_HOST`] is counted), but counts one with a minor
+/// update beside it; in a group that allows one, `Hosts.Get` shows both and the Mac is counted
+/// with the major upgrade alone.
+///
+/// Catches: a major upgrade shown due, or a Mac noticed for it, in a group that has not allowed
+/// one, so its operators are offered an Update that `Schedule` refuses `nothing_due`.
+#[test]
+fn a_major_upgrade_is_shown_and_noticed_only_where_the_group_allows_it() {
+    let world = world_of("mac-major-hidden", false, &[major()], Some(clean_mac()));
+    assert_eq!(shown(&world), Vec::new());
+    assert_eq!(noticed(&world), ["Updates due on 1 host of alpha"]);
+
+    let both = [minor(), major()];
+    let world = world_of("mac-major-hidden-minor", false, &both, Some(clean_mac()));
+    assert_eq!(shown(&world), [minor()]);
+    assert_eq!(noticed(&world), ["Updates due on 2 hosts of alpha"]);
+
+    let world = world_of("mac-major-shown", true, &both, Some(clean_mac()));
+    assert_eq!(shown(&world), both);
+    assert_eq!(noticed(&world), ["Updates due on 2 hosts of alpha"]);
+
+    let world = world_of("mac-major-shown-alone", true, &[major()], Some(clean_mac()));
+    assert_eq!(shown(&world), [major()]);
+    assert_eq!(noticed(&world), ["Updates due on 2 hosts of alpha"]);
 }
 
 /// Proves: a skip of `macos` that the store refuses stores nothing and sends no order, and the

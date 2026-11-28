@@ -572,9 +572,9 @@ empty environment, no standard input, a deadline and capped output:
   names. The listing is read by one parser, `parse_softwareupdate_list`
   (`maintenance_softwareupdate.rs`), pinned by fixtures; a line it does not know is counted in the
   report's `unparsed_lines`. A macOS update of the running major version is due, with a reboot when
-  it says `Action: restart`. A major upgrade is never due unless the daemon runs with
-  `--maintenance-macos-major`; then `softwareupdate --list-full-installers` is listed too and the
-  newest major upgrade of either listing is due.
+  it says `Action: restart`. `softwareupdate --list-full-installers` is listed too, and the newest
+  major upgrade of either listing is in the report's `due`, whatever the group allows: no flag of
+  the daemon decides it, the group's `macos_major` does, at the coordinator (below).
 - `boot` (`maintenance_boot.rs`): the boot id, `kern.bootsessionuuid` as the step record reads it
   (`hostkeeper_launchd::SysctlBootId`, below), and the boot time, the `sec` of
   `sysctl -n kern.boottime`, so that a restart shows in the report as a new `boot_id` and
@@ -613,8 +613,8 @@ reason, shown as the host's `skipped_because` by `Schedule` and `Get`:
 
 Only `macos` is left out: the Mac's other kinds of the same run, an `xcode` install, still go, and
 the Mac is shown `skipped` only when `macos` was all its turn held. A major upgrade the Mac reports
-counts as due only when its group's `macos_major` is true, and the `maintain` order carries that
-setting, so the daemon stages a major upgrade only for such a group.
+counts as due (`Schedule`, `updates_due`, `Host.maintenance.due`) only when its group's `macos_major`
+is true, and the `maintain` order carries it, so the daemon stages a major only for such a group.
 
 ### The Xcode install
 

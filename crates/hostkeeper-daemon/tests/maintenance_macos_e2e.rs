@@ -30,6 +30,10 @@ use support_mac::{
     xcodebuild,
 };
 
+/// A major upgrade on Macs whose daemon runs with no flag, as its launchd job starts it.
+#[path = "maintenance_macos_e2e/major.rs"]
+mod major;
+
 /// The group of every test.
 const GROUP: &str = "macs";
 
@@ -158,20 +162,27 @@ fn minor_install(restart: bool) -> Input {
 }
 
 /// Proves: the Update button on a Mac with FileVault off and a minor macOS update due runs the
-/// whole turn from one order: the stage downloads the update while the Mac serves, the drain,
+/// whole turn from one order. The Mac reports the major upgrade it is offered beside the update,
+/// which its group (`macos_major` false, the default) does not take: the order carries no
+/// `macos_major`, and the stage asks for no full installer. The stage downloads the update while
+/// the Mac serves, the drain,
 /// the install by `softwareupdate --install ... --restart` with the update account's password on
 /// its standard input alone, the restart into the new build, the check of that build, the
 /// resume, done; the next report shows nothing due and the group's `updates_due` notice clears.
 ///
-/// Catches: an install that passes the password in an argument, or not on standard input, or
-/// that logs it; an install without `--restart` on a Mac with FileVault off; a turn that checks
+/// Catches: a major upgrade staged or installed in a group that does not allow one; an install
+/// that passes the password in an argument, or not on standard input, or that logs it; an install
+/// without `--restart` on a Mac with FileVault off; a turn that checks
 /// before the restart or resumes before the check; an install repeated after the restart; an
 /// order given again; a report that still lists the update, or a notice that stands, after the
 /// turn is done.
 #[test]
 fn the_update_button_installs_a_minor_update_and_restarts_the_mac_with_filevault_off() {
     let (world, mut h1, h2) = pair("mac-e2e-minor", Mac::default());
-    assert_eq!(h1.due(), [pb::MaintenanceKind::Macos]);
+    assert_eq!(
+        h1.due(),
+        [pb::MaintenanceKind::Macos, pb::MaintenanceKind::Macos]
+    );
     assert_eq!(world.alerts(), updates_due());
 
     let run = world.update(&["h1"]);
@@ -428,110 +439,11 @@ fn a_disk_too_full_at_stage_defers_with_nothing_installed() {
     assert_eq!(h1.machine.inputs(), Vec::<Input>::new());
     assert!(!h1.machine.cordoned());
     assert!(!h1.machine.restart_asked());
-    assert_eq!(h1.due(), [pb::MaintenanceKind::Macos]);
-    assert_eq!(world.alerts(), updates_due());
-    assert_eq!(h1.orders(), [order]);
-}
-
-/// Proves: in a group that allows a major upgrade, a Mac offered one is ordered `macos` with
-/// `macos_major`, and its turn runs the upgrade alone: the stage fetches the full installer
-/// (`softwareupdate --fetch-full-installer`), the install runs the installer app's
-/// `startosinstall --agreetolicense --nointeraction --user <account> --stdinpass` with the
-/// password on its standard input, the Mac restarts into the new major version, and the check
-/// passes and then removes the installer app.
-///
-/// Catches: a stage that downloads the minor update beside the upgrade, or no installer; an
-/// upgrade installed by `softwareupdate --install`; an installer app left behind, or removed
-/// before the check.
-#[test]
-fn a_major_upgrade_fetches_the_full_installer_and_runs_startosinstall() {
-    let test = "mac-e2e-major";
-    let world = World::new(test);
-    world.group(
-        GROUP,
-        &["h1", "h2"],
-        op::MaintenancePolicy {
-            macos_major: true,
-            ..one_at_a_time()
-        },
-    );
-    let mac = Mac {
-        major: true,
-        ..Mac::default()
-    };
-    let mut h1 = Node::mac(&world, test, "h1", GROUP, mac);
-    let mut h2 = Node::mac(&world, test, "h2", GROUP, Mac::up_to_date());
-    h1.report();
-    h2.report();
-    // The report lists the minor update and the major upgrade, both of kind `macos`.
     assert_eq!(
         h1.due(),
         [pb::MaintenanceKind::Macos, pb::MaintenanceKind::Macos]
     );
-
-    let run = world.update(&["h1"]);
-    let order = Ordered {
-        macos_major: true,
-        ..first_offer(&run, &[pb::MaintenanceKind::Macos])
-    };
-    assert_eq!(h1.beat(), Some(order.clone()));
-    assert_eq!(h1.machine.applications(), [INSTALLER_NAME]);
-    restart_to_done(&mut h1);
-
-    let startosinstall = format!("{INSTALLER_APP}/Contents/Resources/startosinstall");
-    let upgrade_args = args(&[
-        "--agreetolicense",
-        "--nointeraction",
-        "--user",
-        ACCOUNT,
-        "--stdinpass",
-    ]);
-    assert_eq!(
-        h1.machine.effects(),
-        [
-            "prepare".to_owned(),
-            ran(SW_VERS, &[]),
-            ran(SOFTWAREUPDATE, &["--list"]),
-            ran(SOFTWAREUPDATE, &["--list-full-installers"]),
-            ran(
-                SOFTWAREUPDATE,
-                &[
-                    "--fetch-full-installer",
-                    "--full-installer-version",
-                    MAJOR_VERSION
-                ]
-            ),
-            format!("drain {SERVICE}"),
-            "cutover".to_owned(),
-            ran(FDESETUP, &["status"]),
-            ran(SW_VERS, &[]),
-            ran(SOFTWAREUPDATE, &["--list"]),
-            ran(SOFTWAREUPDATE, &["--list-full-installers"]),
-            ran_with(&startosinstall, &upgrade_args),
-            "boot boot-2".to_owned(),
-            "verify".to_owned(),
-            ran(SW_VERS, &[]),
-            format!("resume {SERVICE}"),
-        ]
-    );
-    assert_eq!(
-        h1.machine.inputs(),
-        [Input {
-            program: startosinstall,
-            args: upgrade_args,
-            stdin: format!("{PASSWORD}\n"),
-        }]
-    );
-    assert_eq!(h1.machine.logged(), ["startosinstall: exited with code 0"]);
-    password_only_on_stdin(&h1);
-    assert_eq!(h1.machine.applications(), Vec::<String>::new());
-    assert_eq!(
-        h1.machine.running(),
-        (MAJOR_VERSION.to_owned(), MAJOR_BUILD.to_owned())
-    );
-    assert_eq!(world.steps(&run), [at("h1", Step::Done)]);
-    assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
-    assert_eq!(world.alerts(), no_alerts());
+    assert_eq!(world.alerts(), updates_due());
     assert_eq!(h1.orders(), [order]);
 }
 
@@ -566,7 +478,10 @@ fn a_macos_and_xcode_turn_restarts_after_macos_and_installs_xcode_after_the_rest
     };
     let mut h1 = Node::mac(&world, test, "h1", GROUP, mac);
     h1.report();
-    assert_eq!(h1.due(), [pb::MaintenanceKind::Macos]);
+    assert_eq!(
+        h1.due(),
+        [pb::MaintenanceKind::Macos, pb::MaintenanceKind::Macos]
+    );
     assert_eq!(world.alerts(), updates_due());
 
     let run = world.schedule(op::ScheduleMaintenanceRequest {

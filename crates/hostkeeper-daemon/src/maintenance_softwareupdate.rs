@@ -24,8 +24,8 @@
 //! **What is due** ([`macos_due`]): an update whose title starts with `macOS ` and whose major
 //! version (the number before the first `.`) is the running one's is a minor update, always due;
 //! one of a higher major version is a major upgrade, as is a full installer of a higher major
-//! version. A major upgrade is due only when the host's setting allows it ([`MacosMajor::Due`],
-//! the group setting `macos_major` of the design's section 3), and then only the newest one.
+//! version. Of the major upgrades only the newest one is due, always: whether it counts is the
+//! coordinator's to say, by the group setting `macos_major` of the design's section 3.
 //! Nothing else `softwareupdate` lists is due (the Command Line Tools, Safari), and neither is a
 //! macOS of a lower major version, nor one whose version has no major number.
 
@@ -73,29 +73,6 @@ const YES_NO: [&str; 2] = ["YES", "NO"];
 
 /// What the title of a macOS update or installer starts with.
 pub(crate) const MACOS_TITLE: &str = "macOS ";
-
-/// Whether a major upgrade of macOS is due on the host (`hostkeeper daemon
-/// --maintenance-macos-major`, the group setting `macos_major` of the design's section 3).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MacosMajor {
-    /// A major upgrade is never due, though `softwareupdate` lists it: the default.
-    #[default]
-    NotDue,
-    /// The newest major upgrade is due.
-    Due,
-}
-
-impl MacosMajor {
-    /// [`MacosMajor::Due`] when the flag is given, else [`MacosMajor::NotDue`].
-    #[must_use]
-    pub fn from_flag(due: bool) -> MacosMajor {
-        if due {
-            MacosMajor::Due
-        } else {
-            MacosMajor::NotDue
-        }
-    }
-}
 
 /// One update `softwareupdate --list` names.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -287,15 +264,11 @@ pub fn major_of(version: &str) -> Option<u64> {
     version.split('.').next()?.trim().parse().ok()
 }
 
-/// What of `listing` is due on a Mac running macOS `running`, under `major`, as the module says:
-/// the minor updates in the listing's order, then the newest major upgrade when `major` allows it
-/// (of equal versions, a listed update before a full installer, and the first of each).
+/// What of `listing` is due on a Mac running macOS `running`, as the module says: the minor
+/// updates in the listing's order, then the newest major upgrade (of equal versions, a listed
+/// update before a full installer, and the first of each).
 #[must_use]
-pub fn macos_due(
-    running: &str,
-    listing: &SoftwareUpdateListing,
-    major: MacosMajor,
-) -> Vec<pb::DueItem> {
+pub fn macos_due(running: &str, listing: &SoftwareUpdateListing) -> Vec<pb::DueItem> {
     let Some(running_major) = major_of(running) else {
         return Vec::new();
     };
@@ -332,9 +305,7 @@ pub fn macos_due(
             consider(item(running, &installer.version, true, &installer.title));
         }
     }
-    if major == MacosMajor::Due {
-        due.extend(newest);
-    }
+    due.extend(newest);
     due
 }
 
