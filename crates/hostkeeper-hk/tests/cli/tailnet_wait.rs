@@ -54,6 +54,7 @@ impl Wait {
             tailscale: self.tailscale.clone(),
             limit,
             wait: &wait,
+            now: &|| Duration::ZERO,
         };
         let mut all = vec![
             "--endpoint".to_owned(),

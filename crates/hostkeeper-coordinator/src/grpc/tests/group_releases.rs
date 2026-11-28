@@ -333,6 +333,50 @@ async fn converge_wait_and_get_release_name_their_group_over_both_wires() {
     }
 }
 
+/// Proves: what a wait still waits on is read from the pairs the wait reads alone: the group it
+/// names, or, with none, each group that has a desired version of the package (a group that lists
+/// it with none is left out); a group the coordinator does not hold reads no pair.
+///
+/// Catches: a wait naming one group that lists the hosts and plans of another, or a wait naming
+/// none that lists a group that has no version of the package.
+#[tokio::test]
+async fn what_a_wait_waits_on_is_read_from_the_pairs_it_reads() {
+    let world = Wired::new("grpc-group-not-yet");
+    let groups = |group: &str| -> Vec<String> {
+        let not_yet = world.coordinator.not_yet("web", group, "2.0");
+        assert!(not_yet.hosts.is_empty(), "{group}: the groups have no host");
+        not_yet.plans.into_iter().map(|p| p.host_group).collect()
+    };
+    let _: proto::SetDesiredResponse = rpc(
+        &world.coordinator,
+        WIRES[0],
+        SET_DESIRED,
+        Some(OPERATOR),
+        &set("alpha", "2.0"),
+    )
+    .await
+    .expect("set");
+    assert_eq!(groups("alpha"), ["alpha"]);
+    assert_eq!(groups(""), ["alpha"]);
+    assert_eq!(
+        groups("beta"),
+        Vec::<String>::new(),
+        "a pair with no desired version has no plan"
+    );
+    let _: proto::SetDesiredResponse = rpc(
+        &world.coordinator,
+        WIRES[0],
+        SET_DESIRED,
+        Some(OPERATOR),
+        &set("beta", "2.0"),
+    )
+    .await
+    .expect("set");
+    assert_eq!(groups(""), ["alpha", "beta"]);
+    assert_eq!(groups("beta"), ["beta"]);
+    assert_eq!(groups("missing"), Vec::<String>::new());
+}
+
 /// The refusal `WaitConverged` makes of a wait that names `group`.
 async fn waited_refused(world: &Wired, wire: super::rollouts::Wire, group: &str) -> Refused {
     rpc::<proto::WaitConvergedResponse>(

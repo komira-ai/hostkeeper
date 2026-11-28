@@ -587,6 +587,7 @@ export namespace hostkeeper_operator_v1 {
   export interface MoveHostResponse { entry?: hostkeeper_operator_v1.AuditEntry; fromHostGroup?: string; }
   export interface NetworkDevice { id?: string; name?: string; role?: hostkeeper_operator_v1.NetworkRole; consoleHost?: string; consoleDevice?: string; managementMac?: string; notes?: string; }
   export type NetworkRole = "NETWORK_ROLE_UNSPECIFIED" | "NETWORK_ROLE_BMC" | "NETWORK_ROLE_DATA";
+  export interface NotYet { hosts?: hostkeeper_operator_v1.WaitingHost[]; hostsLeftOut?: number; plans?: hostkeeper_operator_v1.WaitingPlan[]; answeredUnix?: string; }
   export interface OpenConsoleRequest { hostId?: string; reason?: string; }
   export interface OpenConsoleResponse { kind?: hostkeeper_operator_v1.ConsoleKind; session?: string; expiresInSecs?: string; quietSecs?: string; address?: hostkeeper_operator_v1.ConsoleAddress; }
   export interface OpenRecordRequest { hostId?: string; approveUntilUnix?: string; approveForSecs?: string; reason?: string; }
@@ -843,8 +844,21 @@ export namespace hostkeeper_operator_v1 {
     push?: hostkeeper_operator_v1.MdmPushCheck;
   }
   export interface WaitConvergedRequest { service?: string; version?: string; waitSecs?: number; hostGroup?: string; }
-  export interface WaitConvergedResponse { outcome?: hostkeeper_operator_v1.WaitOutcome; convergence?: hostkeeper_operator_v1.Convergence; }
+  export interface WaitConvergedResponse { outcome?: hostkeeper_operator_v1.WaitOutcome; convergence?: hostkeeper_operator_v1.Convergence; notYet?: hostkeeper_operator_v1.NotYet; }
   export type WaitOutcome = "WAIT_OUTCOME_UNSPECIFIED" | "WAIT_OUTCOME_CONVERGED" | "WAIT_OUTCOME_HALTED" | "WAIT_OUTCOME_SUPERSEDED" | "WAIT_OUTCOME_DEADLINE" | "WAIT_OUTCOME_NO_DESIRED";
+  export interface WaitingHost {
+    nodeId?: string;
+    role?: string;
+    state?: hostkeeper_operator_v1.WaitingState;
+    installedVersion?: string;
+    updatingTo?: string;
+    step?: string;
+    stepAttempt?: number;
+    reason?: string;
+    sinceUnix?: string;
+  }
+  export interface WaitingPlan { hostGroup?: string; waiting?: hostkeeper_operator_v1.PlanWait; waitingOn?: string[]; pauseReason?: string; }
+  export type WaitingState = "WAITING_STATE_UNSPECIFIED" | "WAITING_STATE_UPDATING" | "WAITING_STATE_FAILED" | "WAITING_STATE_EXCLUDED" | "WAITING_STATE_SILENT" | "WAITING_STATE_BEHIND" | "WAITING_STATE_SETTLING";
   export interface WholeFleet {}
   export interface WriteRecord { generation?: string; replaced?: hostkeeper_operator_v1.Replaced; writeId?: string; }
   export interface XcodeArchive { sha256?: string; version?: string; build?: string; sizeBytes?: string; uploadedBy?: string; uploadedAtUnix?: string; }

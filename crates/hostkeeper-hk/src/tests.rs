@@ -598,3 +598,22 @@ fn only_the_host_api_has_no_command() {
         assert_eq!(crate::is_served(&agent), served, "{package}");
     }
 }
+
+/// Proves: the flags of a hand-written method are its own, in its help's order, and a method
+/// that is not written by hand (a command of the table, or none) has none.
+///
+/// Catches: a workflow lint reading flags `hk releases wait` does not take as its own.
+#[test]
+fn a_hand_methods_flags_are_its_own() {
+    assert_eq!(
+        crate::hand_flags("releases", "wait"),
+        Some(vec![
+            "--service",
+            "--version",
+            "--wait-secs",
+            "--host-group"
+        ])
+    );
+    assert_eq!(crate::hand_flags("releases", "wait-converged"), None);
+    assert_eq!(crate::hand_flags("nothing", "wait"), None);
+}

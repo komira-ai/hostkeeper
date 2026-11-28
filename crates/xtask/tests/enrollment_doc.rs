@@ -621,6 +621,24 @@ fn the_doc_check_refuses_each_defect() {
             "`hk hosts get --transport=gateway`".to_owned(),
             "docs/x.md: `hk hosts get --transport=gateway`: hosts get has no flag --transport",
         ),
+        (
+            "`hk releases wait --max-polls 180`".to_owned(),
+            "docs/x.md: `hk releases wait --max-polls 180`: releases wait has no flag --max-polls",
+        ),
+        (
+            fenced_call("releases wait --service s --version 1 --wait-secs 1801"),
+            "docs/x.md: hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file \
+             <token-file> releases wait \
+             --service s --version 1 --wait-secs 1801\n--wait-secs takes a whole number from 1 \
+             to 1800",
+        ),
+        (
+            fenced_call("releases wait --service s --wait-secs 60"),
+            "docs/x.md: hk --endpoint https://<private-listener> --ca-file <ca.pem> --token-file \
+             <token-file> releases wait \
+             --service s --wait-secs 60\nhk releases wait needs --service, --version and \
+             --wait-secs",
+        ),
     ];
     for (doc, problem) in cases {
         assert_eq!(doc_problems("docs/x.md", &doc), [problem], "{doc}");

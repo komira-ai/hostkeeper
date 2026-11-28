@@ -35,7 +35,7 @@
 //!   attested `sourceRepositoryDigest` with `env.HOSTKEEPER_COMMIT`, that same input;
 //! - a call step, the request step or the outputs step breaks a rule of
 //!   [`set_desired_calls`](super::set_desired_calls); or any step's script has a loop (`while`,
-//!   `until` or `for`): the wait is one call the coordinator holds;
+//!   `until` or `for`): the wait is one hk command, which makes its own calls (`hk releases wait`);
 //! - it has no input [`JOIN_INPUT`] of `type: boolean` with `default: false`; or the join step
 //!   [`JOIN_STEP`] is missing or there twice, its `if:` is not [`JOIN_IF`], it has
 //!   `continue-on-error`, it comes before a check of [`VERIFY_STEPS`] or after [`CLIENT_STEP`],
@@ -466,7 +466,7 @@ fn step_problems(steps: &[Node]) -> Vec<String> {
         for word in ["while", "until", "for"] {
             if lines.iter().any(|l| has_word(l, word)) {
                 problems.push(format!(
-                    "{} has a `{word}` loop: the wait is one call the coordinator holds",
+                    "{} has a `{word}` loop: the wait is one hk command, which makes its own calls",
                     label(i, step)
                 ));
             }

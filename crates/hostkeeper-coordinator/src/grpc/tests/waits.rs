@@ -349,6 +349,69 @@ async fn a_wait_ends_deadline_at_its_wait_secs_on_the_paused_clock() {
     );
 }
 
+/// Proves: a wait answered `DEADLINE` says what it still waits on (`not_yet`): each host not
+/// settled on the version, by node id, in its state (a failed host FAILED with its update's
+/// reason, a host not ordered BEHIND, a host not heard for 50 seconds SILENT since its last
+/// heartbeat), the plan of the service, and the store's clock when it answered; a host on the
+/// version is not listed, and an answer that ends `CONVERGED` lists nothing.
+///
+/// Catches: a wait that ends at its budget naming no host, which leaves a reader unable to tell a
+/// host still updating from one that failed or went silent.
+#[tokio::test(start_paused = true)]
+async fn a_wait_at_its_deadline_says_each_host_it_still_waits_on() {
+    let world = world("wait-not-yet").await;
+    beat(&world, "s2", "storage", &at("1.0")).await;
+    world.rig.at(1_150);
+    beat(&world, "s1", "storage", &at("1.0")).await;
+    beat(&world, "f1", "frontend", FAILED).await;
+    beat(&world, "f2", "frontend", &at("2.0")).await;
+    let (code, _, body) = held(&world, 60, OPERATOR, CLIENT_PATIENCE)
+        .await
+        .expect("joined");
+    assert_eq!(code, Code::Ok);
+    let reply: proto::WaitConvergedResponse = decode(&body.expect("a message"));
+    assert_eq!(reply.outcome(), proto::WaitOutcome::Deadline);
+    let not_yet = reply.not_yet.expect("what it waits on");
+    let hosts: Vec<(&str, proto::WaitingState)> = not_yet
+        .hosts
+        .iter()
+        .map(|h| (h.node_id.as_str(), h.state()))
+        .collect();
+    assert_eq!(
+        hosts,
+        [
+            ("f1", proto::WaitingState::Failed),
+            ("s1", proto::WaitingState::Behind),
+            ("s2", proto::WaitingState::Silent),
+        ]
+    );
+    assert_eq!(not_yet.hosts_left_out, 0);
+    let silent = &not_yet.hosts[2];
+    assert_eq!(silent.since_unix, Some(not_yet.answered_unix - 50));
+    assert_eq!(silent.installed_version.as_deref(), Some("1.0"));
+    assert!(not_yet.answered_unix > 0);
+    let plans: Vec<&str> = not_yet
+        .plans
+        .iter()
+        .map(|p| p.host_group.as_str())
+        .collect();
+    assert_eq!(
+        plans,
+        [""],
+        "one plan, of a coordinator without host groups"
+    );
+
+    world.rig.at(1_200);
+    beat(&world, "s1", "storage", &at("2.0")).await;
+    beat(&world, "f1", "frontend", &at("2.0")).await;
+    beat(&world, "f2", "frontend", &at("2.0")).await;
+    let request = grpc_request(WAIT_CONVERGED, wait_for("kbf", "2.0", 60), Some(OPERATOR));
+    let (_, _, body) = call(&world.coordinator, Surface::Control, &None, request).await;
+    let reply: proto::WaitConvergedResponse = decode(&body.expect("a message"));
+    assert_eq!(reply.outcome(), proto::WaitOutcome::Converged);
+    assert_eq!(reply.not_yet, None);
+}
+
 /// Proves: at its deadline a wait reads once more and answers what that read says: a host that
 /// fell silent (down) while the wait was held leaves the one live host at the version, which no
 /// request told the wait, and the answer is `CONVERGED`, not `DEADLINE`.

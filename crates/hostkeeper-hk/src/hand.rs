@@ -1,5 +1,7 @@
 //! The methods of a generated service that are written by hand: `hk xcode verify` is a method of
-//! the service `xcode`, which the table of the protos gives only `list` and `remove`. A hand
+//! the service `xcode`, which the table of the protos gives only `list` and `remove`, and
+//! `hk releases wait` one of `releases`, which waits in calls of its generated `wait-converged`
+//! ([`crate::releases_wait`]). A hand
 //! method is found by the service's command word and its own, listed after the generated
 //! methods in `hk <service> --help` and in `docs/cli.md`, and run by its function in place of a
 //! gateway call. A service that the table does not have has none.
@@ -32,6 +34,46 @@ pub(crate) struct Method {
 
 /// Every hand method.
 pub(crate) const METHODS: &[Method] = &[
+    Method {
+        service: "releases",
+        method: "wait",
+        doc: "Waits, for at most --wait-secs, for the fleet to converge on a version of a \
+              service, in held calls of Releases.WaitConverged of at most 60 seconds each, each \
+              with a token of its own, so that no wait rides on one connection for longer. An \
+              answer DEADLINE is not yet and the next call is made; when what it waits on changed, \
+              it is printed on stderr: each host not settled on the version, its state (updating, \
+              failed, excluded, silent, not ordered yet, settling) and since when, and why each \
+              plan waits. Any other outcome ends the wait with that answer. A call with no answer \
+              (a cut connection, no token, an answer that is not the gateway's) is said on stderr \
+              and asked again 10 seconds later; a refusal ends the wait as \
+              `hk releases wait-converged`'s does. When --wait-secs have passed, the last answer \
+              is the answer, and what it still waits on is printed; with no answer at all, hk \
+              exits 1. The answer is written as `hk releases wait-converged` writes it, and an \
+              answer exits 0. `hk releases wait --help` says each step.",
+        flags: &[
+            Flag {
+                name: "--service",
+                value: "NAME",
+                help: "The service.",
+            },
+            Flag {
+                name: "--version",
+                value: "VERSION",
+                help: "The version waited for; another desired version ends the wait.",
+            },
+            Flag {
+                name: "--wait-secs",
+                value: "N",
+                help: "How long to wait in all, 1 to 1800 seconds.",
+            },
+            Flag {
+                name: "--host-group",
+                value: "GROUP",
+                help: "The host group; none: every group that lists the service.",
+            },
+        ],
+        run: crate::releases_wait::releases_wait,
+    },
     Method {
         service: "xcode",
         method: "add",

@@ -7,10 +7,11 @@
 //! `--response-file` exactly once with exactly its value, or passes any other flag, a token input
 //! of [`TOKEN_INPUTS`] among them (a call takes the job's own OIDC token, by
 //! `--github-oidc-audience`, and no token is ever a file or stdin of the job); it does not call
-//! `releases <method>`, or that is not a command of hk's table (`hostkeeper_proto::ctl`); a flag
-//! after the method is not one of that command; or it does not end with exactly its `redirect`,
-//! which sends its diagnostics to its own file, the one the outputs step reads (the set:
-//! [`SET_REDIRECT`], through `tee` to its log as well; the wait: `2> <file>`); or it does not
+//! `releases <method>`, or that is not a method of hk (a command of its table,
+//! `hostkeeper_proto::ctl`, or one hk writes by hand, `hostkeeper_hk::hand_flags`); a flag after
+//! the method is not one of that method; or it does not end with exactly its `redirect`, which
+//! sends its diagnostics to its own file, the one the outputs step reads, and through `tee` to
+//! the step's log as well ([`SET_REDIRECT`], [`WAIT_REDIRECT`]); or it does not
 //! pass each flag of
 //! its `fields` after the method exactly once with exactly its value (the set: the service and
 //! [`REQUEST_FILE`], which the request step writes; the wait: the service, the version and
@@ -54,6 +55,10 @@ pub struct Call {
 /// hk's exit code.
 pub const SET_REDIRECT: &str = r#"2> >(tee "$RUNNER_TEMP/hk-set.err" >&2)"#;
 
+/// The wait's redirect, as the set's: its file, and the step's log, where the table of what the
+/// wait waits on shows as it changes (`hk releases wait`).
+pub const WAIT_REDIRECT: &str = r#"2> >(tee "$RUNNER_TEMP/hk-wait.err" >&2)"#;
+
 /// The two calls, in the order they run.
 pub const CALLS: [Call; 2] = [
     Call {
@@ -67,7 +72,7 @@ pub const CALLS: [Call; 2] = [
     },
     Call {
         step: WAIT_STEP,
-        method: "wait-converged",
+        method: "wait",
         response: "$RUNNER_TEMP/hk-wait.json",
         err: "$RUNNER_TEMP/hk-wait.err",
         fields: &[
@@ -76,7 +81,7 @@ pub const CALLS: [Call; 2] = [
             WAIT_SECS,
         ],
         optional: &[HOST_GROUP],
-        redirect: r#"2> "$RUNNER_TEMP/hk-wait.err""#,
+        redirect: WAIT_REDIRECT,
     },
 ];
 /// What a call step's `env` gives each variable its command names, exactly: the caller's inputs.
@@ -148,7 +153,7 @@ pub const OUTPUTS_ENV: [(&str, &str); 9] = [
     ),
     (
         "WAIT_ERR",
-        "${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}",
+        "${{ (steps.wait.outcome == 'success' || steps.wait.outcome == 'failure') && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}",
     ),
 ];
 /// The variables the outputs step's jq binds, in order: how (`--arg`, a text; `--rawfile`, a
@@ -168,10 +173,19 @@ pub const OUTPUTS_ARGS: [(&str, &str, &str); 9] = [
 pub const OUTPUTS_END: [&str; 3] = ["$OUTPUTS_PROGRAM", ">>", "$GITHUB_OUTPUT"];
 
 /// The command of hk's table for `releases <method>`.
-pub fn command(method: &str) -> Option<&'static Command> {
+fn command(method: &str) -> Option<&'static Command> {
     COMMANDS
         .iter()
         .find(|c| is_served(c) && c.service_command == SERVICE && c.method_command == method)
+}
+
+/// The flags `releases <method>` takes after its method, as hk has them: those of the command of
+/// its table ([`field_flags`]), or a hand-written method's own; none when hk has no such method.
+pub fn method_flags(method: &str) -> Option<Vec<String>> {
+    command(method).map(field_flags).or_else(|| {
+        hostkeeper_hk::hand_flags(SERVICE, method)
+            .map(|flags| flags.into_iter().map(str::to_owned).collect())
+    })
 }
 
 /// The flags `command` takes after its method: `--request`, and each field's flags.
@@ -257,14 +271,10 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
         problems.push(format!("{who} does not call `{SERVICE} {}`", call.method));
         return problems;
     }
-    let Some(command) = command(call.method) else {
-        problems.push(format!(
-            "`{SERVICE} {}` is not a command of hk's table",
-            call.method
-        ));
+    let Some(known) = method_flags(call.method) else {
+        problems.push(format!("`{SERVICE} {}` is not a method of hk", call.method));
         return problems;
     };
-    let known = field_flags(command);
     for flag in &fields {
         if !known.iter().any(|k| k == flag) && !TOKEN_INPUTS.contains(flag) {
             problems.push(format!(

@@ -117,7 +117,11 @@ converged on the version, the service is halted, another version is desired, or 
 (1 to 1800) have passed, so a client's own timeout must be longer than `waitSecs`. A
 coordinator holds at most 16 such calls at once; the next is refused `FAILED_PRECONDITION` with
 the reason `too_many_waits`, and a `waitSecs` of 0 or above 1800 is `INVALID_ARGUMENT`
-`invalid_wait`.
+`invalid_wait`. A held call sends no byte until it is answered, so a client on a path that drops
+a silent connection holds short calls and asks again (`hk releases wait` holds 60 seconds at
+most). An answer that is not `CONVERGED` carries `notYet` (waits.proto): each host the wait reads
+that is not settled on the version, its state and since when the coordinator knows, and why each
+update plan waits.
 
 ## Errors
 

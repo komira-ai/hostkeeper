@@ -42,8 +42,13 @@
 # own OIDC token (`--github-oidc-audience`; the set's diagnostics also go to its log): `releases set-desired`, with the request the `request`
 # step wrote (the version and the targets; the coordinator checks them); and, when
 # `wait` is true and the set succeeded,
-# `releases wait-converged`, one call the coordinator holds until the fleet converges, the
-# service halts, another version is set or `max_polls` times 10 seconds pass. Both pass
+# `releases wait`, which waits until the fleet converges, the service halts, another version is
+# set or `max_polls` times 10 seconds pass, in held calls of `Releases.WaitConverged` of at most
+# 60 seconds each, each with a token of its own: no wait rides on one connection for longer, so
+# a path that drops a connection it has seen no byte on for minutes cuts one call at most, which
+# hk asks again. Each answer that is not yet says each host not at the version, its state and
+# since when, and why the plan waits; hk prints that table on stderr when it changes, and at the
+# end. Both pass
 # `--host-group` only when the `host_group` input is not empty: hk writes every flag it is
 # given into the request, and a coordinator older than its client refuses a field it does not
 # know, so an empty input sends the bytes it sent before the input existed. hk keeps the
@@ -101,7 +106,7 @@ on:
         required: false
         default: true
       max_polls:
-        description: How long to wait for the fleet to converge, in tens of seconds, from 1 to 180 (the wait is one call the coordinator holds for this many times 10 seconds); a value above 180 ends the job with the reason `invalid_wait`.
+        description: How long to wait for the fleet to converge, in tens of seconds, from 1 to 180 (the wait is `hk releases wait` for this many times 10 seconds, in held calls of at most 60 seconds); a value above 180 ends the job with the reason `invalid_wait`, which hk gives it as the coordinator did.
         type: number
         required: false
         default: 180
@@ -312,9 +317,12 @@ jobs:
             ${HOST_GROUP:+"--host-group=$HOST_GROUP"} \
             2> >(tee "$RUNNER_TEMP/hk-set.err" >&2)
 
-      # One held call, with a token of its own. `--wait-secs` is `max_polls` with a 0 appended,
-      # ten times it, as text: no arithmetic is done on an input. The coordinator refuses a wait
-      # above 1800 seconds (`invalid_wait`). `--host-group` is passed as in the set.
+      # One hk command, whose held calls of at most 60 seconds each take a token of their own.
+      # `--wait-secs` is `max_polls` with a 0 appended, ten times it, as text: no arithmetic is
+      # done on an input; hk refuses a bound above 1800 seconds (`invalid_wait`, the coordinator's
+      # bound of one held call). `--host-group` is passed as in
+      # the set. Its diagnostics, the table of what it waits on among them, go to its file and,
+      # through `tee`, to this step's log as they come.
       - name: Wait for the fleet to converge
         id: wait
         if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
@@ -332,17 +340,18 @@ jobs:
             --ca-file "$RUNNER_TEMP/hk-coordinator-ca.pem" \
             --github-oidc-audience "$AUDIENCE" \
             --response-file "$RUNNER_TEMP/hk-wait.json" \
-            releases wait-converged \
+            releases wait \
             --service "$SERVICE" \
             --version "$VERSION" \
             --wait-secs "${MAX_POLLS}0" \
             ${HOST_GROUP:+"--host-group=$HOST_GROUP"} \
-            2> "$RUNNER_TEMP/hk-wait.err"
+            2> >(tee "$RUNNER_TEMP/hk-wait.err" >&2)
 
       # Runs whatever happened before it. The program below (OUTPUTS_PROGRAM) reads the outcomes
       # of the two calls, their answers and their diagnostics (a file a call did not leave is
       # read as /dev/null), and prints the three outputs; it ends with exit 1 unless the reason is
-      # `converged` or `not_waited`. Its table is docs/deploy/ci-client.md's "Outputs"; the
+      # `converged` or `not_waited`, its message the wait's diagnostics when the wait ran: what
+      # it still waited on when it ended. Its table is docs/deploy/ci-client.md's "Outputs"; the
       # workflow lint's tests run it with jaq on one fixture per row. The files hold no token:
       # hk prints none.
       - name: Write the job's outputs
@@ -357,7 +366,7 @@ jobs:
           SET_BODY: ${{ steps.set-desired.outcome == 'success' && format('{0}/hk-set.json', runner.temp) || '/dev/null' }}
           SET_ERR: ${{ steps.set-desired.outcome == 'failure' && format('{0}/hk-set.err', runner.temp) || '/dev/null' }}
           WAIT_BODY: ${{ steps.wait.outcome == 'success' && format('{0}/hk-wait.json', runner.temp) || '/dev/null' }}
-          WAIT_ERR: ${{ steps.wait.outcome == 'failure' && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
+          WAIT_ERR: ${{ (steps.wait.outcome == 'success' || steps.wait.outcome == 'failure') && format('{0}/hk-wait.err', runner.temp) || '/dev/null' }}
           OUTPUTS_PROGRAM: |
             # A token of the coordinator's refusals, and a version, as the coordinator spells them.
             # Each pattern ends with \z, the end of the text: jq's `$` also matches before a last
@@ -394,7 +403,7 @@ jobs:
                 ended($asked; "no_answer"; "the version \($asked) of \($service) is set, but the wait did not end"; "")
               else
                 ($reasons[if ($outcome | type) == "string" then $outcome else "" end] // "no_answer") as $reason
-                | ended($asked; $reason; "the version \($asked) of \($service) is set; the wait ended with \($reason)"; "")
+                | ended($asked; $reason; "the version \($asked) of \($service) is set; the wait ended with \($reason)"; $wait_err)
               end
             | "desired_version=\(.desired_version)", "converged=\(.converged)", "reason=\(.reason)",
               if .reason == "converged" or .reason == "not_waited" then empty else "::error::\(.why)\n\(.log)" | halt_error(1) end

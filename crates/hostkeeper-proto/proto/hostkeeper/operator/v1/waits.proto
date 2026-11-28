@@ -1,0 +1,95 @@
+// hostkeeper.operator.v1: what a `Releases.WaitConverged` answer says the fleet still waits on
+// when the wait did not end converged (`NotYet`, `WaitConvergedResponse.not_yet`): each host the
+// wait reads that is not settled on the version, in what state and since when, and why the update
+// plan of each pair it reads orders no further host. The `Releases` service, its refusals
+// (`ReleasesRefusal`) and the rest of the package, `Enrollment` and `EnrollmentRefusal`
+// (enrollment.proto) and `Audit` and `AuditRefusal` among it, are operator.proto, which imports
+// this file publicly; this file is the same package and API, kept apart so that each file stays
+// short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: as `Releases.WaitConverged`: CI's token or the operator's (see operator.proto).
+// A CI token reads here only the hosts of the service, and of the host groups, the wait names.
+//
+// Refusals: none of its own; `Releases.WaitConverged` refuses as operator.proto says.
+//
+// Units: as operator.proto says.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/rollouts.proto";
+
+// What a wait that did not end converged still waits on, read when the call was answered.
+message NotYet {
+  // The hosts the wait reads that are not settled on the version, by host group, then node id; at
+  // most 64.
+  repeated WaitingHost hosts = 1;
+  // How many such hosts `hosts` leaves out past its 64.
+  uint32 hosts_left_out = 2;
+  // The update plan of each pair the wait reads, by host group: one entry per pair that has a
+  // plan for its desired version.
+  repeated WaitingPlan plans = 3;
+  // The coordinator's clock when it answered, in unix seconds.
+  uint64 answered_unix = 4;
+}
+
+// One host a wait still waits on.
+message WaitingHost {
+  string node_id = 1;
+  // The host's role; from a coordinator that holds host groups, its group's name.
+  string role = 2;
+  WaitingState state = 3;
+  // The version of the service installed on the host, as it last reported; absent when it is not
+  // installed, or has not reported.
+  optional string installed_version = 4;
+  // UPDATING: the target of the update that runs; absent otherwise.
+  optional string updating_to = 5;
+  // UPDATING: the step the update is in (`prepare`, `cutover`, `verify`) and its try; absent when
+  // the host did not say, and otherwise.
+  optional string step = 6;
+  uint32 step_attempt = 7;
+  // Why, as a token: FAILED, the reason of the failed update (empty when the host gave none);
+  // EXCLUDED, the operator's reason, as written; BEHIND and SETTLING, the rollout gate's reason
+  // (`no_slot`, `busy_elsewhere`, `baking`, ...), or `promotion_pending`, or the host's health
+  // (`unhealthy`, `absent`), or where it stands for the service (`missing`, `absent`,
+  // `unmanaged`); SILENT, empty.
+  string reason = 8;
+  // Since when, in unix seconds, when the coordinator knows: SILENT, its last heartbeat, by the
+  // coordinator's clock; FAILED, when the failed update started, by the host's clock. Absent
+  // otherwise: the coordinator keeps no time of when an update started running.
+  optional uint64 since_unix = 9;
+}
+
+// Where a host a wait still waits on stands. A value is never removed.
+enum WaitingState {
+  WAITING_STATE_UNSPECIFIED = 0;
+  // Live, and an update of the service runs on it.
+  WAITING_STATE_UPDATING = 1;
+  // Live, not updating, not on the version, and its last update to the version failed.
+  WAITING_STATE_FAILED = 2;
+  // An operator excluded it from the service: the convergence does not count it.
+  WAITING_STATE_EXCLUDED = 3;
+  // Not heard for 45 seconds or more.
+  WAITING_STATE_SILENT = 4;
+  // Live, not updating, not on the version, and not failed: not ordered yet, for `reason`.
+  WAITING_STATE_BEHIND = 5;
+  // Live and on the version, but not settled: not up, its promotion pending, or baking.
+  WAITING_STATE_SETTLING = 6;
+}
+
+// The update plan of one pair a wait reads.
+message WaitingPlan {
+  // The host group whose plan it is; empty from a coordinator that does not hold host groups.
+  string host_group = 1;
+  // Why no new host is ordered now.
+  PlanWait waiting = 2;
+  // When `waiting` is ROLLOUT_ELSEWHERE, the services whose live rollouts hold this one.
+  repeated string waiting_on = 3;
+  // An operator's reason, when the plan is paused.
+  optional string pause_reason = 4;
+}

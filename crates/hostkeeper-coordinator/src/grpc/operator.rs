@@ -539,9 +539,15 @@ impl ReleasesApi for ReleasesService {
             .write_record_in(&message.host_group, service)
             .as_ref()
             .map(record_proto);
+        // What the wait still waits on, read once at the answer: never for a converged one.
+        let not_yet = (outcome != proto::WaitOutcome::Converged).then(|| {
+            self.coordinator
+                .not_yet(service, &message.host_group, &message.version)
+        });
         Ok(Response::new(proto::WaitConvergedResponse {
             outcome: outcome.into(),
             convergence: Some(convergence),
+            not_yet,
         }))
     }
 

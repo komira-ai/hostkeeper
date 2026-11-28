@@ -89,6 +89,8 @@ import public "hostkeeper/operator/v1/entry.proto";
 import public "hostkeeper/operator/v1/rollouts.proto";
 // The `Maintenance` service, the maintenance runs an operator schedules.
 import public "hostkeeper/operator/v1/maintenance.proto";
+// What a wait that did not end converged still waits on (`NotYet`).
+import public "hostkeeper/operator/v1/waits.proto";
 // `HostRepositories`, which `Host` carries.
 import "hostkeeper/operator/v1/repositories.proto";
 // `SetRepositoryRequest` and `SetRepositoryResponse`; then the messages of `Hosts.ClearRecord`
@@ -950,6 +952,9 @@ message WaitConvergedResponse {
   WaitOutcome outcome = 1;
   // As `Converge` answers it at the end of the wait.
   Convergence convergence = 2;
+  // When the outcome is not CONVERGED: the hosts not settled on the version and why the plan
+  // waits (waits.proto). Absent from a coordinator before it, and when the outcome is CONVERGED.
+  NotYet not_yet = 3;
 }
 
 // What ended a `WaitConverged` call. A state of BLOCKED or IN_PROGRESS keeps the call waiting.

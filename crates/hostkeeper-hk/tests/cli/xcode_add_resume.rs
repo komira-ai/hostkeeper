@@ -371,6 +371,7 @@ fn go(add: &Add, fake: &Fake, path: &str) -> (Ran, Vec<u64>) {
         tailscale: add.rig.path("no-tailscale"),
         limit: Duration::from_secs(3600),
         wait: &wait,
+        now: &|| Duration::ZERO,
     };
     let ran = add.run_with(
         Opts::real().tailnet(&tailnet),

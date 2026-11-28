@@ -85,7 +85,7 @@ pub struct Mac {
 }
 
 /// The reading of the system's monotonic clock.
-fn monotonic() -> Duration {
+pub(crate) fn monotonic() -> Duration {
     let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
     Duration::new(
         u64::try_from(now.tv_sec).unwrap_or_default(),

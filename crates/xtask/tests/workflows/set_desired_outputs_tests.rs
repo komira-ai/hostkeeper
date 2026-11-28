@@ -347,6 +347,47 @@ fn each_outcome_of_the_wait_is_its_reason() {
 }
 
 #[test]
+fn a_wait_that_did_not_converge_fails_with_what_it_still_waits_on() {
+    // Rows 7 and 8 again, with the diagnostics `hk releases wait` leaves: the tables of what it
+    // waited on. The job's message is the reason and then those diagnostics, the last table what
+    // the wait still waited on at its end; a converged wait is not failed by them. Catches a job
+    // that ends red naming no host, the state of none and since when of none.
+    let err = "hk: releases wait: hello 1.2.3: not converged after 1m00s of 30m00s:
+  state: in progress
+  h1 (web): updating to 1.2.3, on 1.2.2, seen so since 2026-11-28T04:53:14Z
+hk: releases wait: hello 1.2.3: did not converge within 30m00s; it still waits on:
+  state: in progress
+  h1 (web): updating to 1.2.3, on 1.2.2, seen so since 2026-11-28T04:53:14Z
+";
+    for (outcome, reason) in [("DEADLINE", "not_converged"), ("HALTED", "halted")] {
+        let body = format!("{{\"outcome\":\"WAIT_OUTCOME_{outcome}\"}}\n");
+        assert_eq!(
+            said(&waited("success", &body, err)),
+            (
+                vec![
+                    "desired_version=1.2.3".to_owned(),
+                    "converged=false".to_owned(),
+                    format!("reason={reason}"),
+                    format!(
+                        "::error::the version 1.2.3 of hello is set; the wait ended with {reason}\n{err}"
+                    ),
+                ],
+                Ended::Done
+            ),
+            "{outcome}"
+        );
+    }
+    assert_eq!(
+        outputs(&waited(
+            "success",
+            "{\"outcome\":\"WAIT_OUTCOME_CONVERGED\"}\n",
+            err
+        )),
+        want("1.2.3", true, "converged", false)
+    );
+}
+
+#[test]
 fn a_requested_version_that_is_not_a_version_is_never_written() {
     // The version input is the caller's text. Catches it copied into the job's outputs, where a
     // newline would add a line of its own (`reason=converged`): only a version is written.

@@ -290,6 +290,7 @@ pub fn run_waiting(add: &Add, waits: &Waits, port: u16, words: &[&str]) -> Ran {
         tailscale: PathBuf::from("no-tailscale"),
         limit: Duration::from_secs(1),
         wait: &record,
+        now: &|| Duration::ZERO,
     };
     add.run_with(Opts::real().tailnet(&tailnet), port, words)
 }
