@@ -872,6 +872,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
     b.step = Some(StepRun {
         name: StepName::parse("cutover").expect("a step"),
         attempt: 2,
+        deferrals: None,
     });
     b.commit = Some(CommitState::Committed);
     b.step_secs = BTreeMap::from([
@@ -902,6 +903,7 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
             step: Some(agent::StepRun {
                 name: "cutover".to_owned(),
                 attempt: 2,
+                deferrals: None,
             }),
             commit: agent::CommitState::Committed as i32,
             step_secs: HashMap::from([("prepare".to_owned(), 4), ("cutover".to_owned(), 9)]),

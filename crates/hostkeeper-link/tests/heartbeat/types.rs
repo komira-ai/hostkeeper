@@ -203,6 +203,7 @@ fn the_heartbeat_json_has_the_wire_names() {
             health_reason: None,
             health_body: None,
             restarts: None,
+            deferring: None,
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),

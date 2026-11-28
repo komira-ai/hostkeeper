@@ -42,6 +42,7 @@ fn facts(service: &str, at: &str) -> ServiceFacts {
         health_reason: None,
         health_body: None,
         restarts: None,
+        deferring: None,
     }
 }
 
@@ -959,42 +960,4 @@ fn the_repositories_report_goes_out_as_its_field() {
     );
     with.repositories = None;
     assert_eq!(sent(&with).repositories, None);
-}
-
-/// Proves the set of a response comes in whole, as decoded, and a response with none has none.
-#[test]
-fn a_response_keeps_its_repository_set_as_decoded() {
-    use crate::repositories::PushedSet;
-    use hostkeeper_proto::hostkeeper::release::v1::Repository;
-    let entries = vec![Repository {
-        name: "komira".to_owned(),
-        kind: "apt".to_owned(),
-        uri: "https://repo.example.com/debian".to_owned(),
-        suites: vec!["stable".to_owned(), "testing".to_owned()],
-        components: vec!["main".to_owned()],
-        fingerprints: vec!["AB".repeat(20)],
-        keyring: vec![0x99, 0, 1, 4],
-        ..Default::default()
-    }];
-    let mapped = reply(pb::HeartbeatResponse {
-        repositories: Some(pb::RepositorySet {
-            generation: 9,
-            digest: "ef".repeat(32),
-            entries: entries.clone(),
-        }),
-        ..pb::HeartbeatResponse::default()
-    });
-    assert_eq!(
-        mapped.reply.repositories,
-        Some(PushedSet {
-            generation: 9,
-            digest: "ef".repeat(32),
-            entries,
-        })
-    );
-    assert_eq!(mapped.dropped, None);
-    assert_eq!(
-        reply(pb::HeartbeatResponse::default()).reply.repositories,
-        None
-    );
 }

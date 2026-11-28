@@ -950,6 +950,7 @@ async fn a_bad_optional_fact_is_dropped_alike_on_grpc_and_json() {
     message.services[0].step = Some(proto::StepRun {
         name: String::new(),
         attempt: 1,
+        deferrals: None,
     });
     message.services.push(proto::ServiceBeat {
         name: "other".to_owned(),

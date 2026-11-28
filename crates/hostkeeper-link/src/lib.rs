@@ -93,7 +93,7 @@ pub use beat::{
     ANNOUNCED, FACTS, Feature, Features, Fitted, HOST_HEALTH, Health, Heartbeat, Liveness,
     LocalHalt, MAINTENANCE, MAX_HEARTBEAT_BYTES, Observed, OptionalFact, Oversize,
     PRIVATE_REPOSITORY, Platform, REPOSITORIES, Renewal, RootReason, SSH, ServiceFacts,
-    TrustedRootFacts, fit,
+    TrustedRootFacts, VerifyDeferrals, fit,
 };
 pub use bmc::BmcReport;
 pub use deferral::{Deferral, DeferralError, Deferrals};
@@ -120,10 +120,10 @@ pub use pki::PkiCertSource;
 pub use ports::{
     BmcSource, CertSource, CertState, ClientIdentity, ClockSleeper, CoordinatorLink, Dispatch,
     Drift, FactsSink, HeldHalt, HeldHalts, Job, LinkError, Log, MaintainSink, MaintenanceSource,
-    Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedService,
-    RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink, SerialConsoleSource,
-    ServiceObserver, ServiceRecords, Sleeper, SshSink, StopFlag, ThreadDispatch, Tick, TrustFault,
-    TrustedRootSource, UnixClock, Unsendable,
+    Observation, OperatorKeysSink, OrderSink, PrerequisitesSink, RecordedDeferrals,
+    RecordedService, RemoteLoginProbeSource, RenewalSource, ReplyFault, RepositorySink,
+    SerialConsoleSource, ServiceObserver, ServiceRecords, Sleeper, SshSink, StopFlag,
+    ThreadDispatch, Tick, TrustFault, TrustedRootSource, UnixClock, Unsendable,
 };
 pub use prerequisites::{
     MAX_PREREQUISITE_REASON, MAX_PREREQUISITE_VERSION, PrerequisiteState, PrerequisiteStatus,

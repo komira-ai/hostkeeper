@@ -698,9 +698,10 @@ fn a_reason_that_is_not_a_token_is_left_out_and_said_in_the_detail() {
     }
 }
 
-/// Catches a detail that is sent whole or cut inside a character: the daemon's text is kept up
-/// to 512 bytes and cut at a character boundary, whether it is a refusal's text or the note of a
-/// refused reason; one of exactly 512 bytes is kept.
+/// Catches a detail that is sent whole, cut inside a character, or cut with nothing to tell it
+/// from a whole text: the daemon's text is kept up to 512 bytes and cut at a character boundary,
+/// ending in the mark `…`, whether it is a refusal's text or the note of a refused reason; one of
+/// exactly 512 bytes is kept.
 #[test]
 fn a_detail_is_cut_to_512_bytes_on_a_character_boundary() {
     assert_eq!(MAX_DETAIL, 512);
@@ -716,10 +717,13 @@ fn a_detail_is_cut_to_512_bytes_on_a_character_boundary() {
         )
         .detail
     };
-    assert_eq!(refused("é".repeat(300)), Some("é".repeat(256)));
+    assert_eq!(
+        refused("é".repeat(300)),
+        Some(format!("{}…", "é".repeat(254)))
+    );
     assert_eq!(
         refused(format!("{}é", "a".repeat(511))),
-        Some("a".repeat(511))
+        Some(format!("{}…", "a".repeat(509)))
     );
     assert_eq!(refused("a".repeat(512)), Some("a".repeat(512)));
     assert_eq!(refused(String::new()), Some(String::new()));
@@ -733,6 +737,7 @@ fn a_detail_is_cut_to_512_bytes_on_a_character_boundary() {
         .expect("the note");
     assert_eq!(note.len(), MAX_DETAIL);
     assert!(note.starts_with("\"AAAA"), "{note}");
+    assert!(note.ends_with('…'), "{note}");
 }
 
 /// Catches a resend of the running order being reported as a failure of its own, or losing the

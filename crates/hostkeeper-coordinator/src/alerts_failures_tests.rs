@@ -443,3 +443,46 @@ fn a_service_the_host_no_longer_lists_raises_no_alert() {
     );
     assert_eq!(of_kind(&fleet, &ops, Some("2.0"), Kind::HostHalt), vec![]);
 }
+
+/// Proves: a host whose verify window ended with the hook still deferring is a `failed_update`
+/// alert that names the last deferral's reason and quotes the daemon's words (how often it
+/// deferred over how long, the last reason and detail), and a detail longer than the coordinator
+/// keeps is quoted cut to 256 bytes ending in the mark `…`.
+///
+/// Catches: the farm's alert that said `unspecified` although the hook had said why.
+#[test]
+fn a_verify_window_that_ended_deferring_is_an_alert_with_the_last_deferral() {
+    let words = "verify deferred 12 times over 1800 seconds; last reason: provider_busy; last \
+                 detail: read of /Volumes/build/js.job: Operation not permitted";
+    let reported = |detail: &str| {
+        let mut heartbeat = beat("1.0");
+        let verdict = serde_json::json!({
+            "target": "2.0", "outcome": "failed", "phase": "gate_environment",
+            "class": "environment", "reason": "provider_busy", "order_try": 2, "detail": detail,
+        });
+        heartbeat.last_update = Some(serde_json::from_value(verdict).expect("a verdict"));
+        let fleet = fleet_of(vec![("d1", heartbeat)]);
+        let mut alerts = of_kind(
+            &fleet,
+            &OpsState::default(),
+            Some("2.0"),
+            Kind::FailedUpdate,
+        );
+        assert_eq!(alerts.len(), 1);
+        alerts.remove(0)
+    };
+    let alert = reported(words);
+    assert_eq!(alert.said.reason, "provider_busy");
+    assert_eq!(alert.said.detail, words);
+    assert_eq!(
+        alert.message,
+        format!(
+            "d1 failed kbf 2.0: provider_busy ({words:?}); it is not ordered 2.0 again until an \
+             operator retries it (Hosts.Retry), holds or excludes it, or another version is set"
+        )
+    );
+    let long = format!("{words}; {}", "z".repeat(300));
+    let cut = reported(&long).said.detail;
+    assert_eq!(cut.len(), 256);
+    assert_eq!(cut, format!("{}…", &long[..253]));
+}

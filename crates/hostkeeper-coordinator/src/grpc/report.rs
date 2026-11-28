@@ -535,6 +535,12 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
         step: beat.step.as_ref().map(|step| agent::StepRun {
             name: step.name.as_str().to_owned(),
             attempt: step.attempt,
+            deferrals: step.deferrals.as_ref().map(|d| agent::StepDeferrals {
+                count: d.count,
+                reason: d.reason.as_ref().map(|reason| reason.as_str().to_owned()),
+                detail: d.detail.clone(),
+                since_unix: d.since_unix,
+            }),
         }),
         commit: commit_state(beat.commit).into(),
         step_secs: beat

@@ -47,6 +47,7 @@ fn tried(
         last_result: None,
         record_try,
         installer: None,
+        deferring: None,
     }
 }
 

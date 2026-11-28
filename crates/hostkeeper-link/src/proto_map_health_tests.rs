@@ -54,6 +54,7 @@ fn service(
         health_reason: health_reason.map(str::to_owned),
         health_body: health_body.map(str::to_owned),
         restarts,
+        deferring: None,
     }
 }
 

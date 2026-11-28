@@ -249,6 +249,46 @@ pub struct StepRun {
     pub name: StepName,
     /// The try, from 1.
     pub attempt: u32,
+    /// What the host waits for while the step is `verify` and it has deferred in the update's
+    /// verify window. Absent from an agent that predates it, and read as absent when it is not one.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub deferrals: Option<StepDeferrals>,
+}
+
+/// How the `verify` of a running update has deferred in its verify window
+/// ([`StepRun::deferrals`]): how many runs deferred, what the last one said, and since when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepDeferrals {
+    /// How many runs of `verify` deferred.
+    pub count: u32,
+    /// The reason the last of them gave; absent when it gave none, and read as absent when it is
+    /// no token.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub reason: Option<Token>,
+    /// The detail the last of them gave, cut as [`UpdateResult::detail`](crate::wire::UpdateResult::detail)
+    /// is; absent when it gave none, and read as absent when it is not text.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::wire::detail_text"
+    )]
+    pub detail: Option<String>,
+    /// When the first of them ended, in unix seconds by the host's clock; absent when the host
+    /// cannot tell, and read as absent when it is not a whole number.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub since_unix: Option<u64>,
 }
 
 /// An update the host declined for a reason about its moment, not the release.

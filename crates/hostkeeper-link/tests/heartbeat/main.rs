@@ -12,6 +12,7 @@ mod certs;
 mod clear_record;
 mod coordinator;
 mod deferral;
+mod deferring;
 mod dial;
 mod facts;
 mod features;
@@ -159,6 +160,7 @@ pub fn recorded(name: &str, at: &str) -> RecordedService {
         last_result: None,
         record_try: None,
         installer: None,
+        deferring: None,
     }
 }
 

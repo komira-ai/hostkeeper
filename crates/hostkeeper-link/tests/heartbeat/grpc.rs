@@ -187,6 +187,7 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
         health_reason: None,
         health_body: None,
         restarts: None,
+        deferring: None,
     }
 }
 

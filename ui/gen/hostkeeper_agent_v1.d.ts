@@ -178,7 +178,8 @@ export namespace hostkeeper_agent_v1 {
   export interface SourceState { source?: string; status?: hostkeeper_agent_v1.SourceStatus; reason?: string; }
   export type SourceStatus = "SOURCE_STATUS_UNSPECIFIED" | "SOURCE_STATUS_OK" | "SOURCE_STATUS_UNSUPPORTED" | "SOURCE_STATUS_UNREADABLE";
   export interface SshReport { appliedGeneration?: string; state?: string; hostKeyFingerprints?: string[]; detail?: string; }
-  export interface StepRun { name?: string; attempt?: number; }
+  export interface StepDeferrals { count?: number; reason?: string; detail?: string; sinceUnix?: string; }
+  export interface StepRun { name?: string; attempt?: number; deferrals?: hostkeeper_agent_v1.StepDeferrals; }
   export type TrustedRootReason = "TRUSTED_ROOT_REASON_UNSPECIFIED" | "TRUSTED_ROOT_REASON_NONE" | "TRUSTED_ROOT_REASON_STALE" | "TRUSTED_ROOT_REASON_MISSING" | "TRUSTED_ROOT_REASON_UNPARSEABLE";
   export interface UpdateAccountState { present?: boolean; admin?: boolean; secureToken?: boolean; hidden?: boolean; }
   export interface UpdateResult {

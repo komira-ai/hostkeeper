@@ -87,6 +87,7 @@ fn an_install_runs_for_a_service_the_host_does_not_list_and_its_verdict_is_sent_
                 health_reason: None,
                 health_body: None,
                 restarts: None,
+                deferring: None,
             },
         ]
     );

@@ -173,6 +173,7 @@ fn first_beat() -> Heartbeat {
             health_reason: None,
             health_body: None,
             restarts: None,
+            deferring: None,
         }],
         sent_unix: 0,
         renewal: Renewal::default(),
