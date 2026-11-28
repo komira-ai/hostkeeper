@@ -127,6 +127,49 @@ fn the_files_read_at_the_start_are_refused_with_their_rule() {
     );
 }
 
+/// The extra partitions and the kernel parameters are judged as a whole before any file is read
+/// or socket bound: a GPT label, a mount point or a parameter's name given twice refuses the
+/// start with one line naming it, and nothing is logged.
+///
+/// Catches two partitions the installer cannot both make (one label) or that mount over each
+/// other (one mount point), and two values of one kernel parameter, served to every machine of
+/// the run.
+#[test]
+fn extra_partitions_and_kernel_parameters_given_twice_refuse_the_start() {
+    let kit = Kit::new("start-extras");
+    for (extra, why) in [
+        (
+            [
+                "--extra-partition",
+                "cache:1GiB:xfs:/a",
+                "--extra-partition",
+                "cache:1GiB:xfs:/b",
+            ],
+            "--extra-partition's GPT label cache is given twice",
+        ),
+        (
+            [
+                "--extra-partition",
+                "a:1GiB:xfs:/srv",
+                "--extra-partition",
+                "b:1GiB:ext4:/srv",
+            ],
+            "--extra-partition's mount point /srv is given twice",
+        ),
+        (
+            [
+                "--kernel-parameter",
+                "fuse.enable_uring=1",
+                "--kernel-parameter",
+                "fuse.enable_uring=0",
+            ],
+            "--kernel-parameter's name fuse.enable_uring is given twice",
+        ),
+    ] {
+        assert_eq!(refusal(args(&kit, &extra)), why);
+    }
+}
+
 /// The token file is checked when it is opened, as root, and read after the drop: a file the
 /// group or others may read is refused at the open, a file too short at the read; neither error
 /// shows the token or the path.

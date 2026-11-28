@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 use hostkeeper_pxe_seed::inputs::{
     BootServer, DaemonConfigText, InstallDisk, Record, RepositoryFiles,
 };
+use hostkeeper_pxe_seed::kernel::KernelParameters;
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::menu::{MenuChoice, MenuRequest, Mode};
+use hostkeeper_pxe_seed::partitions::ExtraPartitions;
 use hostkeeper_pxe_seed::seed::{SeedInputs, seed};
 
 use super::kit::{DAEMON_CONFIG, Kit, RECORDED, client, http, refused, tftp_read};
@@ -112,6 +114,8 @@ fn an_accepted_directory_reaches_the_seed_byte_for_byte() {
         install_disk: &InstallDisk::default(),
         serial_console: None,
         repositories: Some(&files),
+        extra_partitions: &ExtraPartitions::default(),
+        kernel_parameters: &KernelParameters::default(),
     });
     let served = String::from_utf8(user.body).expect("text");
     assert_eq!(served, want.user_data);

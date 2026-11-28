@@ -185,6 +185,8 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
         "--ssh-authorized-keys",
         "--install-disk",
         "--serial-console",
+        "--extra-partition",
+        "--kernel-parameter",
         "--repositories",
         "--reinstall",
         "--user-id",
@@ -568,6 +570,80 @@ fn serve_reads_repositories_from_the_settings_file() {
     assert_eq!(
         *seen.borrow(),
         Some(Some(PathBuf::from("/etc/pxe/repositories")))
+    );
+}
+
+/// `[serve]` keys `extra-partition` and `kernel-parameter` are main's repeatable flags: each
+/// array reaches `serve` as its values in the file's order, and a value the grammar refuses stops
+/// the command line with the grammar's message and exit 2, before `serve` is reached.
+///
+/// Catches a settings file whose arrays are dropped, cut to their last element or reordered (the
+/// partitions' order is their order on the disk), and a refused value that reaches the seed.
+#[test]
+fn serve_reads_extra_partitions_and_kernel_parameters_from_the_settings_file() {
+    let setup = Setup::new("serve-extras");
+    let settings = setup.settings.display().to_string();
+    let text = fs::read_to_string(&setup.settings).expect("the settings");
+    let with = |extra: &str| text.replace("[prepare]", &format!("{extra}\n[prepare]"));
+    setup.write_settings(&with(
+        "extra-partition = [\"tierstore-cache:220GiB:xfs:/var/lib/tierstore-cache:noatime\", \
+         \"tierstore-hot:300GiB:xfs:/var/lib/ts-hot\"]\n\
+         kernel-parameter = [\"fuse.enable_uring=1\", \"quiet\"]",
+    ));
+    let systemctl = FakeSystemctl::default();
+    let host = Host {
+        owner: setup.owner,
+        systemctl: &systemctl,
+        fetch: &unreached,
+    };
+    let seen = RefCell::new(None);
+    let record = |flags: &ServeFlags| {
+        let partitions: Vec<(String, String)> = flags
+            .extra_partition
+            .iter()
+            .map(|p| (p.label().to_owned(), p.mount_point().to_owned()))
+            .collect();
+        let words: Vec<String> = flags
+            .kernel_parameter
+            .iter()
+            .map(|w| w.as_str().to_owned())
+            .collect();
+        *seen.borrow_mut() = Some((partitions, words));
+        Ok(())
+    };
+    let args = ["serve", "--settings", settings.as_str(), "--dir", "d"];
+    let (status, _, err) = run_with(&args, &record, &host);
+    assert_eq!((status, err.as_str()), (0, ""));
+    assert_eq!(
+        *seen.borrow(),
+        Some((
+            vec![
+                (
+                    "tierstore-cache".to_owned(),
+                    "/var/lib/tierstore-cache".to_owned()
+                ),
+                ("tierstore-hot".to_owned(), "/var/lib/ts-hot".to_owned()),
+            ],
+            vec!["fuse.enable_uring=1".to_owned(), "quiet".to_owned()],
+        ))
+    );
+    setup.write_settings(&with(
+        "extra-partition = \"cache:220GB:xfs:/var/lib/cache\"",
+    ));
+    let (status, out, err) = run_with(&args, &unreached_serve, &host);
+    assert_eq!((status, out.as_str()), (2, ""));
+    assert!(
+        err.contains(
+            "--extra-partition's size is not <n>MiB or <n>GiB, with n from 1 and no leading 0"
+        ),
+        "{err}"
+    );
+    setup.write_settings(&with("kernel-parameter = \"a=$(reboot)\""));
+    let (status, out, err) = run_with(&args, &unreached_serve, &host);
+    assert_eq!((status, out.as_str()), (2, ""));
+    assert!(
+        err.contains("--kernel-parameter is not <name> or <name>=<value>"),
+        "{err}"
     );
 }
 

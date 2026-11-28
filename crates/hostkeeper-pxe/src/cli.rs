@@ -7,7 +7,8 @@
 //!     --ca-file <file> --token-file <file> --user-id <n> --group-id <n>
 //!     [--interface <name>] [--dhcp-listen <a:p>] [--proxy-listen <a:p>] [--tftp-listen <a:p>]
 //!     [--http-listen <a:p>] [--dhcp-reply-to <a:p>] [--install-disk <form>=<glob>]
-//!     [--serial-console <port>] [--repositories <dir>] [--reinstall <host id>]...
+//!     [--serial-console <port>] [--extra-partition <partition>]...
+//!     [--kernel-parameter <word>]... [--repositories <dir>] [--reinstall <host id>]...
 //!     [--tftp-timeout-ms <n>] [--settings <file>] [--notify-systemd]
 //! pxe update-hook prepare <staged release> --params <file>
 //! pxe update-hook cutover|verify|rollback|cleanup|uninstall --params <file>
@@ -29,6 +30,13 @@
 //! - `--dir`: a directory the `prepare` step sealed. `--daemon-config` (root-owned, loaded with
 //!   the daemon's loader), `--ssh-authorized-keys`, `--install-disk` and `--serial-console`: the
 //!   inputs of the seeds (section 4).
+//! - `--extra-partition`: a partition the installer makes on the install disk beside root,
+//!   `<GPT label>:<size>:<file system>:<mount point>[:<mount options>]`
+//!   ([`hostkeeper_pxe_seed::partitions`]), repeatable, in the order of the disk; with one, the
+//!   seed's storage is a layout of the EFI system partition, these, and root over the rest, in
+//!   place of `direct`. `--kernel-parameter`: a word added to the installed kernel's command line
+//!   ([`hostkeeper_pxe_seed::kernel`]), repeatable. A label, a mount point or a parameter's name
+//!   given twice refuses the start.
 //! - `--repositories`: a directory of the installed hosts' repository entries, `<name>.sources`
 //!   files whose `Signed-By` names `/etc/hostkeeper/repositories/<keyring>`, and the keyrings
 //!   they name (packages-repositories.md sections 3.1 and 3.2). It is checked as root at the
@@ -67,6 +75,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use hostkeeper_hook::Invocation;
 use hostkeeper_pxe_seed::inputs::{InstallDisk, SerialConsole};
+use hostkeeper_pxe_seed::kernel::KernelParameter;
+use hostkeeper_pxe_seed::partitions::ExtraPartition;
 
 use crate::hook::{self, HostSystemctl};
 use crate::serve::{ServePorts, serve_with};
@@ -172,6 +182,15 @@ pub(crate) struct ServeFlags {
     /// The installed system's serial console: ttyS<n> or ttyAMA<n>.
     #[arg(long)]
     pub(crate) serial_console: Option<SerialConsole>,
+    /// A partition of the install disk beside root (repeatable, in the disk's order):
+    /// <GPT label>:<size>:<file system>:<mount point>[:<mount options>], such as
+    /// tierstore-cache:220GiB:xfs:/var/lib/tierstore-cache:noatime.
+    #[arg(long = "extra-partition")]
+    pub(crate) extra_partition: Vec<ExtraPartition>,
+    /// A word added to the installed kernel's command line (repeatable), such as
+    /// fuse.enable_uring=1.
+    #[arg(long = "kernel-parameter")]
+    pub(crate) kernel_parameter: Vec<KernelParameter>,
     /// A directory of the installed hosts' repository entries (<name>.sources) and the keyrings
     /// they name, written to /etc/hostkeeper/repositories/ by every seed.
     #[arg(long)]

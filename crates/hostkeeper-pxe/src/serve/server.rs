@@ -32,9 +32,11 @@ use hostkeeper_pxe_packets::tftp::FileSet;
 use hostkeeper_pxe_seed::inputs::{
     BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, RepositoryFiles, SerialConsole,
 };
+use hostkeeper_pxe_seed::kernel::KernelParameters;
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::layout::MENU_DIR;
 use hostkeeper_pxe_seed::menu::{GRUB_CFG, Install, LOCAL_DISK_MENU, MenuChoice, MenuRequest};
+use hostkeeper_pxe_seed::partitions::ExtraPartitions;
 use hostkeeper_pxe_seed::seed::{SeedInputs, seed};
 use hostkeeper_wire::HostId;
 
@@ -62,6 +64,10 @@ pub struct Settings {
     pub install_disk: InstallDisk,
     /// `--serial-console`.
     pub serial_console: Option<SerialConsole>,
+    /// `--extra-partition`, each in the order given.
+    pub extra_partitions: ExtraPartitions,
+    /// `--kernel-parameter`, each in the order given.
+    pub kernel_parameters: KernelParameters,
     /// `--repositories`, checked by the daemon's loader: the files the seeds write to
     /// `/etc/hostkeeper/repositories/`.
     pub repositories: Option<RepositoryFiles>,
@@ -442,6 +448,8 @@ impl Server {
             install_disk: &self.settings.install_disk,
             serial_console: self.settings.serial_console.as_ref(),
             repositories: self.settings.repositories.as_ref(),
+            extra_partitions: &self.settings.extra_partitions,
+            kernel_parameters: &self.settings.kernel_parameters,
         });
         Some(match file {
             SeedFile::UserData => made.user_data,
