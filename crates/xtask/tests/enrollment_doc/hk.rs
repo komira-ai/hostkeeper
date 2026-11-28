@@ -394,6 +394,11 @@ pub(crate) const HAND_VERBS: &[&str] = &[
 pub(crate) const HAND_METHODS: &[(&str, &str, &[&str])] = &[
     ("xcode", "add", &["--mac"]),
     ("xcode", "verify", &["--apple-root", "--mac"]),
+    (
+        "releases",
+        "wait",
+        &["--service", "--version", "--wait-secs", "--host-group"],
+    ),
 ];
 
 /// The flags of its own of the hand method `method` of `service`, when it is one.
@@ -650,6 +655,46 @@ fn xcode_verify(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String>
     Ok(Parsed::Call("xcode verify".to_owned()))
 }
 
+/// What `words` (the words after `releases wait`) ask for: `--service`, `--version` and
+/// `--wait-secs` (a whole number from 1 to 1800), and `--host-group`, each once with a value, no
+/// argument, and the global flags of a call; in hk's words.
+fn releases_wait(line: &mut Line<'_>, words: &[String]) -> Result<Parsed, String> {
+    let own = ["--service", "--version", "--wait-secs", "--host-group"];
+    let mut seen: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let flag = flag_of(word);
+        if matches!(flag, "--help" | "-h") {
+            return Ok(Parsed::Help);
+        }
+        if let Some(own) = own.iter().find(|f| **f == flag) {
+            let (value, took) = arg(flag, &words[at..])?;
+            if seen.contains(own) {
+                return Err(format!("{flag} is given twice"));
+            }
+            seen.push(own);
+            let digits = !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit());
+            let in_range = digits && value.parse::<u32>().is_ok_and(|n| (1..=1800).contains(&n));
+            if flag == "--wait-secs" && !in_range {
+                return Err("--wait-secs takes a whole number from 1 to 1800".to_owned());
+            }
+            at += took;
+        } else if word.starts_with('-') {
+            match line.global(&words[at..])? {
+                Some(took) => at += took,
+                None => return Err(format!("hk releases wait has no flag {flag}")),
+            }
+        } else {
+            return Err(format!("hk releases wait takes no argument: {word}"));
+        }
+    }
+    if own[..3].iter().any(|f| !seen.contains(f)) {
+        return Err("hk releases wait needs --service, --version and --wait-secs".to_owned());
+    }
+    line.call_needs()?;
+    Ok(Parsed::Call("releases wait".to_owned()))
+}
+
 /// What `words` (the words after `tailnet-wait`) ask for: `--attempts` and `--interval-secs`,
 /// each once with a whole number in its range, no argument, no credential and no
 /// `--response-file`, and the endpoint and the CA file; in hk's words.
@@ -771,12 +816,12 @@ pub(crate) fn parse(
             // Not a method of the service `ssh`: a host id.
             return hand(&mut line, service, &words[at..]);
         }
-        if hand_method(service, method).is_some() {
-            return if method == "add" {
-                xcode_add(&mut line, &words[at + 1..])
-            } else {
-                xcode_verify(&mut line, &words[at + 1..])
-            };
+        let rest = &words[at + 1..];
+        match (service.as_str(), method.as_str()) {
+            ("xcode", "add") => return xcode_add(&mut line, rest),
+            ("xcode", "verify") => return xcode_verify(&mut line, rest),
+            ("releases", "wait") => return releases_wait(&mut line, rest),
+            _ => {}
         }
         return Err(format!(
             "the service {service} has no method {method}; 'hk {service} --help' lists them"

@@ -277,6 +277,19 @@ fn the_last_call_holds_the_time_left_and_a_last_cut_is_said() {
     );
 }
 
+/// Proves: a not yet answered at once (a coordinator that is stopping answers every held call so)
+/// is followed by a pause of [`RETRY`], cut to the time left, before the next call.
+///
+/// Catches: a wait that calls as fast as it can for its whole bound.
+#[test]
+fn a_not_yet_answered_at_once_is_asked_again_after_a_pause() {
+    let mut sim = Sim::new(|_, _| (Asked::Answer(not_yet()), Duration::ZERO));
+    let ended = wait_for(&mut sim, &plan(25)).expect("ended");
+    assert_eq!(body(ended), not_yet());
+    assert_eq!(sim.asked, [25, 15, 5]);
+    assert_eq!(sim.paused, [RETRY, RETRY, Duration::from_secs(5)]);
+}
+
 /// Proves: a refusal ends the wait at once with that refusal.
 ///
 /// Catches: a refusal (a wrong token, too many waits) retried until the bound.

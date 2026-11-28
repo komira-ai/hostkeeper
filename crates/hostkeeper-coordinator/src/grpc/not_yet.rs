@@ -8,7 +8,10 @@
 //! and has a desired version of it. So a CI token that may wait on a service reads the hosts of
 //! that service and no other.
 //!
-//! A host is listed, in the first state of these that holds:
+//! A host the convergence does not count is not listed: a pair an operator holds, and a host the
+//! desired version's release picks no entry for (`no_target`, `no_build_for_host`,
+//! `installer_dropped`), which never keep a service from converging ([`crate::converge`]). Any
+//! other host is listed, in the first state of these that holds:
 //!
 //! - EXCLUDED: an operator excluded it, and it is not on the version (an excluded host on it says
 //!   nothing a reader needs);
@@ -188,9 +191,25 @@ fn failed_to<'a>(
         .filter(|update| update.target == version && update.outcome() == agent::Outcome::Failed)
 }
 
-/// `host` as a wait for `read.version` lists it, or `None` when it is settled on the version.
+/// Whether the convergence leaves the host whose gate says `gate` out of every count: a pair an
+/// operator holds, or a host the release picks no entry for.
+fn uncounted(gate: i32) -> bool {
+    matches!(
+        proto::GateReason::try_from(gate),
+        Ok(proto::GateReason::Held
+            | proto::GateReason::NoTarget
+            | proto::GateReason::NoBuildForHost
+            | proto::GateReason::InstallerDropped)
+    )
+}
+
+/// `host` as a wait for `read.version` lists it, or `None` when it is settled on the version or
+/// not counted.
 fn waiting_host(host: proto::ServiceHost, read: &Read<'_>) -> Option<proto::WaitingHost> {
     let view = host.view.unwrap_or_default();
+    if uncounted(view.gate_reason) {
+        return None;
+    }
     let beat = host.beat.as_ref();
     let on_version = view.installed_version.as_deref() == Some(read.version);
     let mut waiting = proto::WaitingHost {

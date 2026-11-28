@@ -58,14 +58,8 @@ fn the_real_file_keeps_every_rule_of_the_calls() {
     }
     let set = method_flags("set-desired").expect("the set");
     assert!(set.iter().any(|f| f == "--request"), "{set:?}");
-    assert_eq!(
-        method_flags("wait"),
-        Some(
-            ["--service", "--version", "--wait-secs", "--host-group"]
-                .map(str::to_owned)
-                .to_vec()
-        )
-    );
+    let wait = ["--service", "--version", "--wait-secs", "--host-group"].map(str::to_owned);
+    assert_eq!(method_flags("wait"), Some(wait.to_vec()));
     assert!(method_flags("no-such-method").is_none());
 }
 

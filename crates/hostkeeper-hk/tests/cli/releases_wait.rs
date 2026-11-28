@@ -442,9 +442,9 @@ fn the_flags_and_their_usage_errors() {
     );
 }
 
-/// Proves: against the real gateway of a coordinator with no desired version of the legacy
-/// service, a wait ends at once (`SUPERSEDED`), and the answer carries the `notYet` the coordinator
-/// writes, read by the names `hk` reads: the field names of the two agree.
+/// Proves: against the real gateway of a coordinator whose host group lists kbf with no desired
+/// version of it, a wait ends at once (`NO_DESIRED`), and the answer carries the `notYet` the
+/// coordinator writes, read by the names `hk` reads: the field names of the two agree.
 ///
 /// Catches: a client that reads names the gateway does not write, so that every table is empty.
 #[test]
@@ -465,11 +465,11 @@ fn the_real_gateway_answers_a_wait_with_what_it_waits_on() {
     let ran = rig.run(Opts::real(), &all);
     assert_eq!(ran.code, 0, "{ran:?}");
     let answer: Value = serde_json::from_str(&ran.stdout).expect("JSON");
-    assert_eq!(answer["outcome"], "WAIT_OUTCOME_SUPERSEDED");
+    assert_eq!(answer["outcome"], "WAIT_OUTCOME_NO_DESIRED");
     assert!(answer["notYet"]["answeredUnix"].is_string(), "{answer}");
     assert_eq!(
         ran.stderr,
-        "hk: releases wait: kbf 2.0: ended superseded after 0m00s:\n  state: in progress\n  no \
+        "hk: releases wait: kbf 2.0: ended no desired after 0m00s:\n  state: in progress\n  no \
          host is listed\n"
     );
 }

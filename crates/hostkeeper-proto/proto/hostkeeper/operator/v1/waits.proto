@@ -2,8 +2,10 @@
 // when the wait did not end converged (`NotYet`, `WaitConvergedResponse.not_yet`): each host the
 // wait reads that is not settled on the version, in what state and since when, and why the update
 // plan of each pair it reads orders no further host. The `Releases` service, its refusals
-// (`ReleasesRefusal`) and the rest of the package are operator.proto, which imports this file
-// publicly; this file is the same package and API, kept apart so that each file stays short.
+// (`ReleasesRefusal`) and the rest of the package, `Enrollment` and `EnrollmentRefusal`
+// (enrollment.proto) and `Audit` and `AuditRefusal` among it, are operator.proto, which imports
+// this file publicly; this file is the same package and API, kept apart so that each file stays
+// short.
 //
 // Served by: the coordinator, on its control listener, as operator.proto says.
 //

@@ -16,7 +16,8 @@
 //! 2. its answer: `DEADLINE` is not yet, and the next call is made; any other outcome
 //!    (`CONVERGED`, `HALTED`, `SUPERSEDED`, `NO_DESIRED`) ends the wait with that answer. Each not
 //!    yet whose table ([`table`]: each host the wait waits on, its state and since when, and why
-//!    each plan waits) differs from the last one printed is printed on stderr;
+//!    each plan waits) differs from the last one printed is printed on stderr.
+//!    A not yet answered before the call's seconds passed is followed by a pause of [`RETRY`];
 //! 3. a call that got no answer (no connection, a connection cut in mid-call, an answer that is
 //!    not the gateway's, or no token from the runner) is said on stderr, and asked again after
 //!    [`RETRY`]; a refusal of the coordinator ends the wait as the generated command's would.
@@ -329,6 +330,7 @@ pub(crate) fn wait_for(fleet: &mut dyn Fleet, plan: &Plan<'_>) -> Flow<Ended> {
         if secs == 0 {
             break;
         }
+        let asked = fleet.now();
         match fleet.ask(secs)? {
             Asked::Answer(body) => {
                 cut = None;
@@ -356,6 +358,14 @@ pub(crate) fn wait_for(fleet: &mut dyn Fleet, plan: &Plan<'_>) -> Flow<Ended> {
                     shown = Some(lines.clone());
                 }
                 last = Some((body, lines));
+                // A not yet answered before its seconds (a coordinator that is stopping answers
+                // every held call at once) is not asked again at once: the wait would call as
+                // fast as it can.
+                let now = fleet.now();
+                if now.saturating_sub(asked) < Duration::from_secs(secs.into()) {
+                    let pause = RETRY.min(plan.bound.saturating_sub(now.saturating_sub(start)));
+                    fleet.pause(pause);
+                }
             }
             Asked::Refused(refused) => return Ok(Ended::Refused(refused)),
             Asked::Cut(why) => {

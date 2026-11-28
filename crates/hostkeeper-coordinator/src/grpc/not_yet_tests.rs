@@ -246,9 +246,9 @@ fn a_host_behind_says_why_it_is_not_ordered() {
         ),
         (proto::GateReason::None, proto::Membership::Present, "none"),
         (
-            proto::GateReason::NoBuildForHost,
+            proto::GateReason::InstallOrder,
             proto::Membership::Missing,
-            "no_build_for_host",
+            "install_order",
         ),
     ] {
         assert_eq!(
@@ -262,6 +262,32 @@ fn a_host_behind_says_why_it_is_not_ordered() {
     assert_eq!(
         listed(no_view, &read(None)),
         Some((proto::WaitingState::Behind, "unspecified".to_owned(), None))
+    );
+}
+
+/// Proves: a host the convergence does not count (a pair an operator holds, a host the release
+/// picks no entry for) is not listed, whatever its state, silent among it; a host behind with
+/// another gate is.
+///
+/// Catches: a failed wait whose message names a host that never kept the service from
+/// converging, or whose 64 places fill with such hosts and leave the one it waits on out.
+#[test]
+fn a_host_the_convergence_does_not_count_is_not_listed() {
+    for gate in [
+        proto::GateReason::Held,
+        proto::GateReason::NoTarget,
+        proto::GateReason::NoBuildForHost,
+        proto::GateReason::InstallerDropped,
+    ] {
+        let mut host = row(Some("1.0"), gate, beat_at("1.0"));
+        assert_eq!(listed(host.clone(), &read(Some(3))), None, "{gate:?}");
+        host.live = false;
+        assert_eq!(listed(host, &read(Some(600))), None, "{gate:?} silent");
+    }
+    let behind = row(Some("1.0"), proto::GateReason::MinUp, beat_at("1.0"));
+    assert_eq!(
+        listed(behind, &read(Some(3))),
+        Some((proto::WaitingState::Behind, "min_up".to_owned(), None))
     );
 }
 
