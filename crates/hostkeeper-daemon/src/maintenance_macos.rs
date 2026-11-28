@@ -1,9 +1,9 @@
 //! The collector `macos` of the maintenance look ([`crate::maintenance_collect`],
 //! docs/design/maintenance-updates.md section 1): what a Mac runs (`macOS`, its version and build
 //! from `sw_vers`, its hardware serial from `ioreg`) and which macOS updates are due, from
-//! `softwareupdate --list` and, when a major upgrade may be due, `softwareupdate
-//! --list-full-installers`, both read by [`parse_softwareupdate_list`] and judged by
-//! [`macos_due`].
+//! `softwareupdate --list` and `softwareupdate --list-full-installers`, both read by
+//! [`parse_softwareupdate_list`] and judged by [`macos_due`]: the newest major upgrade either
+//! lists is reported whatever the host's group allows, which is the coordinator's to judge.
 //!
 //! Each program runs through a [`Launchctl`] port: on a Mac, as root, with an empty environment, no
 //! standard input, a deadline, and each output stream kept to its bound
@@ -21,7 +21,7 @@ use hostkeeper_proto::maintenance::MAX_OS_TEXT;
 
 use crate::mac::{IOREG, TOOL_DEADLINE, ioreg_args};
 use crate::maintenance_collect::{Collector, Look, Section, clip, listing};
-use crate::maintenance_softwareupdate::{MacosMajor, macos_due, parse_softwareupdate_list};
+use crate::maintenance_softwareupdate::{macos_due, parse_softwareupdate_list};
 use crate::xcode_clt::{LIST_DEADLINE, LOOK_DEADLINE, SOFTWAREUPDATE, SW_VERS};
 
 /// The name a Mac reports as its operating system's.
@@ -48,33 +48,29 @@ pub struct MacosPorts {
 /// The collector `macos`.
 pub struct Macos {
     ports: MacosPorts,
-    major: MacosMajor,
 }
 
 impl Macos {
-    /// The collector over `ports`, under `major`.
+    /// The collector over `ports`.
     #[must_use]
-    pub fn new(ports: MacosPorts, major: MacosMajor) -> Macos {
-        Macos { ports, major }
+    pub fn new(ports: MacosPorts) -> Macos {
+        Macos { ports }
     }
 
-    /// The collector over the Mac's own programs, under `major`: [`SW_VERS`] bounded by
+    /// The collector over the Mac's own programs: [`SW_VERS`] bounded by
     /// [`LOOK_DEADLINE`], [`IOREG`] by [`TOOL_DEADLINE`], and both listings of [`SOFTWAREUPDATE`]
     /// by [`LIST_DEADLINE`], as the Command Line Tools' look runs them.
     #[must_use]
-    pub fn at_host(major: MacosMajor) -> Macos {
+    pub fn at_host() -> Macos {
         let tool = |program: &str, deadline: Duration| -> Box<dyn Launchctl> {
             Box::new(LaunchctlProcess::new(Path::new(program), deadline))
         };
-        Macos::new(
-            MacosPorts {
-                sw_vers: tool(SW_VERS, LOOK_DEADLINE),
-                ioreg: tool(IOREG, TOOL_DEADLINE),
-                list: tool(SOFTWAREUPDATE, LIST_DEADLINE),
-                full: tool(SOFTWAREUPDATE, LIST_DEADLINE),
-            },
-            major,
-        )
+        Macos::new(MacosPorts {
+            sw_vers: tool(SW_VERS, LOOK_DEADLINE),
+            ioreg: tool(IOREG, TOOL_DEADLINE),
+            list: tool(SOFTWAREUPDATE, LIST_DEADLINE),
+            full: tool(SOFTWAREUPDATE, LIST_DEADLINE),
+        })
     }
 
     /// The hardware serial, as `ioreg` names it.
@@ -102,18 +98,16 @@ impl Collector for Macos {
         let serial = self.serial()?;
         let (_, text) = listing(&*self.ports.list, "softwareupdate --list", &LIST_ARGS, &[0])?;
         let mut listed = parse_softwareupdate_list(&text);
-        if self.major == MacosMajor::Due {
-            let (_, text) = listing(
-                &*self.ports.full,
-                "softwareupdate --list-full-installers",
-                &FULL_ARGS,
-                &[0],
-            )?;
-            let full = parse_softwareupdate_list(&text);
-            listed.updates.extend(full.updates);
-            listed.installers.extend(full.installers);
-            listed.unparsed = listed.unparsed.saturating_add(full.unparsed);
-        }
+        let (_, text) = listing(
+            &*self.ports.full,
+            "softwareupdate --list-full-installers",
+            &FULL_ARGS,
+            &[0],
+        )?;
+        let full = parse_softwareupdate_list(&text);
+        listed.updates.extend(full.updates);
+        listed.installers.extend(full.installers);
+        listed.unparsed = listed.unparsed.saturating_add(full.unparsed);
         Ok(Section {
             host: pb::MaintenanceHost {
                 os_name: MACOS_NAME.to_owned(),
@@ -122,7 +116,7 @@ impl Collector for Macos {
                 hardware_serial: clip(&serial, MAX_OS_TEXT),
                 ..pb::MaintenanceHost::default()
             },
-            due: macos_due(&version, &listed, self.major),
+            due: macos_due(&version, &listed),
             unparsed: listed.unparsed,
             ..Section::default()
         })

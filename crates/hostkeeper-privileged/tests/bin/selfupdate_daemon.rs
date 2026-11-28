@@ -396,9 +396,6 @@ fn run_daemon(
                 flags.link.heartbeat_secs,
                 platform.kind,
                 flags.maintenance_linux_scope,
-                hostkeeper_daemon::maintenance_softwareupdate::MacosMajor::from_flag(
-                    flags.maintenance_macos_major,
-                ),
                 watchdog,
             );
             // The shipped loops keep the host identity copy under the real

@@ -26,12 +26,19 @@
 //!
 //! [`counts_as_due`] is the group's `macos_major`: a due item that is a major upgrade of macOS
 //! (its `from` and `to` differ in their first component, `26.1` to `27.0`) counts as due only when
-//! the group allows one. The `maintain` order carries the same setting (`Maintain.macos_major`),
-//! so a daemon of a group that does not allow one stages only updates within its major version.
+//! the group allows one. A Mac's daemon reports the newest major upgrade it is offered whatever
+//! its group allows, so the coordinator alone decides: `Maintenance.Schedule` takes a host's kinds
+//! due by it ([`crate::maintenance_service`]), the alert `updates_due` counts a host by it
+//! ([`crate::alerts`]), and `Hosts.List` and `Hosts.Get` show only the items that count
+//! ([`Coordinator::show_counted_due`]). The `maintain` order carries the same setting
+//! (`Maintain.macos_major`), so a daemon of a group that does not allow one stages only updates
+//! within its major version.
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
 use crate::maintenance_runs::Skip;
+use crate::service::Coordinator;
 
 /// Why the host whose kept report is `report` (none: the coordinator keeps none) may not be
 /// ordered `macos`, the first rule of the module's it fails; none when it may.
@@ -59,6 +66,21 @@ pub(crate) fn macos_skip(report: Option<&agent::MaintenanceReport>) -> Option<Sk
 /// every item but a major upgrade of macOS, which counts only when the group allows one.
 pub(crate) fn counts_as_due(item: &agent::DueItem, macos_major: bool) -> bool {
     macos_major || item.kind != i32::from(agent::MaintenanceKind::Macos) || !is_major(item)
+}
+
+impl Coordinator {
+    /// Takes out of the report each of `hosts` shows (as `Hosts.List` and `Hosts.Get` made them,
+    /// their `host_group` named) every due item that does not count as due in that group
+    /// ([`counts_as_due`]): a major upgrade of macOS, unless the group's `macos_major` is true.
+    pub(crate) fn show_counted_due(&self, hosts: &mut [proto::Host]) {
+        for host in hosts {
+            let Some(report) = host.maintenance.as_mut() else {
+                continue;
+            };
+            let macos_major = self.group_policy(&host.host_group).maintenance.macos_major;
+            report.due.retain(|item| counts_as_due(item, macos_major));
+        }
+    }
 }
 
 /// Whether `item` moves macOS to another major version: it names the version the Mac has and the

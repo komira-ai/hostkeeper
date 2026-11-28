@@ -1,7 +1,9 @@
 //! The verbs and the flag of the update before the hand-over are gone from the `hostkeeper`
 //! command line (docs/design/two-programs.md, section 4, stage 3): `hostkeeper daemon` is the
 //! verb that runs the daemon, and what the units, the pkg and the releases before it used to call
-//! is a usage error.
+//! is a usage error. So is `daemon --maintenance-macos-major`, the switch no launchd job passed:
+//! a Mac reports the newest major upgrade of macOS it is offered, and its group's `macos_major`
+//! alone decides whether it is due (docs/design/maintenance-updates.md, section 3).
 
 use clap::Parser;
 use clap::error::ErrorKind;
@@ -74,8 +76,38 @@ fn the_admin_socket_flag_is_a_usage_error() {
     }
 }
 
+/// Proves: `daemon --maintenance-macos-major`, alone, with a value, or beside the flags the
+/// daemon still takes, is clap's unknown argument, exit status 2, naming the flag, so a launchd
+/// job that still passed it would not start the daemon.
+///
+/// Catches: the switch accepted and ignored, or kept as a second say beside the group's
+/// `macos_major` over a major upgrade.
+#[test]
+fn the_macos_major_flag_is_a_usage_error() {
+    for line in [
+        &["hostkeeper", "daemon", "--maintenance-macos-major"][..],
+        &["hostkeeper", "daemon", "--maintenance-macos-major=true"],
+        &[
+            "hostkeeper",
+            "daemon",
+            "--maintenance-linux-scope",
+            "all",
+            "--maintenance-macos-major",
+        ],
+    ] {
+        let refused = Cli::try_parse_from(line).expect_err("the flag is gone");
+        assert_eq!(refused.kind(), ErrorKind::UnknownArgument, "{line:?}");
+        assert_eq!(refused.exit_code(), 2, "{line:?}");
+        let text = refused.to_string();
+        assert!(
+            text.starts_with("error: unexpected argument '--maintenance-macos-major"),
+            "{line:?}: {text}"
+        );
+    }
+}
+
 /// Proves: `hostkeeper --help` lists `daemon` and none of the removed verbs, and `daemon --help`
-/// does not list the flag.
+/// lists none of the removed flags.
 ///
 /// Catches: a removed verb or flag still offered in the help.
 #[test]
@@ -89,4 +121,5 @@ fn the_help_lists_only_the_daemon() {
     }
     let daemon = Cli::try_parse_from(["hostkeeper", "daemon", "--help"]).expect_err("help");
     assert!(!daemon.to_string().contains("admin-socket"), "{daemon}");
+    assert!(!daemon.to_string().contains("macos-major"), "{daemon}");
 }

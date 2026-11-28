@@ -21,8 +21,6 @@ pub struct Mac {
     pub filevault_on: bool,
     /// Device management sets [`MDM_SETTING`].
     pub mdm_conflict: bool,
-    /// The daemon runs with `--maintenance-macos-major`: its report lists a major upgrade.
-    pub major: bool,
     /// [`OLD_XCODE`] is installed and selected.
     pub old_xcode: bool,
     /// The free bytes of the data volume.
@@ -36,13 +34,12 @@ pub struct Mac {
 
 impl Default for Mac {
     /// A Mac ready for the daemon's install: the account ready, FileVault off, no device
-    /// management, no major upgrade reported, no Xcode, [`FREE`] bytes free.
+    /// management, no Xcode, [`FREE`] bytes free, offered the minor update and the major upgrade.
     fn default() -> Mac {
         Mac {
             account: Account::Ready,
             filevault_on: false,
             mdm_conflict: false,
-            major: false,
             old_xcode: false,
             free: FREE,
             offered: true,
@@ -82,7 +79,6 @@ pub(super) struct State {
     pub(super) filevault_on: bool,
     pub(super) secure_token: bool,
     pub(super) free: u64,
-    pub(super) major: bool,
     /// Whether `softwareupdate --install` fails.
     pub(super) install_fails: bool,
     /// The version and build the Mac comes back on, in place of what it installed.
@@ -132,7 +128,6 @@ impl Machine {
                 filevault_on: mac.filevault_on,
                 secure_token: mac.account != Account::NoSecureToken,
                 free: mac.free,
-                major: mac.major,
                 install_fails: false,
                 comes_back_on: None,
                 installed: None,
@@ -411,17 +406,13 @@ impl Host for Machine {
 
     /// The Mac collectors, in the order the daemon runs them.
     fn collectors(self: &Arc<Self>) -> Vec<Box<dyn Collector>> {
-        let major = MacosMajor::from_flag(self.state().major);
         vec![
-            Box::new(Macos::new(
-                MacosPorts {
-                    sw_vers: self.program(SW_VERS, false),
-                    ioreg: self.program(IOREG_PROGRAM, false),
-                    list: self.program(SOFTWAREUPDATE, false),
-                    full: self.program(SOFTWAREUPDATE, false),
-                },
-                major,
-            )),
+            Box::new(Macos::new(MacosPorts {
+                sw_vers: self.program(SW_VERS, false),
+                ioreg: self.program(IOREG_PROGRAM, false),
+                list: self.program(SOFTWAREUPDATE, false),
+                full: self.program(SOFTWAREUPDATE, false),
+            })),
             Box::new(MacReadiness::new(MacPorts {
                 fdesetup: self.program(FDESETUP, false),
                 pkgutil: self.program(PKGUTIL_PROGRAM, false),

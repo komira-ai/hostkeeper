@@ -118,8 +118,7 @@ fn a_minor_update_with_a_restart_is_due_with_a_reboot() {
         )
     );
     let due = vec![macos("26.6", "26.6.1", true, "macOS Tahoe 26.6.1-25G110")];
-    assert_eq!(macos_due("26.6", &listing, MacosMajor::NotDue), due);
-    assert_eq!(macos_due("26.6", &listing, MacosMajor::Due), due);
+    assert_eq!(macos_due("26.6", &listing), due);
 }
 
 /// Proves a macOS 27 listing of a minor update with a restart is read and made due the same way.
@@ -137,7 +136,7 @@ fn a_macos_27_minor_update_is_due() {
         )
     );
     assert_eq!(
-        macos_due("27.1", &listing, MacosMajor::NotDue),
+        macos_due("27.1", &listing),
         vec![macos("27.1", "27.2", true, "macOS 27.2-26C45")]
     );
 }
@@ -162,7 +161,7 @@ fn a_minor_update_without_a_restart_is_due_with_no_reboot() {
         )
     );
     assert_eq!(
-        macos_due("26.6.1", &listing, MacosMajor::NotDue),
+        macos_due("26.6.1", &listing),
         vec![macos(
             "26.6.1",
             "26.6.1 (a)",
@@ -179,7 +178,7 @@ fn a_listing_with_no_update_has_nothing_due() {
     for (text, running) in [(MACOS26_NONE, "26.7"), (MACOS27_NONE, "27.2")] {
         let listing = parse_softwareupdate_list(text);
         assert_eq!(listing, SoftwareUpdateListing::default());
-        assert_eq!(macos_due(running, &listing, MacosMajor::Due), Vec::new());
+        assert_eq!(macos_due(running, &listing), Vec::new());
     }
     assert_eq!(
         parse_softwareupdate_list(""),
@@ -187,10 +186,14 @@ fn a_listing_with_no_update_has_nothing_due() {
     );
 }
 
-/// Proves a major upgrade `--list` names on macOS 26 is read, and is not due by default: only the
-/// minor update beside it is; with the major upgrade allowed it is due after it, with a reboot.
+/// Proves a major upgrade `--list` names on macOS 26 is read, and is due after the minor update
+/// beside it, with a reboot: the daemon reports it whatever the group allows, which the
+/// coordinator judges.
+///
+/// Catches: a major upgrade the Mac is offered left out of its report, so a group that allows one
+/// never has it due.
 #[test]
-fn a_listed_major_upgrade_is_due_only_when_allowed() {
+fn a_listed_major_upgrade_is_due_after_the_minor_update() {
     let listing = parse_softwareupdate_list(MACOS26_MAJOR);
     assert_eq!(
         listing,
@@ -208,22 +211,20 @@ fn a_listed_major_upgrade_is_due_only_when_allowed() {
             0,
         )
     );
-    let minor = macos("26.6.1", "26.7", true, "macOS Tahoe 26.7-25H62");
     assert_eq!(
-        macos_due("26.6.1", &listing, MacosMajor::NotDue),
-        vec![minor.clone()]
-    );
-    assert_eq!(
-        macos_due("26.6.1", &listing, MacosMajor::Due),
-        vec![minor, macos("26.6.1", "27.1", true, "macOS 27.1-26B70")]
+        macos_due("26.6.1", &listing),
+        vec![
+            macos("26.6.1", "26.7", true, "macOS Tahoe 26.7-25H62"),
+            macos("26.6.1", "27.1", true, "macOS 27.1-26B70"),
+        ]
     );
 }
 
 /// Proves the full installers of macOS 26 and 27 are read with title, version, build and size; on a
-/// Mac of macOS 26 the installer of 27 is a major upgrade, due only when allowed and named by its
-/// title, and the installers of its own or a lower major version are never due.
+/// Mac of macOS 26 the installer of 27 is a major upgrade, due and named by its title, and the
+/// installers of its own or a lower major version are never due.
 #[test]
-fn a_full_installer_of_a_higher_major_version_is_due_only_when_allowed() {
+fn a_full_installer_of_a_higher_major_version_is_due() {
     let on_26 = parse_softwareupdate_list(MACOS26_FULL);
     assert_eq!(
         on_26,
@@ -233,9 +234,8 @@ fn a_full_installer_of_a_higher_major_version_is_due_only_when_allowed() {
             sized_installer(installer("macOS Sequoia", "15.7.4", "24G517"), 14_680_064),
         ])
     );
-    assert_eq!(macos_due("26.6.1", &on_26, MacosMajor::NotDue), Vec::new());
     assert_eq!(
-        macos_due("26.6.1", &on_26, MacosMajor::Due),
+        macos_due("26.6.1", &on_26),
         vec![macos("26.6.1", "27.1", true, "macOS 27.1")]
     );
     let on_27 = parse_softwareupdate_list(MACOS27_FULL);
@@ -246,17 +246,17 @@ fn a_full_installer_of_a_higher_major_version_is_due_only_when_allowed() {
             sized_installer(installer("macOS Tahoe", "26.7", "25H62"), 15_204_352),
         ])
     );
-    assert_eq!(macos_due("27.1", &on_27, MacosMajor::Due), Vec::new());
+    assert_eq!(macos_due("27.1", &on_27), Vec::new());
 }
 
-/// Proves that, with major upgrades allowed, only the newest is due: a full installer newer than
+/// Proves that, of the major upgrades, only the newest is due: a full installer newer than
 /// the listed upgrade wins, and of equal versions the listed update (with its label) wins.
 #[test]
 fn only_the_newest_major_upgrade_is_due() {
     let mut listing = parse_softwareupdate_list(MACOS26_MAJOR);
     listing.installers = parse_softwareupdate_list(MACOS26_FULL).installers;
     assert_eq!(
-        macos_due("26.6.1", &listing, MacosMajor::Due)[1],
+        macos_due("26.6.1", &listing)[1],
         macos("26.6.1", "27.1", true, "macOS 27.1-26B70")
     );
     listing
@@ -266,7 +266,7 @@ fn only_the_newest_major_upgrade_is_due() {
         .installers
         .push(installer("macOS 28 again", "28.0", "27A101"));
     assert_eq!(
-        macos_due("26.6.1", &listing, MacosMajor::Due)[1],
+        macos_due("26.6.1", &listing)[1],
         macos("26.6.1", "28.0", true, "macOS 28")
     );
 }
@@ -289,7 +289,7 @@ fn an_unknown_line_is_counted() {
         )
     );
     assert_eq!(
-        macos_due("27.1", &listing, MacosMajor::NotDue),
+        macos_due("27.1", &listing),
         vec![macos("27.1", "27.2", true, "macOS 27.2-26C45")]
     );
 }
@@ -393,11 +393,11 @@ fn what_is_never_due() {
         installer("macOS odd", "x.1", "1"),
     ];
     assert_eq!(
-        macos_due("26.6", &with_installers, MacosMajor::Due),
+        macos_due("26.6", &with_installers),
         vec![macos("26.6", "26.7", true, "Tahoe")]
     );
-    assert_eq!(macos_due("", &listing, MacosMajor::Due), Vec::new());
-    assert_eq!(macos_due("unknown", &listing, MacosMajor::Due), Vec::new());
+    assert_eq!(macos_due("", &listing), Vec::new());
+    assert_eq!(macos_due("unknown", &listing), Vec::new());
 }
 
 /// Proves a due item's texts are cut to the wire's bounds: the label to 64 bytes, the versions to
@@ -407,7 +407,7 @@ fn a_due_item_is_cut_to_its_bounds() {
     let label = "L".repeat(MAX_DUE_LABEL + 10);
     let version = format!("26.{}", "9".repeat(MAX_DUE_VERSION));
     let listing = updates(vec![update(&label, "macOS Tahoe", &version, true)], 0);
-    let due = macos_due("26.1", &listing, MacosMajor::NotDue);
+    let due = macos_due("26.1", &listing);
     assert_eq!(
         due,
         vec![macos(
@@ -427,14 +427,6 @@ fn the_major_version_is_the_first_number() {
     assert_eq!(major_of("26.6.1 (a)"), Some(26));
     assert_eq!(major_of("x.1"), None);
     assert_eq!(major_of(""), None);
-}
-
-/// Proves the flag maps to the setting: given, a major upgrade is due; absent (the default), not.
-#[test]
-fn the_flag_maps_to_the_setting() {
-    assert_eq!(MacosMajor::from_flag(true), MacosMajor::Due);
-    assert_eq!(MacosMajor::from_flag(false), MacosMajor::NotDue);
-    assert_eq!(MacosMajor::default(), MacosMajor::NotDue);
 }
 
 /// Proves a `Size` is kept in bytes only when it is a whole number of KiB, on an update and on a

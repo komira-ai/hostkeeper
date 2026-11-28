@@ -1014,7 +1014,7 @@ Reversible: delete that one app (`rm -r` of the single app) to undo.
 Record: exit code, output files, exact app name and path, size, signing authority, seconds taken, free space before and after, the `--usage` text (the flags of MP-U7 must exist in it), whether it worked with nobody logged in.
 Decides:
 - if exactly one `/Applications/Install macOS <name>.app` appears, signed by Apple -> design section 5.5 stands; the prepare passes the path by glob `/Applications/Install macOS *.app` and refuses more than one; deadline is the measured seconds plus margin.
-- if it fails as root from launchd -> a major cannot be staged by the daemon; `--macos-major` stays off and design section 5.5 changes.
+- if it fails as root from launchd -> a major cannot be staged by the daemon; every group's `macos_major` stays off and design section 5.5 changes.
 - if "Update not found" for a listed version -> the collector's version string (`maintenance_softwareupdate.rs:114`) needs a build or another field; note the string that worked.
 - if the app lands elsewhere -> change the path in design section 5.5, the apply and the verify's removal.
 
@@ -1037,7 +1037,7 @@ rm -P "$D/pw.stdin"
 Record: progress or error text, exit code if no reboot, number of restarts, minutes to the first heartbeat (coordinator), `sw_vers` before and after, whether a person touched the Mac, whether the installer app remains.
 Decides:
 - if it upgrades and heartbeats with nobody touching it -> design section 5.5 stand for FileVault off; keep installer removal in verify (design section 5.5); give a major its own `return_secs` if it exceeds 3600.
-- if it fails on authentication or the Secure Token -> the daemon cannot upgrade a major; `--maintenance-macos-major` stays off, the major moves to the device-management path (5.5.1) or manual; rewrite design section 5.5.
+- if it fails on authentication or the Secure Token -> the daemon cannot upgrade a major; every group's `macos_major` stays off, the major moves to the device-management path (5.5.1) or manual; rewrite design section 5.5.
 - if it asks for `--forcequitapps` -> add it to the argv in the design and the apply; record why it appeared with nobody logged in.
 - if it ends on a Setup Assistant pane -> see MP-U9.
 - if it fails after starting (recovery, boot loop) -> the Mac needs a manual reinstall; no unattended major until a retry story exists.

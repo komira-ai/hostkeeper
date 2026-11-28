@@ -1,9 +1,9 @@
 //! A major upgrade of macOS end to end (docs/design/maintenance-updates.md, sections 1, 3 and
 //! 5.5), on Macs whose daemon runs as its launchd job starts it, with no flag: the daemon reports
 //! the newest major upgrade it sees, and the group's `macos_major` alone decides whether it counts
-//! as due, raises the group's `updates_due` notice and is ordered. Each Mac `h1` here is offered
-//! the major upgrade alone: its `softwareupdate --list` lists nothing and `--list-full-installers`
-//! offers macOS 27.1, so nothing else could make it due.
+//! as due, raises the group's `updates_due` notice and is ordered. A Mac offered the major upgrade
+//! alone has its `softwareupdate --list` list nothing while `--list-full-installers` offers macOS
+//! 27.1, so nothing else could make it due.
 
 use super::*;
 
@@ -18,16 +18,25 @@ fn offered_the_major_alone() -> Mac {
     }
 }
 
-/// `h1`, offered the major upgrade alone, and `h2`, with nothing to install, in [`GROUP`] under
-/// `policy`, each heard with its report.
-fn pair_offered_the_major(test: &str, policy: op::MaintenancePolicy) -> (Arc<World>, Node, Node) {
+/// `h1`, set up as `mac` says, and `h2`, with nothing to install, in [`GROUP`] under `policy`,
+/// each heard with its report.
+fn pair_under(test: &str, policy: op::MaintenancePolicy, mac: Mac) -> (Arc<World>, Node, Node) {
     let world = World::new(test);
     world.group(GROUP, &["h1", "h2"], policy);
-    let mut h1 = Node::mac(&world, test, "h1", GROUP, offered_the_major_alone());
+    let mut h1 = Node::mac(&world, test, "h1", GROUP, mac);
     let mut h2 = Node::mac(&world, test, "h2", GROUP, Mac::up_to_date());
     h1.report();
     h2.report();
     (world, h1, h2)
+}
+
+/// The maintenance table of a group that allows a major upgrade: [`one_at_a_time`] with
+/// `macos_major`.
+fn allows_a_major() -> op::MaintenancePolicy {
+    op::MaintenancePolicy {
+        macos_major: true,
+        ..one_at_a_time()
+    }
 }
 
 /// What the Mac goes through in a turn of the major upgrade, in order: the stage fetches the
@@ -85,12 +94,10 @@ fn upgrade_args() -> Vec<String> {
 /// `nothing_due`.
 #[test]
 fn a_group_that_allows_a_major_upgrade_has_it_due_on_a_mac_started_with_no_flag() {
-    let (world, mut h1, _h2) = pair_offered_the_major(
+    let (world, mut h1, _h2) = pair_under(
         "mac-e2e-major-no-flag",
-        op::MaintenancePolicy {
-            macos_major: true,
-            ..one_at_a_time()
-        },
+        allows_a_major(),
+        offered_the_major_alone(),
     );
     assert_eq!(h1.due(), [pb::MaintenanceKind::Macos]);
     assert_eq!(world.alerts(), updates_due());
@@ -135,7 +142,11 @@ fn a_group_that_allows_a_major_upgrade_has_it_due_on_a_mac_started_with_no_flag(
 /// group that has not allowed one.
 #[test]
 fn a_group_that_does_not_allow_a_major_upgrade_never_has_it_due() {
-    let (world, mut h1, _h2) = pair_offered_the_major("mac-e2e-major-not-allowed", one_at_a_time());
+    let (world, mut h1, _h2) = pair_under(
+        "mac-e2e-major-not-allowed",
+        one_at_a_time(),
+        offered_the_major_alone(),
+    );
     assert_eq!(h1.due(), [pb::MaintenanceKind::Macos]);
     assert_eq!(world.alerts(), no_alerts());
     assert_eq!(
@@ -152,4 +163,55 @@ fn a_group_that_does_not_allow_a_major_upgrade_never_has_it_due() {
         h1.machine.running(),
         (OLD_VERSION.to_owned(), OLD_BUILD.to_owned())
     );
+}
+
+/// Proves: in a group that allows a major upgrade, a Mac offered the minor update and a major
+/// upgrade reports both, of kind `macos`, is ordered `macos` with `macos_major`, and its turn runs
+/// the upgrade alone: the stage fetches the full installer (`softwareupdate
+/// --fetch-full-installer`), the install runs the installer app's `startosinstall
+/// --agreetolicense --nointeraction --user <account> --stdinpass` with the password on its
+/// standard input, the Mac restarts into the new major version, and the check passes and then
+/// removes the installer app.
+///
+/// Catches: a stage that downloads the minor update beside the upgrade, or no installer; an
+/// upgrade installed by `softwareupdate --install`; an installer app left behind, or removed
+/// before the check.
+#[test]
+fn a_major_upgrade_fetches_the_full_installer_and_runs_startosinstall() {
+    let (world, mut h1, _h2) = pair_under("mac-e2e-major", allows_a_major(), Mac::default());
+    assert_eq!(
+        h1.due(),
+        [pb::MaintenanceKind::Macos, pb::MaintenanceKind::Macos]
+    );
+
+    let run = world.update(&["h1"]);
+    let order = Ordered {
+        macos_major: true,
+        ..first_offer(&run, &[pb::MaintenanceKind::Macos])
+    };
+    assert_eq!(h1.beat(), Some(order.clone()));
+    assert_eq!(h1.machine.applications(), [INSTALLER_NAME]);
+    restart_to_done(&mut h1);
+
+    assert_eq!(h1.machine.effects(), major_turn());
+    let startosinstall = format!("{INSTALLER_APP}/Contents/Resources/startosinstall");
+    assert_eq!(
+        h1.machine.inputs(),
+        [Input {
+            program: startosinstall,
+            args: upgrade_args(),
+            stdin: format!("{PASSWORD}\n"),
+        }]
+    );
+    assert_eq!(h1.machine.logged(), ["startosinstall: exited with code 0"]);
+    password_only_on_stdin(&h1);
+    assert_eq!(h1.machine.applications(), Vec::<String>::new());
+    assert_eq!(
+        h1.machine.running(),
+        (MAJOR_VERSION.to_owned(), MAJOR_BUILD.to_owned())
+    );
+    assert_eq!(world.steps(&run), [at("h1", Step::Done)]);
+    assert_eq!(h1.due(), Vec::<pb::MaintenanceKind>::new());
+    assert_eq!(world.alerts(), no_alerts());
+    assert_eq!(h1.orders(), [order]);
 }

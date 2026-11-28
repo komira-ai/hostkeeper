@@ -1606,8 +1606,8 @@ enum AlertKind {
   // `xcode_version_taken`.
   ALERT_KIND_XCODE_VERSION_TAKEN = 18;
   // The last maintenance report of one or more hosts of a host group (or of no host group) holds
-  // an item that is due (`MaintenanceReport.due` is not empty, or `due_left_out` is not 0), or the
-  // coordinator finds `xcode` due on a Mac of the group (`Host.maintenance`). The
+  // an item that is due (`MaintenanceReport.due`, a major macOS only if the group's `macos_major`;
+  // or `due_left_out` is not 0), or the coordinator finds `xcode` due on a Mac of the group. The
   // message counts the hosts: `Updates due on 2 hosts of web`, or `Updates due on 1 host in no host
   // group`; a stale report that holds due items still counts. One alert for each group, with the
   // group in `host_group`; it stands while a host of the group is due and clears when the last
