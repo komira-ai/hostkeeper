@@ -554,11 +554,11 @@ message Host {
   // not hold host groups.
   string host_group = 25;
   // The last maintenance report of the host's daemon (`HeartbeatRequest.maintenance`) the
-  // coordinator kept: what the host runs, what is due on it and the maintenance run it holds.
-  // Absent while the coordinator keeps none: the host's daemon has not announced `maintenance-v1`,
-  // or has sent no report the coordinator read. The coordinator keeps the last report that kept
-  // every bound of `MaintenanceReport`; a report that breaks one is dropped and the last one read
-  // stays. On a Mac of a group that keeps Xcode (`xcode_keep` above 0), `due` also holds the
+  // coordinator kept: what the host runs, what is due on it and the run it holds. Absent while the
+  // coordinator keeps none (no `maintenance-v1` announced, or no report read); a report that breaks
+  // a bound of `MaintenanceReport` is dropped and the last one read stays. `due` holds a major
+  // macOS upgrade only when the group's `macos_major` is true (`due_left_out` is the daemon's). On
+  // a Mac of a group that keeps Xcode (`xcode_keep` above 0), `due` also holds the
   // `MAINTENANCE_KIND_XCODE` item the coordinator decides, which no daemon lists: the newest
   // `xcode_keep` releases its Xcode store holds include one the Mac lacks in its own
   // `Xcode-<version>.app`, or `xcode-select` does not name the group's `xcode_default`. Its `from`
