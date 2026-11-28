@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 32] = [
+const PINNED: [(i32, &str, &str); 33] = [
     (
         1,
         "state",
@@ -165,6 +165,11 @@ const PINNED: [(i32, &str, &str); 32] = [
         "maintenance_xcode_check",
         "99e2d2bffe9020f98f81a12320805b1167bee0f6669f066eeb27e9f8c8d1b793",
     ),
+    (
+        33,
+        "hardware_events",
+        "e260fd9b815ac15f8e9d7068a3f14e9145495df07c105631db4e7eed3fab4ec7",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -188,10 +193,10 @@ fn what(statement: &str) -> String {
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
 /// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups"),
 /// (9, "service_repository"), (10, "accounts"), (11, "mdm"),
-/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all"), (19, "tx_ledger"), (20, "ssh_certs"), (21, "ssh_tunnels"), (22, "instances"), (23, "state_versions"), (24, "fleet"), (25, "sessions_and_jobs"), (26, "decisions"), (27, "audit_api_token"), (28, "xcode_releases"), (29, "maintenance_runs"), (30, "maintenance_turns"), (31, "maintenance_operator"), (32, "maintenance_xcode_check")], each file's
+/// (12, "mdm_setup"), (13, "host_group_all"), (14, "trusted_publishers"), (15, "lab_layout"), (16, "lab_devices"), (17, "lab_sleds"), (18, "remove_host_group_all"), (19, "tx_ledger"), (20, "ssh_certs"), (21, "ssh_tunnels"), (22, "instances"), (23, "state_versions"), (24, "fleet"), (25, "sessions_and_jobs"), (26, "decisions"), (27, "audit_api_token"), (28, "xcode_releases"), (29, "maintenance_runs"), (30, "maintenance_turns"), (31, "maintenance_operator"), (32, "maintenance_xcode_check"), (33, "hardware_events")], each file's
 /// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
 /// the first three and `host_groups` say older releases must not run on them, and `releases`,
-/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds`, `remove_host_group_all`, `tx_ledger`, `ssh_certs`, `ssh_tunnels`, `instances`, `state_versions`, `fleet`, `sessions_and_jobs`, `decisions`, `audit_api_token`, `xcode_releases`, `maintenance_runs`, `maintenance_turns`, `maintenance_operator` and `maintenance_xcode_check` that
+/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm`, `mdm_setup`, `host_group_all`, `trusted_publishers`, `lab_layout`, `lab_devices`, `lab_sleds`, `remove_host_group_all`, `tx_ledger`, `ssh_certs`, `ssh_tunnels`, `instances`, `state_versions`, `fleet`, `sessions_and_jobs`, `decisions`, `audit_api_token`, `xcode_releases`, `maintenance_runs`, `maintenance_turns`, `maintenance_operator`, `maintenance_xcode_check` and `hardware_events` that
 /// they may (an older release never reads any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -233,7 +238,8 @@ fn the_shipped_migrations_are_unchanged() {
             (29, "maintenance_runs"),
             (30, "maintenance_turns"),
             (31, "maintenance_operator"),
-            (32, "maintenance_xcode_check")
+            (32, "maintenance_xcode_check"),
+            (33, "hardware_events")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -283,6 +289,7 @@ fn the_shipped_migrations_are_unchanged() {
             (30, "maintenance_turns", OlderReleases::MayRun),
             (31, "maintenance_operator", OlderReleases::MayRun),
             (32, "maintenance_xcode_check", OlderReleases::MayRun),
+            (33, "hardware_events", OlderReleases::MayRun),
         ]
     );
 }

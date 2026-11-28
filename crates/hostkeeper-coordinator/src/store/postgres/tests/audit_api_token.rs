@@ -138,8 +138,9 @@ fn the_release_before_runs_on_a_database_with_0027_and_this_one_on_its() {
             vec![Some("29".to_owned())],
             vec![Some("30".to_owned())],
             vec![Some("31".to_owned())],
-            vec![Some("32".to_owned())]
+            vec![Some("32".to_owned())],
+            vec![Some("33".to_owned())]
         ],
-        "0027 ran, and 0028 to 0032 after it"
+        "0027 ran, and 0028 to 0033 after it"
     );
 }

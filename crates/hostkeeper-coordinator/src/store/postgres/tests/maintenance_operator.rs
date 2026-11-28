@@ -86,7 +86,7 @@ fn a_queued_act_and_the_order_try_are_kept_and_a_row_without_them_reads_none_and
 
 /// Proves (B8, both ways, for `0031`): the release before (migrations `0001` to `0030`) runs on a
 /// database this release migrated and holds queued acts, running nothing; this release, started on
-/// a database the release before migrated, runs `0031` and then `0032`.
+/// a database the release before migrated, runs `0031` to `0033`.
 ///
 /// Catches: a `0031` that is not `may-run`, which would turn a rollback into a restore.
 #[test]
@@ -121,7 +121,11 @@ fn the_release_before_runs_on_a_database_with_0031_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 30 ORDER BY version"),
-        [vec![Some("31".to_owned())], vec![Some("32".to_owned())]],
-        "0031 ran, and 0032 after it"
+        [
+            vec![Some("31".to_owned())],
+            vec![Some("32".to_owned())],
+            vec![Some("33".to_owned())]
+        ],
+        "0031 ran, and 0032 and 0033 after it"
     );
 }

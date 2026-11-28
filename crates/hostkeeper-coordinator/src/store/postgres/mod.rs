@@ -36,6 +36,7 @@ pub(crate) mod edit;
 mod fleet_rows;
 mod generations;
 mod groups;
+pub(crate) mod hardware_rows;
 mod instance;
 mod layout;
 pub(crate) mod login_rows;

@@ -78,7 +78,7 @@ fn the_archive_a_run_checks_is_kept_and_a_row_without_it_reads_none() {
 
 /// Proves (B8, both ways, for `0032`): the release before (migrations `0001` to `0031`) runs on a
 /// database this release migrated and holds a run that names an archive, running nothing; this
-/// release, started on a database the release before migrated, runs `0032` alone.
+/// release, started on a database the release before migrated, runs `0032` and then `0033`.
 ///
 /// Catches: a `0032` that is not `may-run`, which would turn a rollback into a restore.
 #[test]
@@ -108,8 +108,8 @@ fn the_release_before_runs_on_a_database_with_0032_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     store.stop();
     assert_eq!(
-        old.rows("SELECT version FROM schema_version WHERE version > 31"),
-        [vec![Some("32".to_owned())]],
-        "0032 alone ran"
+        old.rows("SELECT version FROM schema_version WHERE version > 31 ORDER BY version"),
+        [vec![Some("32".to_owned())], vec![Some("33".to_owned())]],
+        "0032 ran, and 0033 after it"
     );
 }

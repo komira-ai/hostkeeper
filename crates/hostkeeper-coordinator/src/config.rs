@@ -672,7 +672,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         );
     coordinator = state::with_initial_admin(coordinator, flags, database.as_ref())?;
     coordinator = state::with_login(coordinator, flags, database.as_ref())?;
-    coordinator = state::with_xcode(coordinator, flags, database.as_ref())?;
+    coordinator = state::with_side_stores(coordinator, flags, database.as_ref())?;
     coordinator = ssh::attach(coordinator, flags, ledger, book, &os_random())?;
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),

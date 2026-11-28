@@ -348,6 +348,28 @@ matches the record is approved then, as at `AddRecord`.
 | `--approve-for-secs` | UINT64 | As `AddRecordRequest.approve_for_secs`. |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 
+### `hardware`
+
+The service `Hardware` of the package `hostkeeper.operator.v1`. The hosts' hardware event logs. Reading writes no audit entry.
+
+#### `hk hardware log`
+
+`/hostkeeper.operator.v1.Hardware/Log`
+
+The records of the hardware event log that match every filter set, newest first (by the time
+the source gives, then by host id and `event_id`, both descending), as many as `limit` allows,
+after the record `page_token` names. Changes nothing and is not audited.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING | The host whose records to list; every host when absent. |
+| `--serial` | STRING | The machine whose records to list, by its hardware serial (the inventory's), whatever host id it had; every machine when absent. |
+| `--since-unix` | UINT64 | Only the records the source says happened at or after this time; 0 for every record. |
+| `--component` | VALUE | Only the records of this part of the machine; every part when unspecified. One of: memory, cpu, pcie, disk, thermal, power, board, host. |
+| `--severity` | VALUE | Only the records at least this bad (`warning` lists the warnings and the critical ones); every record when unspecified. One of: info, warning, critical. |
+| `--limit` | UINT32 | The most records to return; capped at 256, and 0 means the cap. |
+| `--page-token` | STRING | Where to go on, as `next_page_token` gave it; empty for the first page. |
+
 ### `host-groups`
 
 The service `HostGroups` of the package `hostkeeper.operator.v1`. The host groups: what each group's hosts run, and by which rollout policy. A host is in one group or in none; a host in none is ordered no package (it keeps what it runs). Every group lists `hostkeeper`. There is no built-in group: `all` is a name like any other. Each mutating call takes a reason and answers the audit entry it wrote.

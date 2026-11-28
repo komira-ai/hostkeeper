@@ -17,6 +17,8 @@
 //!   module, and the methods of the service `ssh`, which stay gateway calls;
 //! - `golden`: the help texts of the fixture's table against their files;
 //! - `methods`: the requests of the methods of the real protos that the operator's tools use;
+//! - `hardware`: `hk hardware log`'s request, its enum flags' usage errors, and its answer
+//!   through the real gateway of a coordinator whose log holds no record;
 //! - `maintenance`: the `Maintenance` calls' requests, their enum flags' usage errors, and the
 //!   answer of every one through the real gateway of an empty coordinator;
 //! - `xcode`: the commands of the service `xcode`: their paths, bodies, answers and a refusal;
@@ -59,6 +61,7 @@ mod farm_rig;
 mod flags;
 mod gateway;
 mod golden;
+mod hardware;
 mod maintenance;
 mod methods;
 mod oidc;

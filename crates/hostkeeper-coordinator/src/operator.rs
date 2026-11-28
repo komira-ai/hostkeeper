@@ -113,7 +113,8 @@ refusals!(
     SshRefusal,
     ConsoleRefusal,
     XcodeRefusal,
-    MaintenanceRefusal
+    MaintenanceRefusal,
+    HardwareRefusal
 );
 
 changing!(

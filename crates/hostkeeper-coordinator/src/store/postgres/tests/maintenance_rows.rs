@@ -177,9 +177,10 @@ fn the_release_before_runs_on_a_database_with_0029_and_this_one_on_its() {
             vec![Some("29".to_owned())],
             vec![Some("30".to_owned())],
             vec![Some("31".to_owned())],
-            vec![Some("32".to_owned())]
+            vec![Some("32".to_owned())],
+            vec![Some("33".to_owned())]
         ],
-        "0029 ran, and 0030 to 0032 after it"
+        "0029 ran, and 0030 to 0033 after it"
     );
     assert_eq!(count(&old, "maintenance_runs"), "0");
     assert_eq!(count(&old, "maintenance_hosts"), "0");

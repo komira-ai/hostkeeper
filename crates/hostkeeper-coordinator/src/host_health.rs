@@ -4,8 +4,11 @@
 //!
 //! This coordinator reads none of it: [`FEATURE`] is in neither [`crate::features::FEATURES`]
 //! nor `OFFERED`, so no daemon is told to send health, and a heartbeat that carries it anyway is
-//! answered as one without. The feature is advertised by the change that keeps the hardware event
-//! log and answers `health_written`.
+//! answered as one without. The coordinator keeps the hardware event log ([`crate::hardware_log`])
+//! and can write a host's records to it ([`Coordinator::write_hardware_events`]); the feature is
+//! advertised by the change whose heartbeat writes them and answers `health_written`.
+//!
+//! [`Coordinator::write_hardware_events`]: crate::service::Coordinator::write_hardware_events
 
 /// The feature a daemon announces to report its host's hardware health, once a coordinator
 /// advertises it.

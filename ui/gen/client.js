@@ -39,6 +39,9 @@ export function createClient(call) {
       updateRecord: (request) => call("hostkeeper.operator.v1.Enrollment/UpdateRecord", request),
       openRecord: (request) => call("hostkeeper.operator.v1.Enrollment/OpenRecord", request),
     }),
+    hardware: Object.freeze({
+      log: (request) => call("hostkeeper.operator.v1.Hardware/Log", request),
+    }),
     hostGroups: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.HostGroups/List", request),
       get: (request) => call("hostkeeper.operator.v1.HostGroups/Get", request),

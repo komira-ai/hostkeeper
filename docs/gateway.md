@@ -12,7 +12,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
 `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Repositories`, `HostGroups`, `Users`,
-`ApiTokens`, `Layout`, `Ssh`, `Console`, `Xcode`, `Maintenance`):
+`ApiTokens`, `Layout`, `Ssh`, `Console`, `Xcode`, `Maintenance`, `Hardware`):
 
 ```
 POST /<package>.<Service>/<Method>

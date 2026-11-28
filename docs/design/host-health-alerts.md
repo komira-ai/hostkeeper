@@ -134,11 +134,13 @@ and the capacity record the coordinator wrote from the first reports of the new 
 
 ### 2.3 Where it is kept
 
-A new table of the coordinator's operations store, `hardware_events`, keyed by `host_id` and `event_id`, indexed by `machine_serial`
-and by time, in both backends (Built: `store/postgres/` and `store/files.rs`, held to one behaviour by `store/conformance_tests.rs`),
-added by a new migration after `0031_maintenance_operator.sql`. A record is written by a conditional insert on its key, so a record that
-two coordinators receive, or that a daemon sends again, is written once. `HardwareEvents.List` (New, `hk hardware log --host-id
-<host>` or `--serial <serial>`, `--since`, `--component`, `--severity`) lists a log newest first, paged; the host's page shows it. A
+A table of the coordinator's operations store, `hardware_events`, keyed by `host_id` and `event_id`, indexed by `machine_serial`
+and by time (Built: migration `0033_hardware_events.sql`, `store/postgres/hardware_rows.rs`), or, over files, the file
+`<state-file>.hardware-events`, one JSON line per record (Built: `hardware_files.rs`), the two held to one behaviour by one contract
+test (`hardware_log_tests.rs`, `conformance`). A record is written by a conditional insert on its key, so a record that two
+coordinators receive, or that a daemon sends again, is written once (Built: `Coordinator::write_hardware_events`, which no heartbeat
+calls until HH5). `Hardware.Log` (Built, `hk hardware log --host-id <host>` or `--serial <serial>`, `--since-unix`, `--component`,
+`--severity`, the least severity listed) lists a log newest first, paged; the host's page shows it (HH15). A
 DIMM slot that fails twice in a year, or a machine whose disks keep failing, is one filter away.
 
 ## 3. Every source, normalized (New)
@@ -661,7 +663,7 @@ and each refusal; and the incident from end to end.
 - **`Maintenance.PutBack`**: a call with an empty `reason`, which is accepted today, is refused `notes_required` (decision 3); a script
   that puts hosts back must pass one.
 - **`silent_host`**: the same alert, now critical; a script that filters on severity sees it among the critical ones.
-- **Stores**: new tables (`hardware_events`, the baseline, `unhealthy_since`) by new migrations after `0031_maintenance_operator.sql`
+- **Stores**: new tables (`hardware_events`, the baseline, `unhealthy_since`) by new migrations from `0033_hardware_events.sql` on
   and their files counterparts; `maintenance_runs.kinds` gains `repair`; no shipped migration edited; the `alerts` rows and their key
   unchanged.
 - **The inventory**: two optional fields; a record without them is a host with no installed memory known.
@@ -692,7 +694,7 @@ Each lands with its own tests, among them one that fails without it. A daemon pu
 |---|---|---|
 | HH0 | Coordinator: move `Kind` and its three matches out of `alerts.rs`, no change of behaviour | |
 | HH1 | Wire: `HostHealth`, `HardwareEvent`, `Baseline`, `SourceState`, the new `ServiceBeat` and `Alert` fields and kinds, `MAINTENANCE_KIND_REPAIR`, the inventory's two fields, `check_health`, the drop groups, `host-health-v1` advertised by no coordinator yet | |
-| HH2 | Coordinator: the hardware event log (`hardware_events`, both backends), `HardwareEvents.List`, `hk hardware log` | HH1 |
+| HH2 | Coordinator: the hardware event log (`hardware_events`, both backends), `Hardware.Log`, `hk hardware log` | HH1 |
 | HH3 | Daemon: the state file, the boot id, the clean-shutdown marker, held events, the first run's history marks | HH1 |
 | HH4 | Daemon, Linux: the capacity report (memory with the SMBIOS devices, CPUs, disks, NICs, with the device filters) | HH3 |
 | HH5 | Coordinator: the baseline and the inventory seed, `capacity_short` records, `alert_raised` and `alert_cleared` records of every host alert, `capacity_regressed`, `unexpected_reboot`, `hardware_fault`, `storage_failing`, `bmc_missing`, `silent_host` critical, `hk alerts ack` and `rebaseline` with notes as log records, the `ui/health.js` kinds; advertises `host-health-v1` | HH0, HH2, HH4 |

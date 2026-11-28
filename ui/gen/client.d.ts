@@ -39,6 +39,9 @@ export interface Client {
     updateRecord(request: hostkeeper_operator_v1.UpdateRecordRequest): Promise<hostkeeper_operator_v1.UpdateRecordResponse>;
     openRecord(request: hostkeeper_operator_v1.OpenRecordRequest): Promise<hostkeeper_operator_v1.OpenRecordResponse>;
   };
+  readonly hardware: {
+    log(request: hostkeeper_operator_v1.HardwareLogRequest): Promise<hostkeeper_operator_v1.HardwareLogResponse>;
+  };
   readonly hostGroups: {
     list(request: hostkeeper_operator_v1.ListHostGroupsRequest): Promise<hostkeeper_operator_v1.ListHostGroupsResponse>;
     get(request: hostkeeper_operator_v1.GetHostGroupRequest): Promise<hostkeeper_operator_v1.GetHostGroupResponse>;

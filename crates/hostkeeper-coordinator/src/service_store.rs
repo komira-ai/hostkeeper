@@ -14,8 +14,6 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use super::Coordinator;
-#[cfg(test)]
-use super::SetProgress;
 use hostkeeper_wire::version::Version;
 
 use std::collections::BTreeMap;
@@ -25,6 +23,16 @@ use crate::holds::marks_of;
 use crate::macos_resolve;
 use crate::repositories::Registry;
 use crate::store::{Health, Part};
+
+/// What a test hears of CI's set of a desired state while it races another change.
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SetProgress {
+    /// The set found the fleet's lock held, and waits for it.
+    Waits,
+    /// The set returned.
+    Returned,
+}
 
 impl Coordinator {
     /// Whether the fleet's lock, which every decision and order is made under, is held now.

@@ -5,8 +5,8 @@ use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, ConsoleRefusal, EnrollmentRefusal,
-    HostGroupsRefusal, HostsRefusal, MaintenanceRefusal, ReleasesRefusal, RepositoriesRefusal,
-    RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
+    HardwareRefusal, HostGroupsRefusal, HostsRefusal, MaintenanceRefusal, ReleasesRefusal,
+    RepositoriesRefusal, RolloutsRefusal, ServicesRefusal, SshRefusal, UsersRefusal, XcodeRefusal,
 };
 use tonic::{Code, Status};
 
@@ -436,6 +436,25 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             (AlertsRefusal::StoreFailed, Internal, "store_failed"),
         ],
         refusal::alerts,
+    );
+
+    assert_table(
+        &[
+            (HardwareRefusal::Unspecified, Internal, "unspecified"),
+            (
+                HardwareRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (HardwareRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                HardwareRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (HardwareRefusal::StoreFailed, Internal, "store_failed"),
+        ],
+        refusal::hardware,
     );
 
     assert_table(

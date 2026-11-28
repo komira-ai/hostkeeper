@@ -23,15 +23,15 @@ fn one(text: &str) -> Vec<Vec<Option<String>>> {
 
 /// The columns of every table of the database but those of `0025`, and but what `0026` adds
 /// (`fleet_tries` and two columns of `desired` and `group_desired`) and `0027` (a column of
-/// `audit`), `0028` (`xcode_releases`) and `0029` (`maintenance_runs` and `maintenance_hosts`;
-/// each has its own test), as text, sorted.
+/// `audit`), `0028` (`xcode_releases`), `0029` (`maintenance_runs` and `maintenance_hosts`) and `0033`
+/// (`hardware_events`; each has its own test), as text, sorted.
 fn old_columns(db: &TestDatabase) -> Vec<Vec<Option<String>>> {
     db.rows(&format!(
         "SELECT table_name, column_name, data_type, is_nullable, column_default \
          FROM information_schema.columns WHERE table_schema = current_schema() \
          AND table_name NOT IN ({}) \
          AND table_name NOT IN ('fleet_tries', 'xcode_releases', 'maintenance_runs', \
-         'maintenance_hosts') \
+         'maintenance_hosts', 'hardware_events') \
          AND column_name NOT IN ('set_seq', 'set_for', 'api_token') \
          ORDER BY 1, 2",
         TABLES.map(|name| format!("'{name}'")).join(", ")
@@ -86,7 +86,7 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
     let (store, _) = old.open("this release").expect("this release starts on it");
     assert_eq!(
         old.rows("SELECT max(version) FROM schema_version"),
-        one("32")
+        one("33")
     );
     assert_eq!(
         old.rows("SELECT version FROM schema_version WHERE version > 24 ORDER BY version"),
@@ -98,10 +98,11 @@ fn the_release_before_runs_on_a_database_with_0025_and_this_one_on_its() {
             one("29"),
             one("30"),
             one("31"),
-            one("32")
+            one("32"),
+            one("33")
         ]
         .concat(),
-        "0025 ran, and 0026 to 0032 after it"
+        "0025 ran, and 0026 to 0033 after it"
     );
     for table in TABLES {
         assert_eq!(
